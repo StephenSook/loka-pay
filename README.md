@@ -54,7 +54,7 @@ Hacklanta asks for a disclosure of anything created before the event. Here is al
 2. **The pre-event kit**, committed unchanged right after the import and tagged `pre-hacklanta-kit`: this README skeleton, `PLAN.md`, the four task files, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.env.example` (names only), the keys of `docs/FACTS.json` (no values, except one sourced public figure: the FCC's Hurricane Helene cell-site outage percentage), six CI workflow drafts, `tools/hygiene/prose_gate.py`, and the scrub tool in `tools/scrub/`.
 3. **Planning documents kept outside this repo:** two short payments idea docs written by Khadim, a private build plan with team notes, and a voice-quality check of ElevenLabs Wolof whose clips were discarded.
 
-Everything else was designed, built and integrated during hacking (Fri Oct 9 8:30 PM to Sun Oct 11 9:00 AM ET). Check it yourself:
+Everything else was designed, built and integrated during hacking (Fri Oct 9 8:08 PM, when organizers announced the start, to Sun Oct 11 9:00 AM ET). Check it yourself:
 
 ```sh
 git log --oneline pre-hacklanta-kit..HEAD                    # every commit made during hacking

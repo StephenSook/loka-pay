@@ -17,7 +17,7 @@
 
 **Deadline:** **Sun Oct 11, 9:00 AM ET, hard** (Devpost). **Target final submit: 7:30 AM.** Complete early submission by **Sat 8:00 PM**. The separate Google Form goes in the moment Discord posts it. Judging Sun 9:30 to 11:30 AM, in person: all four at the desk.
 
-**Hacking window:** Fri 8:30 PM to Sun 9:00 AM (36.5 h).
+**Hacking window:** Fri 8:08 PM (organizers' start announcement; the Guide said 8:30 PM) to Sun 9:00 AM.
 
 **Repo:** `github.com/<owner>/<name>` (TODO: set at the team call, 0.2), public. Foundation tag `pre-hacklanta-foundation`; pre-event kit tag `pre-hacklanta-kit`.
 
