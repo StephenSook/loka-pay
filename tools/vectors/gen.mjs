@@ -428,6 +428,14 @@ if (refundBytes.length !== 137) throw new Error('REFUND_V1 must be 137 bytes');
 const refundSig = signP256(merchantA, refundBytes);
 
 const markerWire = concat(n0Wire, ackWire);
+
+// Equivocation (PAYMENT-V1.md section 4.9): the payer signs serial 0 of allowance 1001 a
+// second time, for another merchant. The impostor note has the same fields but is signed
+// by a key that is not the allowance's payer, so it must never count as a conflict.
+const secondFields = { allowanceId: 1001n, payeeKeyHash: merchantB.keyHash, amount: 500000n, serial: 0, expiry: EXPIRY };
+const secondBytes = note(secondFields);
+const secondWire = concat(secondBytes, signP256(payer, secondBytes), payer.publicKey);
+const impostorWire = concat(secondBytes, signP256(merchantB, secondBytes), merchantB.publicKey);
 const receiptWire = concat(n0Wire, ackWire, u8(1), confSettledWire);
 const receiptNoConf = concat(n0Wire, ackWire, u8(0));
 
@@ -476,6 +484,14 @@ const vectors = {
   withdraws: [{ name: 'merchant_a_first_withdraw', fields: { merchantKeyHashHex: hex(merchantA.keyHash), destinationHex: hex(destination), destinationBase58: base58.encode(destination), amount: '1250000', counter: '0' }, withdrawHex: hex(withdrawBytes), signatureHex: hex(withdrawSig), merchantPublicKeyHex: hex(merchantA.publicKey) }],
   refunds: [{ name: 'merchant_a_half_refund_of_note_0', fields: { noteIdHex: hex(n0Id), allowanceId: '1001', amount: '500000', counter: '0' }, refundHex: hex(refundBytes), signatureHex: hex(refundSig), merchantPublicKeyHex: hex(merchantA.publicKey) }],
   markers: [{ name: 'note_0_seen_at_merchant_a', wireHex: hex(markerWire), transport: transport('M', markerWire) }],
+  equivocation: {
+    allowance: 'five_dollars_unrestricted',
+    firstNoteWireHex: hex(n0Wire),
+    secondNoteWireHex: hex(secondWire),
+    secondNoteIdHex: hex(sha256(secondBytes)),
+    impostorNoteWireHex: hex(impostorWire),
+    rule: 'first + second is an equivocation proof; first + impostor is not (impostor payer key hash differs from the certificate)',
+  },
   receipts: [
     { name: 'note_0_with_confirmation', wireHex: hex(receiptWire), transport: transport('X', receiptWire), verifyUrlFragment: `r=${base64urlnopad.encode(receiptWire)}` },
     { name: 'note_0_without_confirmation', wireHex: hex(receiptNoConf), transport: transport('X', receiptNoConf) },
