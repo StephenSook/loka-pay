@@ -26,18 +26,19 @@ export class SettlementService {
     if (refusal !== null) throw new HttpError(422, refusal);
     const uploadedAt = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
     const claim = { noteId: upload.noteId, note: upload.note, ack: upload.ack, uploadedAt };
-    const won = await this.options.store.claim(claim);
-    if (!won) {
+    const token = await this.options.store.claim(claim);
+    if (!token) {
       if (upload.ack) await this.options.store.attachAck(upload.noteId, upload.ack);
       return this.get(upload.noteId);
     }
-    let row: AttemptRow = { ...claim, attempt: null, replacement: null, rebuildClaimed: false, decision: null };
+    let row = (await this.options.store.get(upload.noteId))!;
     let stage: PendingStage = 'prepare';
     try {
       const attempt = await this.options.chain.prepare(upload.validated);
       // Commit before broadcast. This claim's winner alone sends the original transaction.
       stage = 'save_attempt';
-      await this.options.store.saveAttempt(upload.noteId, attempt);
+      // A lease takeover fences out old workers. Never broadcast unless this token saved the attempt.
+      if (!await this.options.store.saveAttempt(upload.noteId, attempt, token)) return this.get(upload.noteId);
       row = { ...row, attempt };
       stage = 'send';
       await this.options.chain.send(attempt);

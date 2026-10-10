@@ -43,18 +43,20 @@ class Chain implements ChainGateway {
 async function fixture() {
   const db = await testDatabase();
   closers.push(() => db.close());
-  const store = new SettlementStore(db);
+  let time = 1800000001;
+  const clock = () => time;
+  const store = new SettlementStore(db, clock);
   await store.migrate();
   const chain = new Chain();
   const seed = randomBytes(32);
   const sign = vi.fn((fields: P.ConfFields) => P.signConfWire(fields, seed));
-  const service = new SettlementService({ deployment, store, chain, signConfirmation: sign, now: () => 1800000001 });
+  const service = new SettlementService({ deployment, store, chain, signConfirmation: sign, now: clock });
   const app = Fastify({ logger: false });
   registerSettlementRoutes(app, service);
   closers.push(() => app.close());
   const post = (body: unknown = { note }) => app.inject({ method: 'POST', url: '/v1/notes', payload: body as object });
   const count = async () => (await db.query<{ count: number }>('SELECT COUNT(*)::int AS count FROM settlement_attempts')).rows[0].count;
-  return { db, store, chain, seed, sign, service, app, post, count };
+  return { db, store, chain, seed, sign, service, app, post, count, clock, advance: (seconds: number) => { time += seconds; } };
 }
 
 test('vector upload produces a verified CONF; repeats return the original result', async () => {
@@ -197,11 +199,72 @@ test('confirmed cheat produces status 2, its named program error and its own sig
   expect(f.chain.send).toHaveBeenCalledTimes(1);
 });
 
-test('a claim without a saved signature is never resumed or automatically released', async () => {
+test('an unsigned claim whose lease has not expired stays pending', async () => {
   const f = await fixture();
   await f.store.claim({ noteId, note, ack: null, uploadedAt: 1800000001 });
+  f.advance(29);
   expect((await f.post()).json()).toEqual({ noteId, status: 'pending', signature: null, retryAfter: 2 });
   expect(f.chain.prepare).not.toHaveBeenCalled();
+});
+
+test('an expired unsigned claim is taken over exactly once by concurrent uploads', async () => {
+  const f = await fixture();
+  await f.store.claim({ noteId, note, ack: null, uploadedAt: 1800000001 });
+  f.advance(30);
+  expect((await f.service.get(noteId)).statusCode).toBe(202);
+  expect(f.chain.prepare).not.toHaveBeenCalled();
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+    chain: f.chain, signConfirmation: f.sign, now: f.clock });
+  await Promise.all([f.service.submit({ note, ack }), other.submit({ note }), f.service.submit({ note })]);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  const saved = await f.store.get(noteId);
+  expect(saved?.uploadedAt).toBe(1800000001); expect(saved?.ack).toBe(ack);
+  expect((await other.get(noteId)).statusCode).toBe(200);
+});
+
+test('a crash before saving or broadcasting recovers on the next upload after the lease', async () => {
+  const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('crashed before saving'));
+  expect((await f.post()).statusCode).toBe(202); expect(f.chain.send).not.toHaveBeenCalled();
+  f.advance(30);
+  const restarted = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+    chain: f.chain, signConfirmation: f.sign, now: f.clock });
+  expect((await restarted.submit({ note })).statusCode).toBe(200);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('an expired worker cannot save or broadcast after another upload takes over', async () => {
+  const f = await fixture();
+  const attempt = await f.chain.prepare(P.validateNoteWire(P.base64urlDecode(note), deployment));
+  f.chain.prepare.mockClear();
+  let release!: (attempt: PreparedAttempt) => void;
+  f.chain.prepare.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const old = f.service.submit({ note });
+  await vi.waitFor(() => expect(f.chain.prepare).toHaveBeenCalledTimes(1));
+  f.advance(30);
+  expect((await f.service.submit({ note })).statusCode).toBe(200);
+  release(attempt); expect((await old).statusCode).toBe(200);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a worker cannot save its attempt after lease expiry even without a takeover', async () => {
+  const f = await fixture();
+  f.chain.prepare.mockImplementationOnce(async upload => {
+    f.advance(30);
+    return { signature: base58.encode(new Uint8Array([...upload.noteId, ...upload.noteId])),
+      rawTransaction: 'test-only', blockhash: base58.encode(new Uint8Array(32).fill(1)), lastValidBlockHeight: 100 };
+  });
+  expect((await f.post()).statusCode).toBe(202);
+  expect(f.chain.send).not.toHaveBeenCalled(); expect((await f.store.get(noteId))?.attempt).toBeNull();
+  expect((await f.post()).statusCode).toBe(200); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a crash after saving but before broadcast never reclaims or resends the saved attempt', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  f.chain.send.mockRejectedValueOnce(new Error('crashed before broadcast'));
+  expect((await f.post()).statusCode).toBe(202); f.advance(60);
+  expect((await f.post()).statusCode).toBe(202);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect((await f.store.get(noteId))?.attempt).not.toBeNull();
 });
 
 test('failure saving the signed attempt never broadcasts and never signs a confirmation', async () => {

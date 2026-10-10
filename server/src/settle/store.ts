@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AttemptRow, Claim, Decision, PendingStage, PreparedAttempt } from './types.js';
 
 // Both pg.Pool and PGlite implement this interface. Production must use durable PostgreSQL.
@@ -5,7 +6,8 @@ export interface Database {
   query<T extends Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 export class SettlementStore {
-  constructor(private readonly db: Database) {}
+  // Production leases use the shared database clock. The override is for deterministic local tests.
+  constructor(private readonly db: Database, private readonly clock?: () => number) {}
 
   async migrate(): Promise<void> {
     await this.db.query(`CREATE TABLE IF NOT EXISTS settlement_attempts (
@@ -18,13 +20,22 @@ export class SettlementStore {
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS rebuild_claimed boolean NOT NULL DEFAULT false');
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS pending_stage text');
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS failure_stage text');
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS claim_token text');
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS lease_expires_at double precision');
   }
 
-  async claim(row: Claim): Promise<boolean> {
-    const result = await this.db.query(`INSERT INTO settlement_attempts (note_id,note,ack,uploaded_at)
-      VALUES ($1,$2,$3,$4) ON CONFLICT (note_id) DO NOTHING RETURNING note_id`,
-    [row.noteId, row.note, row.ack, row.uploadedAt]);
-    return result.rows.length === 1;
+  async claim(row: Claim): Promise<string | null> {
+    const token = randomUUID();
+    const result = await this.db.query(`INSERT INTO settlement_attempts
+      (note_id,note,ack,uploaded_at,claim_token,lease_expires_at)
+      VALUES ($1,$2,$3,$4,$5,COALESCE($6::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30)
+      ON CONFLICT (note_id) DO UPDATE SET claim_token=EXCLUDED.claim_token,
+        lease_expires_at=EXCLUDED.lease_expires_at, ack=COALESCE(settlement_attempts.ack,EXCLUDED.ack),
+        pending_stage=NULL,failure_stage=NULL
+      WHERE settlement_attempts.attempt IS NULL AND settlement_attempts.decision IS NULL
+        AND COALESCE(settlement_attempts.lease_expires_at,0)<=EXCLUDED.lease_expires_at-30
+      RETURNING note_id`, [row.noteId, row.note, row.ack, row.uploadedAt, token, this.clock?.() ?? null]);
+    return result.rows.length === 1 ? token : null;
   }
 
   async get(noteId: string): Promise<AttemptRow | null> {
@@ -42,10 +53,12 @@ export class SettlementStore {
     await this.db.query('UPDATE settlement_attempts SET ack=$2 WHERE note_id=$1 AND ack IS NULL', [noteId, ack]);
   }
 
-  async saveAttempt(noteId: string, attempt: PreparedAttempt): Promise<void> {
+  async saveAttempt(noteId: string, attempt: PreparedAttempt, token: string): Promise<boolean> {
     const result = await this.db.query(`UPDATE settlement_attempts SET attempt=$2::jsonb
-      WHERE note_id=$1 AND attempt IS NULL AND decision IS NULL RETURNING note_id`, [noteId, JSON.stringify(attempt)]);
-    if (result.rows.length !== 1) throw new Error('Attempt already exists or claim is missing');
+      WHERE note_id=$1 AND attempt IS NULL AND decision IS NULL AND claim_token=$3
+        AND lease_expires_at>COALESCE($4::double precision,EXTRACT(EPOCH FROM clock_timestamp()))
+      RETURNING note_id`, [noteId, JSON.stringify(attempt), token, this.clock?.() ?? null]);
+    return result.rows.length === 1;
   }
 
   async finish(noteId: string, decision: Decision): Promise<Decision> {
