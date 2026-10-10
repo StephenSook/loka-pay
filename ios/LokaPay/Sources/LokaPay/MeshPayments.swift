@@ -201,7 +201,10 @@ public final class MeshPaymentRouter {
     @ObservationIgnored private var deliveries: [UInt64: Delivery] = [:]
     @ObservationIgnored private var deliveryOrder: [UInt64] = []
     @ObservationIgnored private var packets: [Packet] = []
-    @ObservationIgnored private var outbound: [(note: SignedNote, packetIDs: [String])] = []
+    @ObservationIgnored private var outbound: [(note: SignedNote, packets: [(id: String, at: Date)])] = []
+    /// The most packet ids kept for one payment: LOKA's payment packets live 5 minutes, and older
+    /// ones are gone from its queue anyway.
+    public static let packetsPerPayment = 16
     private let now: @MainActor () -> Date
 
     /// Builds its own two inboxes unless given them.
@@ -315,15 +318,30 @@ public final class MeshPaymentRouter {
 
     /// Records the LOKA packets that carried one payment (the allowance, then the note) to the
     /// merchant, so `answered(by:)` can release them once that merchant's ack comes back.
+    /// Packets older than LOKA's payment packet lifetime are forgotten, and at most
+    /// `packetsPerPayment` are kept per payment, so resends cannot grow this without bound.
     public func sent(noteText: String, packetIDs: [String]) {
         guard !packetIDs.isEmpty, let decoded = try? PaymentTransport.decode(noteText), decoded.kind == .note,
               let note = Self.ownNote(decoded.payload) else { return }
-        var ids = packetIDs
+        let clock = now()
+        var packets = packetIDs.map { (id: $0, at: clock) }
         if let index = outbound.firstIndex(where: { $0.note.noteId == note.noteId }) {
-            ids = outbound.remove(at: index).packetIDs + packetIDs
+            packets = outbound.remove(at: index).packets + packets
         }
-        outbound = Array((outbound + [(note, ids)]).suffix(Self.memory))
+        pruneOutbound(clock)
+        packets = Array(packets.filter { Self.live($0.at, clock) }.suffix(Self.packetsPerPayment))
+        outbound = Array((outbound + [(note, packets)]).suffix(Self.memory))
     }
+
+    /// Drops packet ids past their lifetime, and payments with none left.
+    private func pruneOutbound(_ clock: Date) {
+        outbound = outbound.compactMap { entry in
+            let packets = entry.packets.filter { Self.live($0.at, clock) }
+            return packets.isEmpty ? nil : (entry.note, packets)
+        }
+    }
+
+    private static func live(_ at: Date, _ clock: Date) -> Bool { abs(clock.timeIntervalSince(at)) <= repeatWindow }
 
     /// The packets LOKA can stop retrying because `text` (an ack, or a receipt with its ack) carries
     /// an ack that verifies for a note this phone sent: the payee's key signed it, so the merchant
@@ -340,10 +358,11 @@ public final class MeshPaymentRouter {
         default:
             return []
         }
+        pruneOutbound(now())
         guard let index = outbound.firstIndex(where: { (try? Ack.verify(wire: ackWire, for: $0.note)) != nil }) else {
             return []
         }
-        return outbound.remove(at: index).packetIDs
+        return outbound.remove(at: index).packets.map(\.id)
     }
 
     /// A note this phone signed and checked before sending (PayModel runs section 6 first), read back

@@ -346,6 +346,26 @@ struct MeshPaymentTests {
         #expect(router.answered(by: PaymentTransport.encode(.receipt, receipt)) == ["n2"])
     }
 
+    @Test("resends keep a bounded, live list of packet ids per payment")
+    func packetIdsStayBounded() throws {
+        var clock = F.now
+        let router = MeshPaymentRouter(now: { clock })
+        let signed = try note()
+        let text = noteText(signed)
+        for index in 0..<40 { router.sent(noteText: text, packetIDs: ["a-\(index)", "n-\(index)"]) }
+        let ack = try ackText(signed)
+        #expect(router.answered(by: ack) == (32..<40).flatMap { ["a-\($0)", "n-\($0)"] })
+
+        // Ids older than the packet lifetime are forgotten; a payment with none left is gone.
+        router.sent(noteText: text, packetIDs: ["old-a", "old-n"])
+        clock = clock.addingTimeInterval(MeshPaymentRouter.repeatWindow + 1)
+        router.sent(noteText: text, packetIDs: ["new-a", "new-n"])
+        #expect(router.answered(by: ack) == ["new-a", "new-n"])
+        router.sent(noteText: text, packetIDs: ["late-a"])
+        clock = clock.addingTimeInterval(MeshPaymentRouter.repeatWindow + 1)
+        #expect(router.answered(by: ack).isEmpty)
+    }
+
     @Test("the pick is for one payment: after New payment nothing old is sent and the payer picks again")
     func stalePickAfterNewPayment() async throws {
         let router = MeshPaymentRouter()
