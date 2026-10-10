@@ -102,6 +102,10 @@ public enum SettlementError: Error, Equatable, Sendable {
     case badPubkey(message: String)
     case nameLength(message: String)
     case unknownNote(message: String)
+    /// HTTP 409: the registration transaction failed on chain, so the server issued no
+    /// certificate. Never retried. `signature` is kept only when it is canonical base58 of 64
+    /// bytes, and `explorer` is built from it; a URL in the body is ignored.
+    case registrationFailed(signature: String?, explorer: URL?, message: String)
     /// HTTP 422: the note or ack failed a stateless or identity check. `check` is a PAYMENT-V1
     /// section 6 name (`PaymentError(rawValue:)` maps it), `bad_ack`, `unknown_allowance`,
     /// `unknown_merchant` or `payer_mismatch`. Unsigned and not remembered by the server: a
@@ -138,6 +142,11 @@ public enum SettlementError: Error, Equatable, Sendable {
     /// upload) its signature is nil and the server may not have the note, so uploading the same
     /// note again is the way to find out (it is idempotent by note id).
     case stillPending(PendingSettlement)
+    /// The time budget of `registerPayer` or `registerMerchant` ran out while the server still
+    /// answered HTTP 202. The value is the last pending body; without one (the budget ended
+    /// during the first request) its signature and retryAfter are nil and the server may not
+    /// have started. Registering the same key again is safe: the endpoints are idempotent by key.
+    case registrationPending(PendingRegistration)
 
     /// A note upload whose automatic retries ended on an answer that decides nothing for that one
     /// request (the wrapped error: a 422, a 429, a 400, `chain_unavailable`), after an earlier
@@ -171,14 +180,15 @@ extension SettlementError {
     /// `unknown_note`, the 429s and `chain_unavailable` (nothing was signed), and for `stillPending`
     /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` speaks for earlier uploads.
     /// True again when one of those ended an upload whose earlier automatic attempt got no answer
-    /// (`afterUnansweredAttempt`).
+    /// (`afterUnansweredAttempt`). The two registration errors describe a registration, never a
+    /// note (a 409 `registration_failed` on a note route is a `protocolViolation`): false.
     public var leavesOutcomeUnknown: Bool {
         switch self {
         case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
              .payerMismatch, .merchantMismatch, .protocolViolation, .afterUnansweredAttempt:
             return true
         case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
-             .budgetExhausted, .chainUnavailable, .stillPending:
+             .budgetExhausted, .chainUnavailable, .stillPending, .registrationFailed, .registrationPending:
             return false
         }
     }
@@ -195,11 +205,13 @@ extension SettlementError {
     }
 }
 
-/// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`.
+/// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`,
+/// registration into `.registrationPending`.
 struct BudgetSpent: Error {}
 
-/// How `settle` and the note reads resend after a retryable failure. Registration is never
-/// retried automatically.
+/// How `settle` and the note reads resend after a retryable failure. Registration never uses
+/// it: a failed registration is not retried automatically, and reposting after HTTP 202 is the
+/// contract's own way to wait (API-V1 section 2).
 public struct RetryPolicy: Equatable, Sendable {
     /// Total attempts, the first one included.
     public let maxAttempts: Int
@@ -275,6 +287,26 @@ public struct PendingSettlement: Equatable, Sendable {
     public let retryAfter: Int?
 }
 
+/// The two registration routes.
+public enum RegistrationKind: String, Equatable, Sendable {
+    case payer
+    case merchant
+}
+
+/// HTTP 202 from `POST /v1/payers` or `POST /v1/merchants`: the server holds a registration for
+/// this key that the chain has not confirmed yet. Its `kind` and `keyHash` were checked against
+/// the request; nothing here is signed.
+public struct PendingRegistration: Equatable, Sendable {
+    public let kind: RegistrationKind
+    /// sha256 of the compressed key this client registered.
+    public let keyHash: Data
+    /// The saved transaction and its explorer page. Unsigned; nil when absent or not valid.
+    public let signature: String?
+    public let explorer: URL?
+    /// The server's suggested wait in seconds before posting again.
+    public let retryAfter: Int?
+}
+
 /// A note upload or read: decided on chain, or still in flight.
 public enum SettlementOutcome: Equatable, Sendable {
     case decided(SettlementDecision)
@@ -291,6 +323,8 @@ public struct SettlementClient: Sendable {
     public static let maxPollInterval: TimeInterval = 10
     /// The least time a request inside an overall budget is started with.
     public static let minRequestBudget: TimeInterval = 1
+    /// The default budget for one registration call, reposts after HTTP 202 included.
+    public static let registrationTimeout: TimeInterval = 60
 
     public let baseURL: URL
     public let deployment: Deployment
@@ -314,10 +348,16 @@ public struct SettlementClient: Sendable {
     }
 
     /// `POST /v1/payers`: opens (or returns) the allowance for this compressed P-256 key.
-    /// Not retried automatically; the endpoint is idempotent by key, so the caller may repeat it.
-    public func registerPayer(publicKey: Data) async throws -> VerifiedRegistration {
+    /// While the server answers HTTP 202 (the open transaction is not confirmed yet), the same
+    /// request is posted again: after the server's `retryAfter`, backing off 1, 2, 4, 8 s to at
+    /// most 10 s between posts, all within `timeout` seconds, then `.registrationPending` with
+    /// the last pending body. HTTP 409 throws `.registrationFailed`. Nothing else is retried
+    /// automatically, not a network error and not `chain_unavailable`; the endpoint is
+    /// idempotent by key, so the caller may repeat it.
+    public func registerPayer(publicKey: Data,
+                              timeout: TimeInterval = SettlementClient.registrationTimeout) async throws -> VerifiedRegistration {
         let request = try post("v1/payers", SettlementAPI.PublicKeyRequest(publicKey: Base64URL.encode(publicKey)))
-        let (data, response) = try await perform(request)
+        let (data, response) = try await register(request, kind: .payer, publicKey: publicKey, timeout: timeout)
         let body = try decode(SettlementAPI.PayerResponse.self, data)
         let wire = try wireField("allowance", body.allowance)
         let certificate = try verified {
@@ -331,11 +371,14 @@ public struct SettlementClient: Sendable {
     }
 
     /// `POST /v1/merchants`. The name is sent in NFC; on a repeat call the certificate keeps the
-    /// first name, so it is not compared. Not retried automatically (idempotent by key).
-    public func registerMerchant(publicKey: Data, name: String) async throws -> VerifiedMerchant {
+    /// first name, so it is not compared. HTTP 202, HTTP 409 and the time budget behave as in
+    /// `registerPayer`; nothing else is retried automatically (idempotent by key).
+    public func registerMerchant(publicKey: Data, name: String,
+                                 timeout: TimeInterval = SettlementClient.registrationTimeout) async throws -> VerifiedMerchant {
         let body = SettlementAPI.MerchantRequest(publicKey: Base64URL.encode(publicKey),
                                                  name: name.precomposedStringWithCanonicalMapping)
-        let (data, response) = try await perform(try post("v1/merchants", body))
+        let (data, response) = try await register(try post("v1/merchants", body), kind: .merchant,
+                                                  publicKey: publicKey, timeout: timeout)
         let reply = try decode(SettlementAPI.MerchantResponse.self, data)
         let wire = try wireField("merchant", reply.merchant)
         let certificate = try verified {
@@ -414,12 +457,9 @@ public struct SettlementClient: Sendable {
         var backoff: TimeInterval = 1
         while true {
             if let current = pending {
-                // Wait before the next poll, never shorter than the server asked and never so long
-                // that the poll would start with less than `minRequestBudget` left.
-                let hint = min(max(0, TimeInterval(current.retryAfter ?? 0)), Self.maxPollInterval)
-                let wait = min(Self.maxPollInterval, max(hint, backoff))
-                let next = min(wait, deadline - clock.now() - Self.minRequestBudget)
-                guard next >= hint else { throw SettlementError.stillPending(current) }
+                guard let next = nextWait(retryAfter: current.retryAfter, backoff: backoff, deadline: deadline) else {
+                    throw SettlementError.stillPending(current)
+                }
                 if next > 0 { try await clock.sleep(next) }
                 backoff = min(backoff * 2, Self.maxPollInterval)
             }
@@ -436,6 +476,52 @@ public struct SettlementClient: Sendable {
 
     static func unknownPending(_ noteId: Data) -> PendingSettlement {
         PendingSettlement(noteId: noteId, signature: nil, explorer: nil, retryAfter: nil)
+    }
+
+    /// The wait before the next poll or repost: never shorter than the server asked, backing off
+    /// to at most `maxPollInterval`, and never so long that the request would start with less
+    /// than `minRequestBudget` left. Nil when no further request fits in the budget.
+    private func nextWait(retryAfter: Int?, backoff: TimeInterval, deadline: TimeInterval) -> TimeInterval? {
+        let hint = min(max(0, TimeInterval(retryAfter ?? 0)), Self.maxPollInterval)
+        let wait = min(Self.maxPollInterval, max(hint, backoff))
+        let next = min(wait, deadline - clock.now() - Self.minRequestBudget)
+        return next >= hint ? next : nil
+    }
+
+    /// Posts a registration and, while the server answers HTTP 202, posts the SAME request again
+    /// within one budget. Returns the first other 2xx. Any error ends the call unretried; the
+    /// budget running out ends it with `.registrationPending`.
+    private func register(_ request: URLRequest, kind: RegistrationKind, publicKey: Data,
+                          timeout: TimeInterval) async throws -> (Data, HTTPURLResponse) {
+        let deadline = clock.now() + timeout
+        let keyHash = P256Rules.keyHash(publicKey)
+        var pending: PendingRegistration?
+        var backoff: TimeInterval = 1
+        while true {
+            if let current = pending {
+                guard let next = nextWait(retryAfter: current.retryAfter, backoff: backoff, deadline: deadline) else {
+                    throw SettlementError.registrationPending(current)
+                }
+                if next > 0 { try await clock.sleep(next) }
+                backoff = min(backoff * 2, Self.maxPollInterval)
+            }
+            let data: Data
+            let response: HTTPURLResponse
+            do {
+                (data, response) = try await perform(request, deadline: deadline, registration: true)
+            } catch is BudgetSpent {
+                throw SettlementError.registrationPending(pending ?? Self.unknownRegistration(kind, keyHash))
+            } catch SettlementError.network(.timedOut) where clock.now() >= deadline {
+                // The budget ran out during the request: report that, not the timeout it caused.
+                throw SettlementError.registrationPending(pending ?? Self.unknownRegistration(kind, keyHash))
+            }
+            guard response.statusCode == 202 else { return (data, response) }
+            pending = try pendingRegistration(data: data, response: response, kind: kind, keyHash: keyHash)
+        }
+    }
+
+    static func unknownRegistration(_ kind: RegistrationKind, _ keyHash: Data) -> PendingRegistration {
+        PendingRegistration(kind: kind, keyHash: keyHash, signature: nil, explorer: nil, retryAfter: nil)
     }
 
     // MARK: - Verification
@@ -458,6 +544,26 @@ public struct SettlementClient: Sendable {
             ? Self.explorerURL(signature: Base58.encode(conf.txSignature), clusterId: deployment.clusterId) : nil
         return .decided(SettlementDecision(confirmation: conf, confirmationWire: wire, explorer: explorer,
                                            replayed: body.replayed == true, reason: body.error))
+    }
+
+    /// A registration 202 must say "pending" and name the route that was called and the key that
+    /// was sent; one that does not is a protocol violation and is not posted again. A body that is
+    /// not a JSON object is `invalidResponse`, also not posted again.
+    private func pendingRegistration(data: Data, response: HTTPURLResponse, kind: RegistrationKind,
+                                     keyHash: Data) throws -> PendingRegistration {
+        let body = try decode(SettlementAPI.RegistrationPendingResponse.self, data)
+        guard body.status == "pending" else {
+            throw SettlementError.protocolViolation("HTTP 202 does not say status pending")
+        }
+        guard body.kind == kind.rawValue else {
+            throw SettlementError.protocolViolation("HTTP 202 names another registration kind")
+        }
+        guard body.keyHash == keyHash.hex else {
+            throw SettlementError.protocolViolation("HTTP 202 names another key hash")
+        }
+        let explorer = body.signature.flatMap { Self.explorerURL(signature: $0, clusterId: deployment.clusterId) }
+        return PendingRegistration(kind: kind, keyHash: keyHash, signature: explorer == nil ? nil : body.signature,
+                                   explorer: explorer, retryAfter: body.retryAfter ?? Self.retryAfter(response))
     }
 
     private func verified<T>(_ check: () throws -> T) throws -> T {
@@ -548,7 +654,10 @@ public struct SettlementClient: Sendable {
         }
     }
 
-    private func perform(_ request: URLRequest, deadline: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
+    /// `registration`: the request is `POST /v1/payers` or `POST /v1/merchants`, the only routes
+    /// that may answer `registration_failed`.
+    private func perform(_ request: URLRequest, deadline: TimeInterval? = nil,
+                         registration: Bool = false) async throws -> (Data, HTTPURLResponse) {
         var request = request
         if let deadline {
             // Never start a request with no budget left, and never let one outlive the budget.
@@ -570,7 +679,8 @@ public struct SettlementClient: Sendable {
             throw SettlementError.transport(String(describing: error))
         }
         guard (200..<300).contains(response.statusCode) else {
-            throw Self.apiError(status: response.statusCode, data: data, response: response)
+            throw Self.apiError(status: response.statusCode, data: data, response: response,
+                                clusterId: deployment.clusterId, registration: registration)
         }
         return (data, response)
     }
@@ -578,7 +688,8 @@ public struct SettlementClient: Sendable {
     /// The HTTP status each error name must come with (API-V1 section 1).
     static let errorStatus: [String: Int] = [
         "bad_json": 400, "bad_base64url": 400, "bad_pubkey": 400, "name_length": 400,
-        "unknown_note": 404, "rate_limited": 429, "budget_exhausted": 429, "chain_unavailable": 503,
+        "unknown_note": 404, "registration_failed": 409,
+        "rate_limited": 429, "budget_exhausted": 429, "chain_unavailable": 503,
     ]
 
     /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, `bad_ack`, and the identity
@@ -589,7 +700,10 @@ public struct SettlementClient: Sendable {
         "unknown_allowance", "unknown_merchant", "payer_mismatch",
     ]
 
-    static func apiError(status: Int, data: Data, response: HTTPURLResponse) -> SettlementError {
+    /// `registration`: the request was a registration, the only kind `registration_failed` may
+    /// answer. `clusterId` is for that error's explorer link, built from its signature.
+    static func apiError(status: Int, data: Data, response: HTTPURLResponse, clusterId: UInt8,
+                         registration: Bool = false) -> SettlementError {
         guard let body = try? JSONDecoder().decode(SettlementAPI.ErrorBody.self, from: data) else {
             return .http(status: status, error: nil, message: nil)
         }
@@ -601,6 +715,11 @@ public struct SettlementClient: Sendable {
             guard refusalChecks.contains(name) else { return .protocolViolation("HTTP 422 with error \(name)") }
             return .refused(check: name, message: message)
         }
+        // A 409 carries only registration_failed, and only on a registration route: on a note
+        // route it is an answer API v1 never sends, so it is not trusted (the outcome stays unknown).
+        if status == 409, !(registration && name == "registration_failed") {
+            return .protocolViolation("HTTP 409 with error \(name)")
+        }
         guard let expected = errorStatus[name] else { return .http(status: status, error: name, message: message) }
         guard expected == status else { return .protocolViolation("HTTP \(status) with error \(name)") }
         switch name {
@@ -609,6 +728,11 @@ public struct SettlementClient: Sendable {
         case "bad_pubkey": return .badPubkey(message: message)
         case "name_length": return .nameLength(message: message)
         case "unknown_note": return .unknownNote(message: message)
+        case "registration_failed":
+            // The link is built from the signature only; any URL in the body is ignored.
+            let explorer = body.signature.flatMap { explorerURL(signature: $0, clusterId: clusterId) }
+            return .registrationFailed(signature: explorer == nil ? nil : body.signature, explorer: explorer,
+                                       message: message)
         case "rate_limited": return .rateLimited(retryAfter: retryAfter(response), message: message)
         case "budget_exhausted": return .budgetExhausted(message: message)
         case "chain_unavailable": return .chainUnavailable(message: message)
@@ -625,12 +749,14 @@ public struct SettlementClient: Sendable {
 }
 
 /// JSON bodies of protocol/API-V1.md, field names exactly as written there. Only the signed wire
-/// field of each response is required. The other fields this client reads are display only and
-/// decode leniently (absent, null or the wrong type read as nil), so a server-side slip in one of
-/// them never discards a verified certificate or confirmation. Fields the contract lists that are
-/// mirrors of signed bytes (allowanceId, payerKeyHash, capUnits, offlineLimitUnits, bondUnits,
-/// expiry, earmarks, merchantKeyHash, noteId, status, errorCode, slot, blockTime, uploadedAt,
-/// explorer) are not decoded at all: the client takes those values from the verified wire.
+/// field of each response is required; a registration 202 has no wire, and its kind and keyHash
+/// are checked against the request instead. The other fields this client reads are display only
+/// and decode leniently (absent, null or the wrong type read as nil), so a server-side slip in
+/// one of them never discards a verified certificate or confirmation. Fields the contract lists
+/// that are mirrors of signed bytes (allowanceId, payerKeyHash, capUnits, offlineLimitUnits,
+/// bondUnits, expiry, earmarks, merchantKeyHash, noteId, status, errorCode, slot, blockTime,
+/// uploadedAt, explorer) are not decoded at all: the client takes those values from the verified
+/// wire.
 enum SettlementAPI {
     struct PublicKeyRequest: Codable, Equatable {
         let publicKey: String
@@ -697,9 +823,40 @@ enum SettlementAPI {
         }
     }
 
+    /// HTTP 202 for `POST /v1/payers` and `POST /v1/merchants`, as the server sends it:
+    /// `{ "status": "pending", "kind", "keyHash", "signature": <base58 or null>, "retryAfter": 2 }`.
+    /// `status`, `kind` and `keyHash` decode leniently here, and the client refuses the body when
+    /// `status` is not "pending" or `kind` or `keyHash` is missing or differs from the request.
+    /// `signature` and `retryAfter` are display only.
+    struct RegistrationPendingResponse: Codable, Equatable {
+        let status: String?
+        let kind: String?
+        let keyHash: String?
+        let signature: String?
+        let retryAfter: Int?
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            status = c.lenient(.status)
+            kind = c.lenient(.kind)
+            keyHash = c.lenient(.keyHash)
+            signature = c.lenient(.signature)
+            retryAfter = c.lenient(.retryAfter)
+        }
+    }
+
+    /// `signature` comes only with `registration_failed`; it is display only and decodes leniently.
     struct ErrorBody: Codable, Equatable {
         let error: String
         let message: String
+        let signature: String?
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            error = try c.decode(String.self, forKey: .error)
+            message = try c.decode(String.self, forKey: .message)
+            signature = c.lenient(.signature)
+        }
     }
 }
 

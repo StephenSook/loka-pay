@@ -228,6 +228,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .merchantMismatch: return "merchant_mismatch"
         case .protocolViolation: return "protocol_violation"
         case .stillPending: return "still_pending"
+        case .registrationPending: return "registration_pending"
+        case .registrationFailed: return "registration_failed"
         case .afterUnansweredAttempt(let last): return settlementName(last) + "_after_unanswered_attempt"
         }
     }
@@ -266,6 +268,14 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 + "upload it; the note stays held on this phone."
         case .badJSON, .badBase64url, .badPubkey, .nameLength:
             return "The server rejected the request (\(settlementName(e))). \(held)"
+        case .registrationPending:
+            return "The server is still confirming this phone's registration on Solana devnet, so no certificate "
+                + "came back yet. Try again in a moment: registering the same key again is safe and never opens a "
+                + "second one."
+        case .registrationFailed(let signature, _, _):
+            return "The registration transaction failed on Solana devnet, so the server issued no certificate for "
+                + "this key. The server keeps that answer for this key, so trying again gives the same result. Ask "
+                + "the LOKA team to look up the failed transaction" + (signature.map { " (\($0))" } ?? "") + "."
         case .afterUnansweredAttempt(let last):
             return settlementMessage(last) + " An earlier attempt of this upload got no answer this phone can trust, "
                 + "so the server may have settled the note: the outcome is unknown, and Check again asks the server "

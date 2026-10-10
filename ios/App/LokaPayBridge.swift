@@ -820,6 +820,14 @@ struct LokaPaySetupIssue: Equatable {
             return "The server's answer broke the API contract (\(detail)), so nothing was stored."
         case .stillPending:
             return "The server has not finished yet. Try again in a moment; registering again is safe."
+        case .registrationPending(let pending):
+            return "The server is still confirming this phone's " + (pending.kind == .payer ? "allowance" : "merchant record")
+                + " on Solana devnet, so nothing was stored yet. Try again in a moment: registering the same key again "
+                + "is safe and never opens a second one."
+        case .registrationFailed(let signature, _, _):
+            return "The registration transaction failed on Solana devnet, so the server issued no certificate for this "
+                + "key and nothing was stored. The server keeps that answer for this key, so trying again gives the same "
+                + "result. Ask the LOKA team to look up the failed transaction" + (signature.map { " (\($0))" } ?? "") + "."
         case .afterUnansweredAttempt(let inner):
             // Only note uploads are wrapped; registration never is. Word the inner error if it ever is.
             return registrationMessage(inner)
@@ -848,8 +856,9 @@ extension LokaPayStore {
     /// Registers this phone's key as a payer (POST /v1/payers), then as a merchant
     /// (POST /v1/merchants), skipping a certificate that is already stored and verified. A wire is
     /// stored only after SettlementClient verified it with the pinned server key and checked that
-    /// it names this key. Nothing is retried automatically; both endpoints are idempotent by key,
-    /// so tapping again is safe.
+    /// it names this key. While the server answers HTTP 202 (still confirming on chain) the client
+    /// posts the same request again for up to a minute per step; nothing else is retried
+    /// automatically. Both endpoints are idempotent by key, so tapping again is safe.
     func register(merchantName text: String) async {
         guard let client = settlementClient, let signer, keyState == .ready, setupStep == .idle else { return }
         setupIssue = nil
