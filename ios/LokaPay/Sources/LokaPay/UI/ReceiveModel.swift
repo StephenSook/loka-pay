@@ -64,8 +64,10 @@ public final class ReceiveModel {
     /// The last HTTP 202 for this note: the chain has not decided yet. Unsigned.
     public private(set) var pendingSettlement: PendingSettlement?
     public private(set) var issue: MoneyIssue?
-    /// A second valid note from the certificate's payer on a serial already in the ledger.
-    public private(set) var conflictingSpend = false
+    /// The allowance a proven conflicting spend was seen for (a second valid note from that
+    /// certificate's payer on a serial already in the ledger). Read it through `conflictingSpend`,
+    /// which checks it against the allowance on screen.
+    public private(set) var conflictAllowanceId: UInt64?
     public private(set) var isWorking = false
     /// This merchant's pending total for the allowance on screen (OfflineLedger); nil when the
     /// ledger could not be read. Read it through `unsettled(for:)`, which checks the pairing.
@@ -122,11 +124,32 @@ public final class ReceiveModel {
         return nil
     }
 
+    /// True only while the allowance on screen is the one the conflicting spend was seen for.
+    public var conflictingSpend: Bool {
+        guard let id = conflictAllowanceId, let shown = payment?.certificate ?? lastAllowance else { return false }
+        return id == shown.allowanceId
+    }
+
     /// The acceptance check chip state for the allowance on screen.
     public var limitState: LimitState? {
         guard let certificate = payment?.certificate ?? lastAllowance,
               let unsettled = unsettled(for: certificate) else { return nil }
         return LimitState.from(unsettled: unsettled, offlineLimit: certificate.offlineLimit, conflict: conflictingSpend)
+    }
+
+    /// The one chip the limit block shows for an allowance.
+    public enum LimitBadge: Equatable, Sendable {
+        case conflictingSpend
+        /// A limit state (never `.conflictingSpend`, which has its own case).
+        case limit(LimitState)
+    }
+
+    /// The chip for `certificate`: Conflicting spend seen when the conflict was seen for it, else
+    /// its limit state when its own total is on hand, else none ("Within local limit" would be a guess).
+    public func limitBadge(for certificate: AllowanceCertificate) -> LimitBadge? {
+        if conflictingSpend, conflictAllowanceId == certificate.allowanceId { return .conflictingSpend }
+        guard let unsettled = unsettled(for: certificate) else { return nil }
+        return .limit(LimitState.from(unsettled: unsettled, offlineLimit: certificate.offlineLimit, conflict: false))
     }
 
     /// This merchant's unsettled total for `certificate`, only when the total on hand was read
@@ -222,7 +245,7 @@ public final class ReceiveModel {
             // During a payment the screen shows that payment's allowance and its issues; leave
             // them. The certificate is kept, so the next payer's note still finds it.
             guard phase == .ready else { return }
-            lastAllowance = certificate
+            show(certificate)
             issue = nil
             refreshUnsettled(certificate.allowanceId)
             if let waiting = waitingNote, waiting.note.allowanceId == certificate.allowanceId {
@@ -254,7 +277,7 @@ public final class ReceiveModel {
         guard let merchant else { return }
         // Runs only while ready. The card, the limit chip and the risk line now describe the
         // allowance this note is checked against, whatever happens below.
-        lastAllowance = certificate
+        show(certificate)
         let seconds = Int64(now().timeIntervalSince1970)
         do {
             try Acceptance.check(note: note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash, now: seconds)
@@ -263,16 +286,16 @@ public final class ReceiveModel {
             refreshUnsettled(certificate.allowanceId)
             // The identical note again is not a reuse: it is already in the ledger.
             if let entries = try? ledger.entries(), entries.contains(where: { $0.noteIdHex == note.noteId.hex }) {
-                conflictingSpend = false
+                conflictAllowanceId = nil
                 return report(.alreadyReceived)
             }
-            conflictingSpend = isEquivocation(note, certificate: certificate)
+            conflictAllowanceId = isEquivocation(note, certificate: certificate) ? certificate.allowanceId : nil
             return report(.payment(.serialSeen))
         } catch {
             refreshUnsettled(certificate.allowanceId)
             return report(PayModel.kind(of: error))
         }
-        conflictingSpend = false
+        conflictAllowanceId = nil
         waitingNote = nil
         let zeroBars = internetState?().map { $0 == InternetState.none } ?? false
         payment = ReceivedPayment(note: note, certificate: certificate,
@@ -408,7 +431,7 @@ public final class ReceiveModel {
         pendingSettlement = nil
         waitingNote = nil
         issue = nil
-        conflictingSpend = false
+        conflictAllowanceId = nil
         // The previous payer's allowance is not progress for the next one.
         lastAllowance = nil
         unsettledTotal = nil
@@ -417,6 +440,12 @@ public final class ReceiveModel {
     }
 
     // MARK: - Helpers
+
+    /// Puts `certificate` on the ready card. A conflict seen for another allowance is not this one's.
+    private func show(_ certificate: AllowanceCertificate) {
+        if conflictAllowanceId != certificate.allowanceId { conflictAllowanceId = nil }
+        lastAllowance = certificate
+    }
 
     private func refreshUnsettled(_ allowanceId: UInt64) {
         unsettledAllowanceId = allowanceId
@@ -445,13 +474,13 @@ extension ReceiveModel {
         model.payment = payment
         model.settlement = settlement
         model.pendingSettlement = pending
-        model.conflictingSpend = conflict
         model.waitingNote = waitingNote
         // A ready screen with an unsettled figure has seen the payer's allowance; a bare ready
         // screen has seen nothing yet.
         model.lastAllowance = payment?.certificate ?? (unsettled != nil ? PreviewFixtures.allowance : nil)
         model.unsettledTotal = unsettled
         model.unsettledAllowanceId = model.lastAllowance?.allowanceId
+        model.conflictAllowanceId = conflict ? model.lastAllowance?.allowanceId : nil
         model.issue = issue.map { MoneyIssue($0, at: PreviewFixtures.now) }
         return model
     }

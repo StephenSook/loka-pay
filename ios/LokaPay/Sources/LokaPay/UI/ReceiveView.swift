@@ -99,9 +99,8 @@ public struct ReceiveView: View {
             case .waitingForBoth:
                 Text(step.text).font(LokaStyle.body).foregroundStyle(LokaColor.muted)
             }
-            if model.conflictingSpend { MoneyStatusChip(.conflictingSpend) }
             // A waiting note belongs to an allowance not on this phone yet, so another payer's
-            // risk line would describe the wrong allowance.
+            // chip and risk line would describe the wrong allowance.
             if step != .noteWaitingForAllowance { limitBlock(model.lastAllowance) }
             CodeEntryField(prompt: "Or paste a payer code") { text in Task { await model.accept(text: text) } }
         }
@@ -111,8 +110,12 @@ public struct ReceiveView: View {
     @ViewBuilder private func limitBlock(_ certificate: AllowanceCertificate?) -> some View {
         if let certificate {
             let unsettled = model.unsettled(for: certificate)
-            // No chip without a total: "Within local limit" would be a guess.
-            if unsettled != nil, let state = model.limitState { LimitChip(state) }
+            // One chip: the conflict when it was seen for this allowance, else the limit state.
+            switch model.limitBadge(for: certificate) {
+            case .conflictingSpend: MoneyStatusChip(.conflictingSpend)
+            case .limit(let state): LimitChip(state)
+            case nil: EmptyView()
+            }
             Text(LimitState.riskLine(unsettled: unsettled, offlineLimit: certificate.offlineLimit,
                                      allowanceId: certificate.allowanceId))
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
