@@ -423,9 +423,9 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
 /**
  * The order is the point: every cheap check comes before any work that costs something.
  * 1. The body is read and checked, then the kill switch and the configuration.
- * 2. The desk code. A wrong or missing code counts only against this client's failure limit
- *    (lib/call-limits.ts DeskCodeFailures), never against a number or the site, so bad codes
- *    cannot lock anyone else out; a client over that limit gets 429 without its code checked.
+ * 2. The desk code. A correct code goes straight on. A wrong or missing code counts only
+ *    against its address's failure limit (lib/call-limits.ts DeskCodeFailures), never against
+ *    a number or the site, and past that limit that address's wrong codes get 429.
  * 3. One slot in the per-number cap and one in the site cap are reserved together. They stay
  *    reserved whatever happens next, so failing requests run into the caps.
  * 4. Only then is devnet read; then one call per number and payment; then Vonage is asked.
@@ -440,15 +440,19 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   const { secret, origin } = config.config;
 
   const { deskCode } = config.config;
-  if (deskCode !== null) {
-    const client = clientKey(request, deps.clientSecret);
-    if (client === null) return refuse(400, "bad_request", "the request carries no client address");
+  // Off a local test run, every request needs a client address (Vercel always sends one), so
+  // a request without one is refused rather than ever sharing a bucket. Then the code is
+  // compared (in constant time) before the failure limiter is looked at. A correct code never
+  // meets the limiter, so wrong codes from a shared address (a venue's Wi-Fi) cannot block a
+  // judge who has the right one; only wrong or missing codes are counted, and only they are
+  // refused once that address is past its limit.
+  const client = clientKey(request, deps.clientSecret);
+  if (client === null) return refuse(400, "bad_request", "the request carries no client address");
+  if (deskCode !== null && (code === null || !deskCodeMatches(deskCode, code))) {
     const blocked = deps.failures.check(client);
     if (!blocked.ok) return limited(blocked);
-    if (code === null || !deskCodeMatches(deskCode, code)) {
-      deps.failures.record(client);
-      return refuse(403, "wrong_code", "the desk code from the LOKA Pay table is needed");
-    }
+    deps.failures.record(client);
+    return refuse(403, "wrong_code", "the desk code from the LOKA Pay table is needed");
   }
 
   const key = numberKey(secret, to);

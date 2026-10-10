@@ -733,7 +733,7 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
         const d = deps(undefined, { siteLimit: 5 });
         const A = "203.0.113.5";
         const B = "198.51.100.7";
-        // Client A guesses with the judge's number: ten 403s, then 429 without its code checked.
+        // Client A guesses with the judge's number: ten 403s, then its wrong codes get 429.
         for (let i = 0; i < FAILURE_LIMIT; i += 1) {
           expect((await handleCall(fromClient(A, { to: NUMBER, lang: "en", code: `guess-${i}` }), d)).status).toBe(403);
         }
@@ -743,8 +743,6 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
           expect(r.headers.get("retry-after")).toBe(String(FAILURE_WINDOW_MS / 1000));
           expect(await r.json()).toEqual({ error: "rate_limited", limit: "desk_code", retryAfterSeconds: FAILURE_WINDOW_MS / 1000 });
         }
-        // Even the right code from A waits out its failures.
-        expect((await handleCall(fromClient(A, { to: NUMBER, lang: "en", code: CODE }), d)).status).toBe(429);
         // None of it touched the number or the site, or reached devnet or Vonage.
         expect(d.limits.sizes()).toEqual({ numbers: 0, payments: 0, site: 0 });
         expect(s.seen.rpc).toHaveLength(0);
@@ -765,6 +763,25 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
     expect(key).not.toContain("203.0.113.5");
     expect(key).not.toBe(clientKey(fromClient("198.51.100.7", {}), secret));
     expect(key).toBe(clientKey(fromClient("203.0.113.5", {}), secret));
+  });
+
+  test("an address past its limit still gets its call with the correct code (a venue's shared Wi-Fi)", async () => {
+    await withStandIn({}, async (s) => {
+      await withEnv(callEnv(s.base, { LOKA_CALL_CODE: CODE }), async () => {
+        const d = deps();
+        const VENUE = "203.0.113.50";
+        for (let i = 0; i < FAILURE_LIMIT + 3; i += 1) await handleCall(fromClient(VENUE, { to: OTHER_NUMBER, lang: "en", code: `typo-${i}` }), d);
+        // Past its limit: that address's wrong codes are refused.
+        const wrong = await handleCall(fromClient(VENUE, { to: OTHER_NUMBER, lang: "en", code: "typo-again" }), d);
+        expect(wrong.status).toBe(429);
+        expect((await wrong.json()).limit).toBe("desk_code");
+        // A judge on the same Wi-Fi with the correct code gets the call.
+        const right = await handleCall(fromClient(VENUE, { to: NUMBER, lang: "en", code: CODE }), d);
+        expect(right.status).toBe(200);
+        expect(s.seen.vonage).toHaveLength(1);
+        expect(JSON.stringify(s.seen.vonage[0].body)).toContain(`1${NATIONAL}`);
+      });
+    });
   });
 
   test("the limiter keys on Vercel's own header, not on x-forwarded-for a client can write", async () => {
@@ -865,9 +882,9 @@ test.describe("limits end state (table)", () => {
     { rule: "3 missing desk code", send: { body: { to: NUMBER, lang: "en" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "3 wrong desk code", send: { body: { ...ok, code: "nope" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     {
-      rule: "3 a client past its threshold gets 429, even with the right code",
+      rule: "3 an address past its threshold: its wrong codes get 429",
       before: Array.from({ length: FAILURE_LIMIT }, (_, i) => ({ body: { ...ok, code: `guess-${i}` }, client: A })),
-      send: { body: ok, client: A },
+      send: { body: { ...ok, code: "guess-again" }, client: A },
       status: 429,
       limit: "desk_code",
       failures: 0,
@@ -876,6 +893,18 @@ test.describe("limits end state (table)", () => {
       payments: 0,
       rpc: 0,
       vonage: 0,
+    },
+    {
+      rule: "3 the same address with the right code still gets its call",
+      before: Array.from({ length: FAILURE_LIMIT + 5 }, (_, i) => ({ body: { ...ok, code: `guess-${i}` }, client: A })),
+      send: { body: ok, client: A },
+      status: 200,
+      failures: 0,
+      numbers: 1,
+      site: 1,
+      payments: 1,
+      rpc: "some",
+      vonage: 1,
     },
     {
       rule: "3 another client is not affected",

@@ -17,7 +17,8 @@
 // - per number and payment: one call, remembered for PAYMENT_MEMORY_MS.
 //
 // DeskCodeFailures, for wrong or missing desk codes, which never touch the caps above (so
-// nobody can lock judges out by sending bad codes): at most FAILURE_LIMIT failures in
+// nobody can lock judges out by sending bad codes), and which a correct code never meets
+// (lib/call-server.ts compares the code first): at most FAILURE_LIMIT failures in
 // FAILURE_WINDOW_MS per client, keyed by HMAC-SHA256(a random secret made when the server
 // starts, the client's address), never the address itself. The address comes from Vercel's
 // x-vercel-forwarded-for, then x-real-ip, never the client-writable x-forwarded-for; a
