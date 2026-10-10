@@ -16,10 +16,18 @@ this repository drifts from it:
   4. A pending fact may appear on README only as placeholder wording (PENDING, pending,
      TODO, TODO(3.6), not measured yet), never as a number.
 
-A fact with a value that lists README as a surface but that README does not print yet is
-a warning, not a failure. surfaces list where a fact goes: pending facts carry README
-long before any value exists, and the README first screen is task 4.3. Run with --strict
-before submission to turn those warnings into failures.
+  5. MUST_PRINT names, by fact key, every value README prints in its slot wording. Each one
+     must stay printed and equal: if its slot finds nothing, that is a failure naming the key
+     and the expected text, so rewording README cannot turn a compared value into an
+     uncompared one. A fact README prints in its slot but MUST_PRINT omits also fails, and
+     the count of values printed and equal may never fall below len(MUST_PRINT).
+
+A fact outside MUST_PRINT with a value that lists README as a surface but that README does
+not print yet is a warning, not a failure. surfaces list where a fact goes: pending facts
+carry README long before any value exists, and the README first screen is task 4.3. Run
+with --strict before submission to turn those warnings into failures. A correct value
+printed in wording no slot knows is still found and reported, but it is not a comparison
+(a wrong value in that wording is invisible), so it never counts toward the floor.
 
 What this cannot see: slides, the video and the Devpost text live outside the repository.
 The /judge, /proof and home proof pairs read docs/FACTS.json at build time
@@ -220,6 +228,19 @@ README_SLOTS: dict[str, Slot] = {
     ),
 }
 
+# Every fact README prints in its slot wording, by key. A key here must keep printing its
+# formatted value in a slot README_SLOTS recognizes; when the slot finds nothing (README was
+# reworded, or the value dropped), that fails instead of falling back to a warning. When
+# README starts printing another fact in its slot, check_readme fails until it is added here,
+# so a value that was printed can never silently disappear.
+MUST_PRINT: frozenset[str] = frozenset({
+    "proof_pair_settled_tx",
+    "proof_pair_refused_tx",
+    "proof_pair_iphone_settled_tx",
+    "proof_pair_iphone_refused_tx",
+    "note_v1_bytes",
+})
+
 EXPORT_RX = re.compile(
     r"^export\s+const\s+(?P<name>[A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*"
     r"(?P<lit>\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'|-?\d[\d_]*(?:\.\d+)?)\s*;",
@@ -245,7 +266,8 @@ class Report:
     web_checked: int = 0
     readme_total: int = 0
     readme_checked: int = 0
-    readme_printed: int = 0
+    readme_printed: int = 0  # captured by a slot and equal to the formatted value
+    readme_unrecognized: int = 0  # equal value found only in wording no slot knows
     readme_pending: int = 0
     readme_unprinted: int = 0
 
@@ -454,6 +476,15 @@ def check_readme(root: Path, facts: dict[str, dict[str, Any]], report: Report) -
     for key in README_SLOTS:
         if key not in declared:
             report.findings.append(Finding(key, README_PATH, "README_SLOTS has this key, but FACTS.json does not list README in its surfaces"))
+    for key in sorted(MUST_PRINT):
+        slot = README_SLOTS.get(key)
+        if slot is None or slot.fmt is None:
+            report.findings.append(Finding(key, README_PATH, "is in MUST_PRINT, but README_SLOTS has no slot with a formatter for it, so README cannot be compared"))
+        if key not in declared:
+            report.findings.append(Finding(
+                key, README_PATH,
+                "is in MUST_PRINT (README prints it), but FACTS.json has no such fact listing README in its surfaces",
+            ))
     for key in declared:
         report.readme_total += 1
         _check_readme_fact(key, facts[key], text, lines, report)
@@ -465,9 +496,15 @@ def _check_readme_fact(key: str, fact: dict[str, Any], text: str, lines: list[st
     if slot is None:
         report.findings.append(Finding(key, README_PATH, "lists README as a surface but check_facts.py has no README_SLOTS entry; add its wording and formatter"))
         return
+    must = key in MUST_PRINT
     value = fact.get("value")
     matches = _slot_matches(slot, lines)
     if value is None or fact.get("status") == "pending":
+        if must:
+            report.findings.append(Finding(
+                key, README_PATH,
+                f"is in MUST_PRINT (README prints it), but the fact is {fact.get('status')} with no value",
+            ))
         for line, shown in matches:
             if not PLACEHOLDER_RX.fullmatch(shown):
                 report.findings.append(Finding(
@@ -486,9 +523,22 @@ def _check_readme_fact(key: str, fact: dict[str, Any], text: str, lines: list[st
             return
     if not matches:
         # A correct value printed in wording no slot knows: matched on its own, never inside
-        # a longer token (a short number can sit inside a base58 signature).
-        if expected is not None and re.search(rf"(?<![\w.,]){re.escape(expected)}(?!\w)", text):
-            report.readme_printed += 1
+        # a longer token (a short number can sit inside a base58 signature). This finds only
+        # the right value, never a wrong one, so it is reported but is not a comparison.
+        found = expected is not None and re.search(rf"(?<![\w.,]){re.escape(expected)}(?!\w)", text) is not None
+        if must:
+            wanted = repr(expected) if expected is not None else "its value"
+            why = (
+                f"{expected!r} appears in wording its slot patterns do not recognize; add that wording to README_SLOTS"
+                if found else "README does not print it"
+            )
+            report.findings.append(Finding(
+                key, README_PATH,
+                f"is in MUST_PRINT: README must print {wanted} in its slot wording, but no slot pattern matched; {why}",
+            ))
+            return
+        if found:
+            report.readme_unrecognized += 1
             report.warnings.append(Finding(key, README_PATH, f"printed as {expected!r} in wording its slot patterns do not recognize; add that wording to README_SLOTS"))
         else:
             report.readme_unprinted += 1
@@ -509,6 +559,13 @@ def _check_readme_fact(key: str, fact: dict[str, Any], text: str, lines: list[st
             report.findings.append(Finding(key, README_PATH, f"expected {expected!r}, actual {shown!r}", line))
     if ok:
         report.readme_printed += 1
+        if not must:
+            report.findings.append(Finding(
+                key, README_PATH,
+                f"README prints {expected!r} in its slot, but MUST_PRINT in check_facts.py does not name this key; "
+                "add it so the value cannot silently disappear",
+                matches[0][0],
+            ))
 
 
 def run(root: Path) -> Report:
@@ -526,6 +583,11 @@ def run(root: Path) -> Report:
         report.findings.append(Finding(
             "README", README_PATH,
             f"count floor: checked {report.readme_checked} of {report.readme_total} facts that list README (at least 1 required)",
+        ))
+    if report.readme_printed < len(MUST_PRINT):
+        report.findings.append(Finding(
+            "README", README_PATH,
+            f"count floor: {report.readme_printed} README values printed and equal, at least {len(MUST_PRINT)} required (one per MUST_PRINT key)",
         ))
     return report
 
@@ -565,9 +627,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         _emit("WARN", warning, annotate)
     print(
         f"FACTS check: {report.facts_checked} of {report.facts_total} facts checked (floor {report.facts_total}); "
-        f"surfaces: {report.web_checked} web/lib/facts.ts constants and {report.readme_checked} of {report.readme_total} README entries "
-        f"({report.readme_printed} printed and equal, {report.readme_pending} pending with no number, "
-        f"{report.readme_unprinted} with a value not printed yet); "
+        f"surfaces: {report.web_checked} web/lib/facts.ts constants and {report.readme_checked} of {report.readme_total} README entries; "
+        f"README: {report.readme_printed} printed and equal (floor {len(MUST_PRINT)}, one per MUST_PRINT key), "
+        f"{report.readme_unrecognized} equal only in wording no slot knows, {report.readme_pending} pending with no number, "
+        f"{report.readme_unprinted} with a value not printed yet; "
         f"{len(report.findings)} findings, {len(report.warnings)} warnings."
     )
     return 1 if report.findings else 0

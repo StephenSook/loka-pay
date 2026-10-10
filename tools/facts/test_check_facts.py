@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Callable
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_facts  # noqa: E402
@@ -76,7 +77,18 @@ class CleanCopy(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn(f"{total} of {total} facts checked (floor {total})", out)
         self.assertIn(f"{len(check_facts.WEB_MIRRORS)} web/lib/facts.ts constants", out)
+        must = len(check_facts.MUST_PRINT)
+        self.assertIn(f"README: {must} printed and equal (floor {must}, one per MUST_PRINT key)", out)
         self.assertIn(" 0 findings", out)
+
+    def test_must_print_names_every_value_readme_printed_when_it_was_written(self):
+        # The README values printed and equal on 2026-10-10. Removing one from MUST_PRINT
+        # means editing this test too, so the floor cannot be lowered in passing.
+        printed_then = {
+            "proof_pair_settled_tx", "proof_pair_refused_tx",
+            "proof_pair_iphone_settled_tx", "proof_pair_iphone_refused_tx", "note_v1_bytes",
+        }
+        self.assertLessEqual(printed_then, check_facts.MUST_PRINT)
 
     def test_pending_placeholder_wording_on_readme_passes(self):
         with Copy() as c:
@@ -90,6 +102,8 @@ class CleanCopy(unittest.TestCase):
             code, out = c.run()
         self.assertEqual(code, 0, out)
         self.assertIn("WARN senegal_remittances_pct_gdp_2023 on README.md: printed as '10.6%' in wording", out)
+        # Found, but not compared: it does not count toward printed and equal.
+        self.assertIn("1 equal only in wording no slot knows", out)
 
 
 class Drift(unittest.TestCase):
@@ -172,8 +186,9 @@ class Drift(unittest.TestCase):
         self.assertIn("FAIL SETTLED_COUNT on web/lib/facts.ts", out)
         self.assertIn("an export this check cannot read", out)
 
-    def test_a_value_readme_does_not_print_warns_and_strict_fails_it(self):
-        with Copy() as c:
+    def test_a_value_outside_must_print_that_readme_does_not_print_warns_and_strict_fails_it(self):
+        without = check_facts.MUST_PRINT - {"note_v1_bytes"}
+        with Copy() as c, mock.patch.object(check_facts, "MUST_PRINT", without):
             # "abc141def" holds the digits but is not the number: it must not count as printed.
             c.replace("README.md", "141-byte structure", "fixed-size structure (id abc141def)")
             code, out = c.run()
@@ -182,6 +197,93 @@ class Drift(unittest.TestCase):
         self.assertIn("WARN note_v1_bytes on README.md: has a value and lists README as a surface, but README does not print it yet", out)
         self.assertEqual(strict_code, 1, strict_out)
         self.assertIn("FAIL note_v1_bytes on README.md: has a value and lists README as a surface, but README does not print it yet", strict_out)
+
+
+class MustPrint(unittest.TestCase):
+    """A value README printed in its slot can never silently stop being compared."""
+
+    def must_fail(self, out: str, key: str, expected: str) -> None:
+        self.assertIn(
+            f"FAIL {key} on README.md: is in MUST_PRINT: README must print {expected!r} in its slot wording, but no slot pattern matched",
+            out,
+        )
+
+    def floor_fails(self, out: str, printed: int) -> None:
+        must = len(check_facts.MUST_PRINT)
+        self.assertIn(f"count floor: {printed} README values printed and equal, at least {must} required", out)
+
+    def test_a_reworded_label_with_a_wrong_signature_fails(self):
+        good = real_fact("proof_pair_settled_tx")["value"]
+        bad = good[:-1] + ("b" if good[-1] != "b" else "c")
+        with Copy() as c:
+            c.replace("README.md", f"[settled payment](https://explorer.solana.com/tx/{good}?cluster=devnet)",
+                      f"[the settled payment](https://explorer.solana.com/tx/{bad}?cluster=devnet)")
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.must_fail(out, "proof_pair_settled_tx", check_facts.explorer_tx(good))
+        self.assertIn("README does not print it", out)
+        self.floor_fails(out, len(check_facts.MUST_PRINT) - 1)
+
+    def test_a_reworded_142_byte_fixed_structure_fails(self):
+        with Copy() as c:
+            c.replace("README.md", "a fixed 141-byte structure", "a 142-byte fixed structure")
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.must_fail(out, "note_v1_bytes", "141")
+        self.floor_fails(out, len(check_facts.MUST_PRINT) - 1)
+
+    def test_dropping_a_must_print_link_fails(self):
+        refused = real_fact("proof_pair_refused_tx")["value"]
+        with Copy() as c:
+            c.replace("README.md", f" and [refused cheat](https://explorer.solana.com/tx/{refused}?cluster=devnet)", "")
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.must_fail(out, "proof_pair_refused_tx", check_facts.explorer_tx(refused))
+        self.assertIn("README does not print it", out)
+        self.floor_fails(out, len(check_facts.MUST_PRINT) - 1)
+
+    def test_dropping_a_must_print_number_fails_even_with_its_digits_inside_a_token(self):
+        with Copy() as c:
+            c.replace("README.md", "141-byte structure", "fixed-size structure (id abc141def)")
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.must_fail(out, "note_v1_bytes", "141")
+        self.assertIn("README does not print it", out)
+
+    def test_a_correct_value_reworded_out_of_its_slot_fails_and_names_the_fix(self):
+        good = real_fact("proof_pair_settled_tx")["value"]
+        with Copy() as c:
+            c.replace("README.md", "[settled payment](", "[the settled payment](")
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.must_fail(out, "proof_pair_settled_tx", check_facts.explorer_tx(good))
+        self.assertIn("appears in wording its slot patterns do not recognize; add that wording to README_SLOTS", out)
+
+    def test_a_slot_printed_value_missing_from_must_print_fails(self):
+        without = check_facts.MUST_PRINT - {"note_v1_bytes"}
+        with Copy() as c, mock.patch.object(check_facts, "MUST_PRINT", without):
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.assertRegex(out, r"FAIL note_v1_bytes on README\.md:\d+: README prints '141' in its slot, but MUST_PRINT")
+
+    def test_a_must_print_fact_taken_off_readme_fails(self):
+        def drop_readme(d: dict[str, Any]) -> None:
+            fact = d["facts"]["proof_pair_refused_tx"]
+            fact["surfaces"] = [s for s in fact["surfaces"] if s != "README"]
+
+        with Copy() as c:
+            c.facts(drop_readme)
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL proof_pair_refused_tx on README.md: is in MUST_PRINT (README prints it), but FACTS.json has no such fact listing README", out)
+        self.floor_fails(out, len(check_facts.MUST_PRINT) - 1)
+
+    def test_a_must_print_fact_reset_to_pending_fails(self):
+        with Copy() as c:
+            c.facts(lambda d: d["facts"]["note_v1_bytes"].update(value=None, status="pending"))
+            code, out = c.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL note_v1_bytes on README.md: is in MUST_PRINT (README prints it), but the fact is pending with no value", out)
 
 
 class Schema(unittest.TestCase):
