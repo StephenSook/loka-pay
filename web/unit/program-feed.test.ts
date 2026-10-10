@@ -201,9 +201,85 @@ test.describe("the liveness check", () => {
     receive(message: object): void {
       this.onmessage?.({ data: JSON.stringify(message) });
     }
+    /** A frame exactly as given, which need not be JSON. */
+    receiveText(text: string): void {
+      this.onmessage?.({ data: text });
+    }
   }
 
-  const slot = (n: number) => ({ jsonrpc: "2.0", method: "slotNotification", params: { subscription: 9, result: { slot: n, parent: n - 1, root: n - 2 } } });
+  // The node acknowledges logsSubscribe with subscription 7 and slotSubscribe with 8 below, so
+  // a slot notification for this socket carries subscription 8.
+  const slot = (n: number, subscription = 8) => ({
+    jsonrpc: "2.0",
+    method: "slotNotification",
+    params: { subscription, result: { slot: n, parent: n - 1, root: n - 2 } },
+  });
+
+  function withFakes(run: (ctx: { clock: FakeClock; feed: ProgramFeed; ws: FakeSocket; historyReads: () => number }) => Promise<void>) {
+    return async () => {
+      const realFetch = globalThis.fetch;
+      const realWebSocket = globalThis.WebSocket;
+      let reads = 0;
+      globalThis.fetch = (async () => {
+        reads += 1;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 0, result: [] }), { headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      FakeSocket.opened = [];
+      globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+      const clock = new FakeClock();
+      const feed = new ProgramFeed(PINS.programId, "wss://devnet.fixture.test", clock);
+      try {
+        feed.start();
+        const ws = FakeSocket.opened[0];
+        ws.onopen!();
+        ws.receive({ jsonrpc: "2.0", id: 1, result: 7 });
+        ws.receive({ jsonrpc: "2.0", id: 2, result: 8 });
+        await run({ clock, feed, ws, historyReads: () => reads });
+      } finally {
+        feed.stop();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        globalThis.fetch = realFetch;
+        globalThis.WebSocket = realWebSocket;
+      }
+    };
+  }
+
+  test(
+    "malformed or foreign frames never restore Live; only a valid message for this socket's subscription does",
+    withFakes(async ({ clock, feed, ws, historyReads }) => {
+      expect(feed.getState().connection).toEqual({ kind: "live", sinceMs: T0 });
+      clock.advance(STALL_AFTER_MS + 1000);
+      expect(feed.getState().connection.kind).toBe("stalled");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const readsBefore = historyReads();
+      for (const frame of [
+        "not json at all",
+        "{}",
+        "null",
+        JSON.stringify({ jsonrpc: "2.0", method: "slotNotification", params: { subscription: 99, result: { slot: 61 } } }),
+        JSON.stringify({ jsonrpc: "2.0", method: "slotNotification", params: { subscription: 8, result: { slot: "61" } } }),
+        JSON.stringify({ jsonrpc: "2.0", method: "logsNotification", params: { subscription: 8, result: { value: { signature: "x", err: null, logs: [] } } } }),
+        JSON.stringify({ jsonrpc: "2.0", method: "logsNotification", params: { subscription: 7, result: { value: { signature: 5, logs: [] } } } }),
+        JSON.stringify({ jsonrpc: "2.0", method: "logsNotification", params: { subscription: 7, result: { value: { signature: "x", logs: [null] } } } }),
+        JSON.stringify({ jsonrpc: "2.0", id: 2, error: { code: -32601, message: "no" } }),
+      ]) {
+        ws.receiveText(frame);
+        expect(feed.getState().connection.kind, frame).toBe("stalled");
+      }
+      expect(historyReads()).toBe(readsBefore);
+      // A steady stream of junk does not keep a live socket Live either.
+      ws.receive(slot(61));
+      expect(feed.getState().connection.kind).toBe("live");
+      for (let i = 0; i < STALL_AFTER_MS / 1000 + 2; i += 1) {
+        clock.advance(1000);
+        ws.receiveText("garbage");
+      }
+      expect(feed.getState().connection.kind).toBe("stalled");
+      // A valid slot notification for this subscription restores it.
+      ws.receive(slot(62));
+      expect(feed.getState().connection.kind).toBe("live");
+    }),
+  );
 
   test("Live while slots arrive; No update after the window of silence; Live again when traffic resumes", async () => {
     const realFetch = globalThis.fetch;

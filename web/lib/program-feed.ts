@@ -10,9 +10,12 @@
 // up on ("unread") is read again.
 //
 // A socket can also stall without closing, so "live" needs traffic as well: the feed also
-// subscribes to slots (devnet sends a new slot more than once a second), and when nothing at
-// all arrives on the socket for STALL_AFTER_MS the state turns "stalled" with how long it has
-// been silent. The next message turns it "live" again and reads the history again, since a
+// subscribes to slots (devnet sends a new slot more than once a second), and when no valid
+// message arrives for STALL_AFTER_MS the state turns "stalled" with how long it has been
+// silent. Only a message this feed recognizes counts (classifyMessage): a subscription
+// acknowledgement, or a slot or logs notification for this socket's own subscription. Text
+// that is not JSON, or a message for another subscription, never keeps or restores "live".
+// The next valid message turns it "live" again and reads the history again, since a
 // transaction may have landed during the silence.
 //
 // The feed keeps the newest MAX_ROWS rows, so a kiosk left open all weekend does not grow
@@ -217,6 +220,59 @@ interface LogsNotification {
   params?: { result?: { context?: { slot?: unknown }; value?: { signature?: unknown; err?: unknown; logs?: unknown } } };
 }
 
+/** The subscription ids the node gave this socket, once it has acknowledged each. */
+export interface Subscriptions {
+  logs: number | null;
+  slot: number | null;
+}
+
+export type SocketMessage =
+  | { kind: "logs-ack"; subscription: number }
+  | { kind: "logs-refused" }
+  | { kind: "slot-ack"; subscription: number }
+  | { kind: "logs"; notification: LogsNotification }
+  | { kind: "slot" }
+  /** Not JSON, not JSON-RPC, for another subscription, or of the wrong shape: no evidence the subscription works. */
+  | { kind: "unrecognized" };
+
+const isSubscriptionId = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+/** What one WebSocket message is, checked against this socket's own subscriptions. */
+export function classifyMessage(text: string, subs: Subscriptions): SocketMessage {
+  let m: { id?: unknown; result?: unknown; method?: unknown; params?: { subscription?: unknown; result?: unknown } };
+  try {
+    m = JSON.parse(text);
+  } catch {
+    return { kind: "unrecognized" };
+  }
+  if (typeof m !== "object" || m === null) return { kind: "unrecognized" };
+  if (m.id === SUBSCRIBE_ID) return isSubscriptionId(m.result) ? { kind: "logs-ack", subscription: m.result } : { kind: "logs-refused" };
+  if (m.id === SLOT_SUBSCRIBE_ID) return isSubscriptionId(m.result) ? { kind: "slot-ack", subscription: m.result } : { kind: "unrecognized" };
+  const params = typeof m.params === "object" && m.params !== null ? m.params : null;
+  if (!params) return { kind: "unrecognized" };
+  if (m.method === "slotNotification") {
+    const r = params.result as { slot?: unknown } | null;
+    const ok = subs.slot !== null && params.subscription === subs.slot && typeof r === "object" && r !== null && isSubscriptionId(r.slot);
+    return ok ? { kind: "slot" } : { kind: "unrecognized" };
+  }
+  if (m.method === "logsNotification") {
+    const r = params.result as { context?: { slot?: unknown }; value?: { signature?: unknown; logs?: unknown } } | null | undefined;
+    const value = r?.value;
+    const slot = r?.context?.slot;
+    const ok =
+      subs.logs !== null &&
+      params.subscription === subs.logs &&
+      typeof value === "object" &&
+      value !== null &&
+      typeof value.signature === "string" &&
+      Array.isArray(value.logs) &&
+      value.logs.every((l) => typeof l === "string") &&
+      (slot === undefined || isSubscriptionId(slot));
+    return ok ? { kind: "logs", notification: m as LogsNotification } : { kind: "unrecognized" };
+  }
+  return { kind: "unrecognized" };
+}
+
 export class ProgramFeed {
   private state: FeedState = INITIAL_FEED_STATE;
   private readonly rows = new Map<string, Row>();
@@ -229,8 +285,10 @@ export class ProgramFeed {
   private enriching = false;
   /** Rows that just arrived over the socket, whose details enrichLive is reading. */
   private readonly liveEnriching = new Set<string>();
-  /** When the current socket last sent anything (this.clock). */
+  /** When the current socket last sent a message classifyMessage recognized (this.clock). */
   private lastMessageMs = 0;
+  /** The current socket's subscription ids, once acknowledged. */
+  private subs: Subscriptions = { logs: null, slot: null };
   /** Stops the liveness check; set while a subscription is confirmed. */
   private unwatch: (() => void) | null = null;
 
@@ -420,6 +478,7 @@ export class ProgramFeed {
       return;
     }
     this.socket = ws;
+    this.subs = { logs: null, slot: null };
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
@@ -429,12 +488,21 @@ export class ProgramFeed {
           params: [{ mentions: [this.programId] }, { commitment: "confirmed" }],
         }),
       );
-      // Slots are the heartbeat for the liveness check: any message counts, so a refused slot
-      // subscription only means a quiet program shows "stalled" (it is: nothing arrives).
+      // Slots are the heartbeat for the liveness check: a valid slot notification for this
+      // subscription counts, so a refused slot subscription only means a quiet program shows
+      // "stalled" (it is: nothing valid arrives).
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: SLOT_SUBSCRIBE_ID, method: "slotSubscribe", params: [] }));
     };
     ws.onmessage = (event) => {
       if (this.socket !== ws) return;
+      const message = classifyMessage(String(event.data), this.subs);
+      // Only a recognized message is evidence the subscription works.
+      if (message.kind === "unrecognized") return;
+      if (message.kind === "logs-refused") {
+        // The node refused the subscription; treat it like a closed socket.
+        ws.close();
+        return;
+      }
       this.lastMessageMs = this.clock.now();
       const shown = this.state.connection;
       if (shown.kind === "stalled") {
@@ -442,25 +510,17 @@ export class ProgramFeed {
         this.update({ connection: { kind: "live", sinceMs: shown.sinceMs } });
         void this.refreshHistory(true);
       }
-      let message: { id?: unknown; result?: unknown; method?: unknown };
-      try {
-        message = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      if (message.id === SUBSCRIBE_ID) {
-        if (typeof message.result === "number") {
-          this.attempts = 0;
-          this.update({ connection: { kind: "live", sinceMs: this.clock.now() } });
-          this.startWatching();
-          if (this.everLive) void this.refreshHistory(true);
-          this.everLive = true;
-        } else {
-          // The node refused the subscription; treat it like a closed socket.
-          ws.close();
-        }
-      } else if (message.method === "logsNotification") {
-        this.onNotification(message as LogsNotification);
+      if (message.kind === "logs-ack") {
+        this.subs.logs = message.subscription;
+        this.attempts = 0;
+        this.update({ connection: { kind: "live", sinceMs: this.clock.now() } });
+        this.startWatching();
+        if (this.everLive) void this.refreshHistory(true);
+        this.everLive = true;
+      } else if (message.kind === "slot-ack") {
+        this.subs.slot = message.subscription;
+      } else if (message.kind === "logs") {
+        this.onNotification(message.notification);
       }
     };
     ws.onclose = () => {
