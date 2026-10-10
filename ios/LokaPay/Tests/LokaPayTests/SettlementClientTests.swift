@@ -911,3 +911,275 @@ struct Base58Tests {
         #expect(SettlementClient.explorerURL(signature: sig + "?x=https://phishing.example", clusterId: 0) == nil)
     }
 }
+
+extension APIFixtures {
+    static func keyHashHex(_ name: String) -> String { P256Rules.keyHash(publicKey(name)).hex }
+
+    /// An HTTP 202 registration body (API-V1 sections 2 and 3). A nil kind or keyHash leaves it out.
+    static func registrationPending(kind: String? = "payer", keyHash: String? = keyHashHex("payer"),
+                                    signature: String? = settledSignatureBase58, retryAfter: Int? = 2) -> StubReply {
+        var body: [String: Any] = ["status": "pending", "signature": signature.map { $0 as Any } ?? NSNull()]
+        if let kind { body["kind"] = kind }
+        if let keyHash { body["keyHash"] = keyHash }
+        if let retryAfter { body["retryAfter"] = retryAfter }
+        return StubReply(status: 202, body: json(body))
+    }
+
+    /// An error body that also carries a signature and a URL the client must not use.
+    static func registrationFailed(status: Int = 409, name: String = "registration_failed",
+                                   signature: Any? = settledSignatureBase58) -> StubReply {
+        var body: [String: Any] = ["error": name, "message": "m", "explorer": "https://phishing.example/tx/1111"]
+        if let signature { body["signature"] = signature }
+        return StubReply(status: status, body: json(body))
+    }
+
+    /// What the client should report for a registrationPending body with these fields.
+    static func pendingRegistration(_ kind: RegistrationKind, key: String, signature: String? = settledSignatureBase58,
+                                    retryAfter: Int? = 2) -> PendingRegistration {
+        PendingRegistration(kind: kind, keyHash: P256Rules.keyHash(publicKey(key)), signature: signature,
+                            explorer: signature.map { _ in URL(string: settledExplorer)! }, retryAfter: retryAfter)
+    }
+
+    static var createdPayer: StubReply {
+        StubReply(status: 201, body: payerBody(allowance: wire("allowances", 0)))
+    }
+}
+
+@Suite("settlement client: registration pending and failure")
+struct RegistrationPendingTests {
+    /// Every attempt sent the same request: method, URL, headers and body bytes.
+    func expectSameRequest(_ stub: StubTransport) {
+        guard let first = stub.requests.first else { return }
+        for request in stub.requests {
+            #expect(request.httpMethod == "POST")
+            #expect(request.url == first.url)
+            #expect(request.allHTTPHeaderFields == first.allHTTPHeaderFields)
+            #expect(request.httpBody == first.httpBody)
+        }
+    }
+
+    @Test("a payer 202 then 201 returns the verified registration and reposts identical bytes")
+    func payerPendingThenCreated() async throws {
+        let stub = StubTransport([APIFixtures.registrationPending(retryAfter: 2),
+                                  APIFixtures.registrationPending(retryAfter: 30), APIFixtures.createdPayer])
+        let clock = FakeClock()
+        let payerKey = APIFixtures.publicKey("payer")
+        let reg = try await APIFixtures.client(stub, clock: clock).registerPayer(publicKey: payerKey)
+        #expect(reg.created)
+        #expect(reg.certificate.allowanceId == 1001)
+        #expect(reg.certificate.payerKeyHash == P256Rules.keyHash(payerKey))
+        #expect(reg.explorer?.absoluteString == APIFixtures.settledExplorer)
+        #expect(stub.requests.count == 3)
+        #expect(stub.requests.first?.url?.absoluteString == "https://api.test.invalid/v1/payers")
+        expectSameRequest(stub)
+        // The server's 2 s, then its 30 s capped at 10 s.
+        #expect(clock.sleeps == [2, 10])
+    }
+
+    @Test("a merchant 202 then 200 returns the verified merchant and reposts identical bytes")
+    func merchantPendingThenExisting() async throws {
+        let key = APIFixtures.publicKey("merchantA")
+        let pending = APIFixtures.registrationPending(kind: "merchant", keyHash: APIFixtures.keyHashHex("merchantA"),
+                                                      signature: nil, retryAfter: nil)
+        let stub = StubTransport([pending, StubReply(status: 200, body: APIFixtures.merchantBody(merchant: APIFixtures.wire("merchants", 0)))])
+        let clock = FakeClock()
+        let merchant = try await APIFixtures.client(stub, clock: clock).registerMerchant(publicKey: key, name: "Cafe\u{0301}")
+        #expect(!merchant.created)
+        #expect(merchant.certificate.merchantKeyHash == P256Rules.keyHash(key))
+        #expect(stub.requests.count == 2)
+        #expect(stub.requests.first?.url?.absoluteString == "https://api.test.invalid/v1/merchants")
+        expectSameRequest(stub)
+        #expect(clock.sleeps == [1], "with no retryAfter, the first backoff step")
+    }
+
+    @Test("202 until the deadline throws registrationPending with the last pending body")
+    func pendingUntilDeadline() async throws {
+        let stub = StubTransport([APIFixtures.registrationPending(signature: nil),
+                                  APIFixtures.registrationPending(signature: "0OIl"),
+                                  APIFixtures.registrationPending(signature: APIFixtures.settledSignatureBase58)])
+        let clock = FakeClock()
+        await #expect(throws: SettlementError.registrationPending(APIFixtures.pendingRegistration(.payer, key: "payer"))) {
+            try await APIFixtures.client(stub, clock: clock).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 5)
+        }
+        // Posts at 0, 2 and 4; a fourth would need 2 s of wait plus 1 s of budget after 4.
+        #expect(clock.sleeps == [2, 2])
+        #expect(stub.requests.count == 3)
+        #expect(clock.now <= 5)
+        expectSameRequest(stub)
+    }
+
+    @Test("the default budget is 60 s, with reposts backing off to at most 10 s apart")
+    func defaultBudget() async throws {
+        let stub = StubTransport(Array(repeating: APIFixtures.registrationPending(retryAfter: 2), count: 10))
+        let clock = FakeClock()
+        do {
+            _ = try await APIFixtures.client(stub, clock: clock).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+            Issue.record("expected registrationPending")
+        } catch SettlementError.registrationPending(_) {}
+        #expect(SettlementClient.registrationTimeout == 60)
+        #expect(clock.sleeps == [2, 2, 4, 8, 10, 10, 10, 10, 3])
+        #expect(stub.requests.count == 10)
+        for start in stub.starts {
+            #expect(start.at + start.timeout <= 60)
+            #expect(60 - start.at >= SettlementClient.minRequestBudget)
+        }
+    }
+
+    @Test("a 202 naming another kind or another key is a protocol violation and is not posted again")
+    func pendingMustNameTheRequest() async throws {
+        let cases: [(StubReply, String)] = [
+            (APIFixtures.registrationPending(kind: "merchant"), "kind"),
+            (APIFixtures.registrationPending(kind: nil), "kind"),
+            (APIFixtures.registrationPending(kind: "PAYER"), "kind"),
+            (APIFixtures.registrationPending(keyHash: APIFixtures.keyHashHex("merchantA")), "key hash"),
+            (APIFixtures.registrationPending(keyHash: nil), "key hash"),
+            (APIFixtures.registrationPending(keyHash: APIFixtures.keyHashHex("payer").uppercased()), "key hash"),
+        ]
+        for (reply, field) in cases {
+            let stub = StubTransport([reply])
+            do {
+                _ = try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+                Issue.record("accepted a 202 with the wrong \(field)")
+            } catch let SettlementError.protocolViolation(reason) {
+                #expect(reason.contains(field), "\(reason)")
+            }
+            #expect(stub.requests.count == 1)
+        }
+        // The merchant route: a payer body for the merchant's key, and a merchant body for another key.
+        let merchantCases: [(StubReply, String)] = [
+            (APIFixtures.registrationPending(kind: "payer", keyHash: APIFixtures.keyHashHex("merchantA")), "kind"),
+            (APIFixtures.registrationPending(kind: "merchant", keyHash: APIFixtures.keyHashHex("payer")), "key hash"),
+        ]
+        for (reply, field) in merchantCases {
+            let stub = StubTransport([reply])
+            do {
+                _ = try await APIFixtures.client(stub).registerMerchant(publicKey: APIFixtures.publicKey("merchantA"), name: "A")
+                Issue.record("accepted a merchant 202 with the wrong \(field)")
+            } catch let SettlementError.protocolViolation(reason) {
+                #expect(reason.contains(field), "\(reason)")
+            }
+            #expect(stub.requests.count == 1)
+        }
+    }
+
+    @Test("a 202 with an over-long or malformed signature is accepted but has no explorer link")
+    func pendingHostileSignature() async throws {
+        let signatures = [String(repeating: "z", count: 60_000), "0OIl not base58",
+                          APIFixtures.settledSignatureBase58 + "?x=https://phishing.example"]
+        for signature in signatures {
+            let stub = StubTransport([APIFixtures.registrationPending(signature: signature, retryAfter: 2)])
+            // One post fits in 2.5 s; a second would need 2 s of wait plus 1 s of budget.
+            let expected = APIFixtures.pendingRegistration(.payer, key: "payer", signature: nil)
+            await #expect(throws: SettlementError.registrationPending(expected)) {
+                try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 2.5)
+            }
+            #expect(stub.requests.count == 1)
+        }
+    }
+
+    @Test("409 registration_failed maps to registrationFailed with the link built from the signature")
+    func registrationFailed() async throws {
+        let expected = SettlementError.registrationFailed(signature: APIFixtures.settledSignatureBase58,
+                                                          explorer: URL(string: APIFixtures.settledExplorer)!, message: "m")
+        let payer = StubTransport([APIFixtures.registrationFailed()])
+        await #expect(throws: expected) {
+            try await APIFixtures.client(payer).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+        }
+        #expect(payer.requests.count == 1, "a 409 is never retried")
+        let merchant = StubTransport([APIFixtures.registrationFailed()])
+        await #expect(throws: expected) {
+            try await APIFixtures.client(merchant).registerMerchant(publicKey: APIFixtures.publicKey("merchantA"), name: "A")
+        }
+        #expect(merchant.requests.count == 1, "a 409 is never retried")
+    }
+
+    @Test("a 409 whose signature is missing, malformed or the wrong type has no link")
+    func registrationFailedWithoutValidSignature() async throws {
+        let signatures: [Any?] = [nil, NSNull(), "1111", "0OIl", String(repeating: "z", count: 60_000), 42]
+        for signature in signatures {
+            let stub = StubTransport([APIFixtures.registrationFailed(signature: signature)])
+            await #expect(throws: SettlementError.registrationFailed(signature: nil, explorer: nil, message: "m")) {
+                try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+            }
+        }
+    }
+
+    @Test("409 with another name, or registration_failed on another status, is a protocol violation")
+    func registrationFailedStatusAgreement() async throws {
+        let cases: [(Int, String)] = [
+            (409, "bad_json"), (409, "chain_unavailable"), (409, "something_new"),
+            (400, "registration_failed"), (422, "registration_failed"), (500, "registration_failed"),
+            (503, "registration_failed"),
+        ]
+        for (status, name) in cases {
+            let stub = StubTransport([APIFixtures.registrationFailed(status: status, name: name)])
+            await #expect(throws: SettlementError.protocolViolation("HTTP \(status) with error \(name)")) {
+                try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+            }
+            #expect(stub.requests.count == 1)
+        }
+    }
+
+    @Test("no registration request starts with no budget left")
+    func noBudgetNoRequest() async throws {
+        let stub = StubTransport([])
+        let payer = SettlementClient.unknownRegistration(.payer, P256Rules.keyHash(APIFixtures.publicKey("payer")))
+        await #expect(throws: SettlementError.registrationPending(payer)) {
+            try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 0)
+        }
+        let merchant = SettlementClient.unknownRegistration(.merchant, P256Rules.keyHash(APIFixtures.publicKey("merchantA")))
+        await #expect(throws: SettlementError.registrationPending(merchant)) {
+            try await APIFixtures.client(stub).registerMerchant(publicKey: APIFixtures.publicKey("merchantA"), name: "A",
+                                                                timeout: -1)
+        }
+        #expect(stub.requests.isEmpty)
+    }
+
+    @Test("a budget that ends during a repost ends in registrationPending with the last body")
+    func budgetEndsDuringRepost() async throws {
+        let clock = FakeClock()
+        // The first post takes 1 s and answers pending; the repost at 3 s would take 30 s.
+        let stub = StubTransport([APIFixtures.registrationPending(retryAfter: 2).delayed(1),
+                                  APIFixtures.createdPayer.delayed(30)], clock: clock)
+        await #expect(throws: SettlementError.registrationPending(APIFixtures.pendingRegistration(.payer, key: "payer"))) {
+            try await APIFixtures.client(stub, clock: clock).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 10)
+        }
+        #expect(stub.starts.map(\.at) == [0, 3])
+        #expect(stub.starts.map(\.timeout) == [10, 7])
+        #expect(clock.now == 10)
+        for start in stub.starts { #expect(start.at + start.timeout <= 10) }
+    }
+
+    @Test("a budget that ends during the first post ends in registrationPending without a body")
+    func budgetEndsDuringFirstPost() async throws {
+        let clock = FakeClock()
+        let stub = StubTransport([APIFixtures.createdPayer.delayed(25)], clock: clock)
+        let unknown = SettlementClient.unknownRegistration(.payer, P256Rules.keyHash(APIFixtures.publicKey("payer")))
+        await #expect(throws: SettlementError.registrationPending(unknown)) {
+            try await APIFixtures.client(stub, clock: clock).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 10)
+        }
+        #expect(stub.starts.map(\.timeout) == [10])
+        #expect(clock.now == 10)
+    }
+
+    @Test("a network error, chain_unavailable or rate limit is not retried, on the first post or a repost")
+    func failuresNotRetried() async throws {
+        let cases: [([StubReply], SettlementError)] = [
+            ([StubReply(failure: URLError(.timedOut))], .network(.timedOut)),
+            ([StubReply(failure: URLError(.networkConnectionLost))], .network(.networkConnectionLost)),
+            ([APIFixtures.errorReply(503, "chain_unavailable")], .chainUnavailable(message: "m")),
+            ([APIFixtures.registrationPending(), StubReply(failure: URLError(.timedOut))], .network(.timedOut)),
+            ([APIFixtures.registrationPending(), APIFixtures.errorReply(503, "chain_unavailable")],
+             .chainUnavailable(message: "m")),
+            ([APIFixtures.registrationPending(), APIFixtures.errorReply(429, "rate_limited")],
+             .rateLimited(retryAfter: nil, message: "m")),
+        ]
+        for (replies, expected) in cases {
+            let stub = StubTransport(replies)
+            await #expect(throws: expected) {
+                try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+            }
+            #expect(stub.requests.count == replies.count)
+        }
+    }
+}
