@@ -17,12 +17,15 @@ export const metadata: Metadata = {
   description: "A three-minute route through LOKA Pay: a receipt you check in your browser, the program on devnet, the live feed, the proof and the threat model. No login.",
 };
 
-// Labels are each workflow's own job name in .github/workflows/.
+// Every workflow in .github/workflows/, each labelled with its own job name. A red badge is
+// shown as red: hiding one would make the list say less than GitHub does.
 const WORKFLOWS = [
   { file: "ios", label: "ios (package tests, app build, release checks)" },
+  { file: "android", label: "android (core tests, debug build, lint)" },
+  { file: "program", label: "program (secp256r1 feature check, anchor test)" },
+  { file: "server", label: "server (typecheck, unit, integration, vectors)" },
   { file: "web", label: "web (lint, typecheck, build, Playwright)" },
   { file: "hygiene", label: "hygiene (gitleaks, scrub guard, prose gate, FACTS)" },
-  { file: "program", label: "program (secp256r1 feature check, anchor test)" },
 ] as const;
 
 function Step({
@@ -169,6 +172,10 @@ export default async function JudgePage() {
               </li>
             ))}
           </ul>
+          <p className="text-sm text-muted" data-testid="server-workflow-note">
+            The server workflow tests the settlement server in server/, so its badge stays red until that code is merged
+            into main.
+          </p>
         </Step>
       </ol>
     </main>

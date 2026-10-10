@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
@@ -132,12 +132,19 @@ test("/judge: seven numbered stops, the program facts or an honest failure, real
     "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves.",
   );
   await expect(page.getByTestId("repo-link")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay");
-  for (const file of ["ios", "web", "hygiene", "program"]) {
+  // Every workflow in .github/workflows has its badge, so a red one cannot be left out.
+  const workflows = readdirSync(path.join(repoRoot, ".github", "workflows"))
+    .filter((f) => f.endsWith(".yml"))
+    .map((f) => f.replace(/\.yml$/, ""));
+  expect(workflows.length).toBeGreaterThanOrEqual(6);
+  await expect(page.getByRole("list", { name: "GitHub Actions workflows" }).getByRole("listitem")).toHaveCount(workflows.length);
+  for (const file of workflows) {
     await expect(page.getByTestId(`badge-${file}`)).toHaveAttribute(
       "src",
       `https://github.com/StephenSook/loka-pay/actions/workflows/${file}.yml/badge.svg`,
     );
   }
+  await expect(page.getByTestId("server-workflow-note")).toContainText("its badge stays red until that code is merged");
   await page.waitForLoadState("networkidle");
   // The only requests to another origin are GitHub's badge images.
   for (const url of foreign) expect(url).toMatch(/^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\/workflows\/[a-z]+\.yml\/badge\.svg$/);
