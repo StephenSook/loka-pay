@@ -1,0 +1,311 @@
+import Foundation
+import Observation
+
+/// The payer's allowance as this phone trusts it: the certificate verified with the pinned server
+/// key, plus the wire as received (the merchant needs it too: PAYMENT-V1 section 6, merchant checks).
+public struct PayerAllowance: Equatable, Sendable {
+    public let certificate: AllowanceCertificate
+    public let wire: Data
+
+    public init(wire: Data, deployment: Deployment, serverPublicKey: Data) throws {
+        certificate = try AllowanceCertificate.verify(wire: wire, deployment: deployment, serverPublicKey: serverPublicKey)
+        self.wire = Data(wire)
+    }
+}
+
+/// A note this phone signed, ready to hand over. Bluetooth glue sends `transportTexts` in order;
+/// the camera path shows them as two QR codes in the same order.
+public struct SignedPayment: Equatable, Sendable {
+    public let note: SignedNote
+    /// `L1|P|1|A|...`: the payer's allowance certificate (existing kind A).
+    public let allowanceText: String
+    /// `L1|P|1|N|...`: the signed note (existing kind N).
+    public let noteText: String
+
+    public var transportTexts: [String] { [allowanceText, noteText] }
+}
+
+/// The Pay screen (tasks 3.71, 3.70, 2.1 package side). Order of work: scan and verify the merchant
+/// certificate, check the amount against the verified allowance, durably reserve a serial, sign
+/// (the Secure Enclave signer shows Face ID or the passcode), check the signed note with the same
+/// rules every verifier runs, then hand it over as text or QR codes. Every number on screen comes
+/// from a verified certificate; the status comes from verified acks and receipts only.
+@MainActor
+@Observable
+public final class PayModel {
+    public enum Phase: Equatable, Sendable {
+        /// Something required is missing or does not verify; `issue` says what.
+        case unavailable
+        case scanMerchant
+        case enterAmount
+        /// Waiting for the signer (Face ID or passcode on a phone).
+        case signing
+        /// The note is signed: show the two codes or send the texts.
+        case showNote
+        /// A verified merchant ack or receipt for this note.
+        case receipt
+    }
+
+    /// Which of the two codes is on screen.
+    public enum CodeStep: Int, Equatable, Sendable {
+        case allowance = 0
+        case note = 1
+    }
+
+    public private(set) var phase: Phase = .unavailable
+    public private(set) var allowance: PayerAllowance?
+    public private(set) var merchant: MerchantCertificate?
+    public private(set) var payment: SignedPayment?
+    public private(set) var receipt: VerifiedReceipt?
+    public private(set) var issue: MoneyIssue?
+    public private(set) var codeStep: CodeStep = .allowance
+    /// Serials reserved for this allowance on this phone (from SerialReservations).
+    public private(set) var notesSigned: Int?
+    public var amountText = ""
+
+    public let deployment: Deployment
+    private let signer: (any PaymentSigner)?
+    private let serials: SerialReservations
+    private let serverPublicKey: Data?
+    private let meshSend: (@MainActor (String) -> Void)?
+    private let now: @Sendable () -> Date
+
+    /// - Parameters:
+    ///   - allowanceWire: the allowance wire from `POST /v1/payers` (verified here before use).
+    ///   - meshSend: Bluetooth glue that sends one transport text; nil hides the Bluetooth button.
+    public init(allowanceWire: Data?, signer: (any PaymentSigner)?, serials: SerialReservations,
+                deployment: Deployment, serverPublicKey: Data?,
+                meshSend: (@MainActor (String) -> Void)? = nil,
+                now: @escaping @Sendable () -> Date = { Date() }) {
+        self.deployment = deployment
+        self.signer = signer
+        self.serials = serials
+        self.serverPublicKey = serverPublicKey
+        self.meshSend = meshSend
+        self.now = now
+        if let problem = setUp(allowanceWire: allowanceWire) { report(problem) }
+    }
+
+    /// Verifies the inputs; nil when the screen can start.
+    private func setUp(allowanceWire: Data?) -> MoneyIssueKind? {
+        guard let serverPublicKey, serverPublicKey.count == 32 else { return .serverKeyMissing }
+        guard let allowanceWire else { return .noAllowance }
+        guard let signer else { return .noSigner }
+        do {
+            let verified = try PayerAllowance(wire: allowanceWire, deployment: deployment, serverPublicKey: serverPublicKey)
+            allowance = verified
+            guard verified.certificate.payerKeyHash == signer.keyHash else { return .keyMismatch }
+        } catch {
+            return Self.kind(of: error)
+        }
+        refreshNotesSigned()
+        phase = .scanMerchant
+        return nil
+    }
+
+    // MARK: - Merchant
+
+    /// Scanned or pasted `L1|P|1|C|...`. Verified with the pinned server key before use.
+    public func acceptMerchant(text: String) {
+        guard phase == .scanMerchant || phase == .enterAmount,
+              let certificate = allowance?.certificate, let serverPublicKey else { return }
+        switch ScanParser.parse(text, accepting: [.merchant]) {
+        case .failure(let kind):
+            report(kind)
+        case .success(let decoded):
+            do {
+                let verified = try MerchantCertificate.verify(wire: decoded.payload, deployment: deployment,
+                                                              serverPublicKey: serverPublicKey)
+                guard certificate.allows(merchantKeyHash: verified.merchantKeyHash) else {
+                    return report(.payment(.notEarmarked))
+                }
+                merchant = verified
+                issue = nil
+                phase = .enterAmount
+            } catch {
+                report(Self.kind(of: error))
+            }
+        }
+    }
+
+    public func changeMerchant() {
+        guard phase == .enterAmount || phase == .receipt || phase == .showNote else { return }
+        merchant = nil
+        resetPayment()
+        phase = .scanMerchant
+    }
+
+    // MARK: - Amount
+
+    /// The amount in base units, or why it cannot be paid. Limits come from the verified certificate.
+    public var amountCheck: Result<UInt64, MoneyIssueKind> {
+        guard let certificate = allowance?.certificate else { return .failure(.noAllowance) }
+        var text = amountText.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("$") { text = String(text.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        guard let units = Money.baseUnits(text) else { return .failure(.amountUnreadable) }
+        guard units > 0 else { return .failure(.payment(.amountZero)) }
+        guard units <= certificate.cap else { return .failure(.overCap) }
+        guard units <= certificate.offlineLimit else { return .failure(.payment(.offlineLimit)) }
+        return .success(units)
+    }
+
+    // MARK: - Pay
+
+    public func pay() async {
+        guard phase == .enterAmount, let allowance, let merchant, let signer else { return }
+        let certificate = allowance.certificate
+        let units: UInt64
+        switch amountCheck {
+        case .failure(let kind): return report(kind)
+        case .success(let value): units = value
+        }
+        guard Int64(now().timeIntervalSince1970) <= certificate.expiry else { return report(.payment(.expired)) }
+
+        // Durably reserve the serial BEFORE signing, so no crash can hand it to a second note.
+        let serial: UInt8
+        do {
+            serial = try serials.reserve(allowanceId: certificate.allowanceId)
+        } catch {
+            return report(Self.kind(of: error))
+        }
+        refreshNotesSigned()
+        // The note may not outlive the allowance (PAYMENT-V1 section 4.1); it uses the full window.
+        let note = NoteV1(deployment: deployment, allowanceId: certificate.allowanceId,
+                          payeeKeyHash: merchant.merchantKeyHash, amount: units, serial: serial,
+                          expiry: certificate.expiry)
+        issue = nil
+        phase = .signing
+        let signed: SignedNote
+        do {
+            // Off the main actor: the Secure Enclave blocks while Face ID or the passcode sheet is up.
+            signed = try await Task.detached(priority: .userInitiated) { try SignedNote.sign(note, with: signer) }.value
+            // The same section 6 rules the merchant runs; a broken signer stops here, not at the till.
+            let checked = try SignedNote.validate(wire: signed.wire, deployment: deployment)
+            guard checked.payerKeyHash == certificate.payerKeyHash else { throw PaymentError.payerMismatch }
+        } catch let error as PaymentError {
+            phase = .enterAmount
+            return report(.payment(error))
+        } catch {
+            phase = .enterAmount
+            return report(.signing("serial \(serial) set aside and never reused; \(error.localizedDescription)"))
+        }
+        payment = SignedPayment(note: signed,
+                                allowanceText: PaymentTransport.encode(.allowance, allowance.wire),
+                                noteText: PaymentTransport.encode(.note, signed.wire))
+        codeStep = .allowance
+        phase = .showNote
+    }
+
+    /// True for the Secure Enclave key (Face ID or passcode); false for a software key, which the
+    /// screen labels as such (PLAN.md miss branch).
+    public var signerIsSecureEnclave: Bool { signer is SecureEnclaveP256Signer }
+
+    // MARK: - Hand over
+
+    public var canSendOverBluetooth: Bool { meshSend != nil }
+
+    /// Sends the allowance, then the note, through the Bluetooth glue.
+    public func sendOverBluetooth() {
+        guard phase == .showNote || phase == .receipt, let payment, let meshSend else { return }
+        for text in payment.transportTexts { meshSend(text) }
+    }
+
+    public func showCode(_ step: CodeStep) {
+        guard payment != nil else { return }
+        codeStep = step
+    }
+
+    /// The text behind the code on screen.
+    public var currentCodeText: String? {
+        guard let payment else { return nil }
+        return codeStep == .allowance ? payment.allowanceText : payment.noteText
+    }
+
+    // MARK: - Receipt back from the merchant
+
+    /// Scanned or received `L1|P|1|Y|...` (the merchant's ack) or `L1|P|1|X|...` (a receipt, with
+    /// a CONF once settled). The status shown comes from the verified parts only.
+    public func acceptReturn(text: String) {
+        guard phase == .showNote || phase == .receipt, let payment, let serverPublicKey else { return }
+        switch ScanParser.parse(text, accepting: [.ack, .receipt]) {
+        case .failure(let kind):
+            report(kind)
+        case .success(let decoded):
+            do {
+                let bytes: Data
+                if decoded.kind == .ack {
+                    let ack = try Ack.verify(wire: decoded.payload, for: payment.note)
+                    bytes = Bundles.receipt(note: payment.note, ack: ack, confirmationWire: nil)
+                } else {
+                    bytes = decoded.payload
+                }
+                let verified = try Receipts.verify(bytes, deployment: deployment, serverPublicKey: serverPublicKey)
+                guard verified.note.noteId == payment.note.noteId else { return report(.receiptMismatch) }
+                // A bare ack never replaces a receipt that already carries a confirmation.
+                if verified.confirmation == nil, receipt?.confirmation != nil {
+                    issue = nil
+                    return
+                }
+                receipt = verified
+                issue = nil
+                phase = .receipt
+            } catch {
+                report(Self.kind(of: error))
+            }
+        }
+    }
+
+    /// Back to the amount for the same merchant (or to the scanner when there is none).
+    public func newPayment() {
+        guard phase == .showNote || phase == .receipt || phase == .enterAmount else { return }
+        resetPayment()
+        phase = merchant == nil ? .scanMerchant : .enterAmount
+    }
+
+    // MARK: - Helpers
+
+    private func resetPayment() {
+        payment = nil
+        receipt = nil
+        amountText = ""
+        issue = nil
+        codeStep = .allowance
+    }
+
+    private func refreshNotesSigned() {
+        guard let id = allowance?.certificate.allowanceId else { return }
+        notesSigned = (try? serials.remaining(allowanceId: id)).map { 256 - $0 }
+    }
+
+    private func report(_ kind: MoneyIssueKind) {
+        issue = MoneyIssue(kind, at: now())
+    }
+
+    static func kind(of error: Error) -> MoneyIssueKind {
+        if let payment = error as? PaymentError { return .payment(payment) }
+        return .payment(.transport)
+    }
+}
+
+#if DEBUG
+extension PayModel {
+    /// PREVIEW ONLY: places a model built from test vectors into one state for the Xcode canvas.
+    static func preview(_ phase: Phase, merchant: MerchantCertificate? = nil, payment: SignedPayment? = nil,
+                        receipt: VerifiedReceipt? = nil, issue: MoneyIssueKind? = nil, amountText: String = "",
+                        codeStep: CodeStep = .allowance, serverKey: Data? = PreviewFixtures.serverKey) -> PayModel {
+        let model = PayModel(allowanceWire: PreviewFixtures.allowanceWire, signer: PreviewFixtures.payerSigner,
+                             serials: SerialReservations(url: PreviewFixtures.scratchURL("preview-serials.json")),
+                             deployment: PreviewFixtures.deployment, serverPublicKey: serverKey,
+                             now: { PreviewFixtures.now })
+        guard model.phase != .unavailable else { return model }
+        model.phase = phase
+        model.merchant = merchant
+        model.payment = payment
+        model.receipt = receipt
+        model.amountText = amountText
+        model.codeStep = codeStep
+        model.issue = issue.map { MoneyIssue($0, at: PreviewFixtures.now) }
+        return model
+    }
+}
+#endif
