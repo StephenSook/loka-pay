@@ -127,6 +127,9 @@ public struct LokaPayHomeView: View {
     private let tabMemory: LokaPayTabMemory
     /// The tab these screens opened on (`LokaPayTabMemory.initialTab`).
     let openingTab: Tab
+    /// The tab the switch shows. Before the view is on screen this is the state's initial value,
+    /// which is what a test reads to check the switch really opens on `openingTab`.
+    var selectedTab: Tab { tab }
 
     /// - Parameters:
     ///   - tab: the tab to open on; nil opens on the last tab used (Pay the first time).

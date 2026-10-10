@@ -62,15 +62,23 @@ struct StageSafeScreenTests {
         #expect(memory.initialTab(requested: nil) == .pay)
     }
 
-    @Test("the home view opens on the remembered tab, or on the tab the app asks for")
+    @Test("the home view's switch shows the remembered tab, or the tab the app asks for (Greptile P2)")
     func homeViewOpensOnTheRememberedTab() {
         let (name, defaults) = domain()
         defer { defaults.removePersistentDomain(forName: name) }
         let memory = LokaPayTabMemory(defaults: defaults)
-        #expect(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory).openingTab == .pay)
+        /// The tab the switch shows, which must be the one the view computed.
+        func shown(_ view: LokaPayHomeView) -> LokaPayHomeView.Tab {
+            #expect(view.selectedTab == view.openingTab)
+            return view.selectedTab
+        }
+        #expect(shown(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory)) == .pay)
         memory.save(.receive)
-        #expect(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory).openingTab == .receive)
-        #expect(LokaPayHomeView(dependencies: dependencies(), startOn: .pay, tabMemory: memory).openingTab == .pay)
+        #expect(shown(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory)) == .receive)
+        #expect(shown(LokaPayHomeView(dependencies: dependencies(), startOn: .pay, tabMemory: memory)) == .pay)
+        memory.save(.pay)
+        #expect(shown(LokaPayHomeView(dependencies: dependencies(), startOn: .receive, tabMemory: memory)) == .receive)
+        #expect(shown(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory)) == .pay)
     }
 
     // MARK: (b) the screen stays awake on money screens
