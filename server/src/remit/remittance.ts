@@ -54,6 +54,13 @@ export class RemittanceStore {
     const { rows } = await this.db.query('SELECT recipient,plan,attempt,result FROM remittance_jobs WHERE namespace=$1 AND recipient=$2', [this.namespace, recipient]);
     if (!rows[0]) throw new Error('Missing remittance'); return rows[0] as unknown as FundingRow;
   }
+  async find(recipient: string): Promise<(FundingRow & { claimable: boolean }) | null> {
+    const { rows } = await this.db.query(`SELECT recipient,plan,attempt,result,
+      ((attempt IS NULL AND result IS NULL AND lease_expires_at<=COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
+        OR (result->>'statusCode' IN ('200','201') AND (plan->>'expiry')::bigint<COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))) IS TRUE AS claimable
+      FROM remittance_jobs WHERE namespace=$1 AND recipient=$2`, [this.namespace, recipient, this.clock?.() ?? null]);
+    return (rows[0] as unknown as FundingRow & { claimable: boolean }) ?? null;
+  }
   async reserve(recipient: string, token: string, cost: Cost, limits: Cost): Promise<boolean> {
     for (const value of [...Object.values(cost), ...Object.values(limits)]) if (!/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > (1n << 64n) - 1n) throw new Error('Invalid remittance budget');
     const { rows } = await this.db.query(`WITH owner AS (SELECT recipient FROM remittance_jobs
@@ -123,14 +130,22 @@ export class RemittanceService {
       || !/^(0|[1-9][0-9]*)$/.test(body.recipientAllowanceId) || BigInt(body.recipientAllowanceId) >= 1n << 64n) throw new HttpError(400, 'bad_json');
     if (typeof body.amountUnits !== 'string' || !/^[1-9][0-9]*$/.test(body.amountUnits)
       || BigInt(body.amountUnits) > BigInt(this.options.policy.capUnits)) throw new HttpError(422, 'amount_cap');
-    const identity = await this.options.chain.recipient(body.recipientAllowanceId);
-    const publicKey = P.base64urlDecode(identity.publicKey), now = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
-    const policy = { ...this.options.policy, capUnits: body.amountUnits, offlineLimitUnits: body.amountUnits };
-    let allowanceId: string | undefined;
-    for (let n = 0; n < 8; n++) { const id = randomBytes(8).readBigUInt64BE().toString(); if (!await this.options.chain.taken(id)) { allowanceId = id; break; } }
-    if (!allowanceId) throw new HttpError(503, 'chain_unavailable');
-    const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey: identity.publicKey, keyHash: P.toHex(P.keyHash(publicKey)),
-      allowanceId, policy, expiry: now + policy.lifetimeSeconds };
+    const existing = await this.options.store.find(body.recipientAllowanceId);
+    if (existing && !existing.claimable) return this.resolve(existing);
+    let plan: RegistrationPlan;
+    if (existing && !existing.attempt && !existing.result) {
+      // An unsigned recovery retains the first id, identity and terms. claim refreshes expired time.
+      plan = existing.plan;
+    } else {
+      const identity = await this.options.chain.recipient(body.recipientAllowanceId);
+      const publicKey = P.base64urlDecode(identity.publicKey), now = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
+      const policy = { ...this.options.policy, capUnits: body.amountUnits, offlineLimitUnits: body.amountUnits };
+      let allowanceId: string | undefined;
+      for (let n = 0; n < 8; n++) { const id = randomBytes(8).readBigUInt64BE().toString(); if (!await this.options.chain.taken(id)) { allowanceId = id; break; } }
+      if (!allowanceId) throw new HttpError(503, 'chain_unavailable');
+      plan = { kind: 'payer', pool: 'public', publicKey: identity.publicKey, keyHash: P.toHex(P.keyHash(publicKey)),
+        allowanceId, policy, expiry: now + policy.lifetimeSeconds };
+    }
     const token = await this.options.store.claim(body.recipientAllowanceId, plan);
     const row = await this.options.store.get(body.recipientAllowanceId);
     if (!token) return this.resolve(row);

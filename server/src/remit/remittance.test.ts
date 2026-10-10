@@ -145,3 +145,38 @@ test('a completion that loses its signature guard returns pending for its own at
   const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '1' }, 'venue');
   expect(result).toEqual({ statusCode: 202, body: { status: 'pending', recipientAllowanceId: '1', signature: 'fixture-signature', retryAfter: 2 } });
 });
+
+test('saved success and pending polls skip recipient and candidate-id RPC calls', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  const first = await f.service.submit(input, 'venue');
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect(await f.service.submit(input, 'venue')).toEqual({ ...first, statusCode: 200 });
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  await f.db.query('UPDATE remittance_jobs SET result=NULL'); f.chain.observe.mockResolvedValue(null);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(202);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('unsigned polling avoids RPC allocation and expired recovery keeps its first id and terms', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1800003600, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  await f.store.claim('1', plan);
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(202);
+  expect(f.chain.quote).not.toHaveBeenCalled();
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(201);
+  expect(f.chain.quote.mock.calls[0][0]).toEqual(plan);
+  expect(f.chain.recipient).not.toHaveBeenCalled(); expect(f.chain.taken).not.toHaveBeenCalled();
+});
+
+test('only a successful expired job allocates a renewal id', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  await f.service.submit(input, 'venue');
+  await f.db.query(`UPDATE remittance_jobs SET plan=jsonb_set(plan,'{expiry}','1799999999'::jsonb)`);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(201);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(2); expect(f.chain.taken).toHaveBeenCalledTimes(2);
+  expect(f.chain.quote.mock.calls[1][0].allowanceId).not.toBe(f.chain.quote.mock.calls[0][0].allowanceId);
+});
