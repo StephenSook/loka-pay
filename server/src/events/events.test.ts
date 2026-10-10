@@ -13,6 +13,7 @@ import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt } fr
 import { installEvents } from './index.js';
 import { computeStats, sandboxUsd } from './stats.js';
 import { EventStore } from './store.js';
+import { writeCapped } from './routes.js';
 
 // The real settlement service writes decisions against a stand-in chain; this module projects them.
 // That ties these tests to settle/store.ts's journal, so a change to its columns fails here first.
@@ -268,23 +269,17 @@ test('closing the app ends open /live streams instead of waiting for viewers to 
   for (;;) if ((await reader.read()).done) break;
 });
 
-test('a viewer that stops reading is disconnected once its queued live bytes pass the limit', async () => {
-  const db = await testDatabase();
-  closers.push(() => db.close());
-  await new SettlementStore(db).migrate();
-  const app = Fastify({ logger: false });
-  const events = await installEvents({ app, database: db, deployment, intervalMs: 3_600_000, maxBufferedBytes: 64 * 1024 });
-  closers.push(() => app.close());
-  await app.listen({ host: '127.0.0.1', port: 0 });
-  const controller = new AbortController();
-  closers.push(async () => controller.abort());
-  // Connects, then never reads its body while 2000 live events (about 600 KB) are pushed at it.
-  const response = await fetch(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/live`, { signal: controller.signal });
-  expect(response.status).toBe(200);
-  expect(events.feed.size).toBe(1);
-  await seedEvents(db, 2000);
-  await events.feed.tick();
-  const deadline = Date.now() + 5000;
-  while (events.feed.size > 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
-  expect(events.feed.size).toBe(0);
-}, 15000);
+test('a viewer whose queued live bytes pass the limit is dropped, and nothing more is written to it', () => {
+  // Socket buffers differ per machine (CI runners absorb megabytes), so the cap is tested on a stand-in stream.
+  const raw = { destroyed: false, writableLength: 0, chunks: [] as string[],
+    write(text: string) { this.chunks.push(text); this.writableLength += text.length; return this.writableLength <= 10; },
+    destroy() { this.destroyed = true; return this; } };
+  const stream = raw as unknown as Parameters<typeof writeCapped>[0];
+  expect(writeCapped(stream, 'abcdef', 10)).toBe(true);
+  expect(writeCapped(stream, 'ghij', 10)).toBe(true);
+  expect(raw.destroyed).toBe(false);
+  expect(writeCapped(stream, 'k', 10)).toBe(false);
+  expect(raw.destroyed).toBe(true);
+  expect(writeCapped(stream, 'never', 10)).toBe(false);
+  expect(raw.chunks).toEqual(['abcdef', 'ghij', 'k']);
+});

@@ -20,6 +20,19 @@ export interface EventRouteOptions {
   database: Database; store: EventStore; feed: EventFeed; maxClients?: number; maxBufferedBytes?: number;
 }
 
+/**
+ * Writes one SSE chunk, then drops a viewer whose queued bytes pass `maxBuffered` rather than buffering without
+ * bound; EventSource reconnects and resumes from its Last-Event-ID. Returns false once the stream is gone.
+ */
+export function writeCapped(raw: Pick<ServerResponse, 'destroyed' | 'write' | 'writableLength' | 'destroy'>,
+  text: string, maxBuffered: number): boolean {
+  if (raw.destroyed) return false;
+  raw.write(text);
+  if (raw.writableLength <= maxBuffered) return true;
+  raw.destroy();
+  return false;
+}
+
 const frame = (event: PaymentEvent) => `id: ${event.seq}\nevent: payment\ndata: ${JSON.stringify(event)}\n\n`;
 
 export function registerEventRoutes(app: FastifyInstance, options: EventRouteOptions): void {
@@ -65,12 +78,7 @@ export function registerEventRoutes(app: FastifyInstance, options: EventRouteOpt
     // Subscribe before reading the backlog so nothing projected in between is lost; seq orders and dedupes.
     let lastSent = resume ?? 0;
     let pending: PaymentEvent[] | null = [];
-    const write = (text: string) => {
-      if (raw.destroyed) return;
-      raw.write(text);
-      // A viewer that cannot keep up is dropped rather than buffered without bound; EventSource reconnects and resumes.
-      if (raw.writableLength > maxBuffered) raw.destroy();
-    };
+    const write = (text: string) => { writeCapped(raw, text, maxBuffered); };
     const send = (event: PaymentEvent) => {
       if (event.seq <= lastSent) return;
       lastSent = event.seq;
