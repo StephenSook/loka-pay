@@ -84,16 +84,15 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
                 Text("Your date stays on this screen. Only your age confirmation is saved on this device.",color=LokaColors.muted,fontSize=13.sp)
                 val valid=runCatching{val date=LocalDate.parse(birthday,DateTimeFormatter.ofPattern("dd/MM/uuuu").withResolverStyle(ResolverStyle.STRICT));date<=LocalDate.now().minusYears(if(session?.settings?.drinking==true)21 else 18) && date>=LocalDate.of(1900,1,1)}.getOrDefault(false)
                 Button(onClick={prefs.edit().putBoolean("adult-confirmed",true).apply();ageConfirmed=true;drinkingAge=runCatching{LocalDate.parse(birthday,DateTimeFormatter.ofPattern("dd/MM/uuuu").withResolverStyle(ResolverStyle.STRICT))<=LocalDate.now().minusYears(21)}.getOrDefault(false);context.getSharedPreferences("loka-card-eligibility",0).edit().putBoolean("18",true).putBoolean("21",drinkingAge).apply();birthday=""},enabled=valid,modifier=Modifier.fillMaxWidth()){Text("Confirm age")}
-                Text("Adult themes and optional drinking. Skipping is always okay.",color=LokaColors.muted)
+                Text("Adult themes. Skipping is always okay.",color=LokaColors.muted)
             } else if(settingsOpen) {
                 Text("Intensity",fontWeight=FontWeight.Bold)
-                PartyChips(listOf("clean","flirty","dirty","all"),intensity){intensity=it}
+                PartyChips(listOf("clean","flirty","all"),intensity){intensity=it}
                 Text("Players",fontWeight=FontWeight.Bold)
                 PartyChips(listOf("2","3","4"),count.toString()){count=it.toInt();mode=if(count==2)"friends" else "group";selected=emptyList()}
                 Row(verticalAlignment=Alignment.CenterVertically){Text("Ask before each game",Modifier.weight(1f));Switch(checked=ask,onCheckedChange={ask=it})}
                 Row(verticalAlignment=Alignment.CenterVertically){Text("Show only clean cards",Modifier.weight(1f));Switch(checked=intensity=="clean",onCheckedChange={intensity=if(it)"clean" else "all"})}
                 Row(verticalAlignment=Alignment.CenterVertically){Text("Allow consent dares",Modifier.weight(1f));Switch(checked=consent,onCheckedChange={consent=it})}
-                Row(verticalAlignment=Alignment.CenterVertically){Text("Optional drinking",Modifier.weight(1f));Switch(checked=drinking,onCheckedChange={drinking=it},enabled=drinkingAge)}
                 Text(if(session!=null)"These settings apply to your next round. Everyone will accept the new invitation." else "Filter changes apply to your next card game.",color=LokaColors.muted)
                 Button(onClick={settingsOpen=false;if(session==null)page="library"},modifier=Modifier.fillMaxWidth()){Text("Apply settings")}
             } else if(session!=null) {
@@ -101,7 +100,7 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
                 PartyChips(listOf(session.settings.intensity,if(session.members.size==2)"2 Players" else "Group"),session.settings.intensity){}
                 Text(session.members.joinToString(" · "){name(it)},color=LokaColors.muted)
                 when(session.phase) {
-                    "invited"->{Text("${name(session.host)} invited you. ${session.members.size} players; ${session.settings.intensity} cards. You can skip any card.");Text("Optional drinking: ${if(session.settings.drinking)"On" else "Off"} · Consent dares: ${if(session.settings.consent)"Included" else "Off"}",color=LokaColors.muted);Button(onClick=actions.accept,modifier=Modifier.fillMaxWidth()){Text("Accept invitation")};OutlinedButton(onClick=actions.end,modifier=Modifier.fillMaxWidth()){Text("Decline")}}
+                    "invited"->{Text("${name(session.host)} invited you. ${session.members.size} players; ${session.settings.intensity} cards. You can skip any card.");Text("Consent dares: ${if(session.settings.consent)"Included" else "Off"}",color=LokaColors.muted);Button(onClick=actions.accept,modifier=Modifier.fillMaxWidth()){Text("Accept invitation")};OutlinedButton(onClick=actions.end,modifier=Modifier.fillMaxWidth()){Text("Decline")}}
                     "lobby","joining"->{Text("Waiting for players · ${session.accepted.size}/${session.members.size}",fontFamily=LokaDisplay.font,fontSize=26.sp);session.members.forEach{Text("${name(it)} · ${if(it in session.accepted)"Ready" else "Inviting…"}")}}
                     "active"->{
                         Text("${name(session.turn)}’s turn",fontFamily=LokaDisplay.font,fontSize=28.sp)
@@ -116,7 +115,6 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
                         Text("Play your way. Skipping is always okay.",color=LokaColors.muted)
                         Button(onClick={actions.move("done")},enabled=state.partyCanAct,modifier=Modifier.fillMaxWidth()){Text("Done / Next")}
                         Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                            OutlinedButton(onClick={actions.move("sip")},enabled=state.partyCanAct && session.settings.drinking,modifier=Modifier.weight(1f)){Text("Take a sip")}
                             OutlinedButton(onClick={actions.move("skip")},enabled=state.partyCanAct,modifier=Modifier.weight(1f)){Text("Skip")}
                         }
                         TextButton(onClick={actions.move("shuffle")},enabled=state.partyCanAct,modifier=Modifier.fillMaxWidth()){Text("Shuffle")}
@@ -127,7 +125,7 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
                 TextButton(onClick={actions.end();chosen=null;page="library"},modifier=Modifier.fillMaxWidth()){Text(if(session.host==state.deviceId)"End game" else "Leave game")}
             } else if(page=="vibe") {
                 Text("Good company. Great stories.",color=LokaColors.muted)
-                listOf("clean" to "Just for fun · No sexual content","flirty" to "Mild & cheeky · Light teasing","dirty" to "Explicit & spicy · Adult content").forEach{(id,caption)->
+                listOf("clean" to "Just for fun · No sexual content","flirty" to "Mild & cheeky · Light teasing").forEach{(id,caption)->
                     Surface(onClick={intensity=id},shape=RoundedCornerShape(24.dp),color=if(intensity==id)LokaColors.mint else LokaColors.surface,border=BorderStroke(1.dp,if(intensity==id)LokaColors.mintAccent else LokaColors.line),modifier=Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(24.dp)){Text(id.replaceFirstChar{it.uppercase()}+if(intensity==id)" ✓" else "",fontFamily=LokaDisplay.font,fontSize=26.sp);Text(caption,color=LokaColors.muted)}
                     }
@@ -141,7 +139,7 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
                 if(state.partyGames.isEmpty())Text(state.partyStatus,color=LokaColors.muted)
             } else if(page=="library") {
                 OutlinedTextField(value=search,onValueChange={search=it},label={Text("Find a game")},modifier=Modifier.fillMaxWidth())
-                Text("Intensity",fontWeight=FontWeight.Bold);PartyChips(listOf("clean","flirty","dirty","all"),intensity){intensity=it}
+                Text("Intensity",fontWeight=FontWeight.Bold);PartyChips(listOf("clean","flirty","all"),intensity){intensity=it}
                 Text("Players",fontWeight=FontWeight.Bold);PartyChips(listOf("2 Players","Group"),if(count==2)"2 Players" else "Group"){count=if(it=="Group")3 else 2;mode=if(count==2)"friends" else "group";selected=emptyList()}
                 val games=state.partyGames.filter{it.name.contains(search,true) && eligible(it).isNotEmpty()}
                 if(games.isEmpty())Text("No cards match. Change your filters to see more games.")
@@ -292,7 +290,7 @@ internal data class PartyUiActions(val invite:(List<String>,PartySettings)->Unit
         }
     }
     @Composable fun rows(value:Set<String>,change:(Set<String>)->Unit) {
-        listOf("clean","drinking","dirty").forEach { category ->
+        listOf("clean").forEach { category ->
             val checked=category in value
             val color=when(category){"clean"->mint;"dirty"->coral;else->lavender}
             Surface(onClick={if(category !in unavailable)change(if(checked)value-category else value+category)},enabled=category !in unavailable,shape=RoundedCornerShape(24.dp),color=if(checked)color else if(dark)Color(0xFF3B2343) else Color(0xFFF0E7FA),border=BorderStroke(1.5.dp,if(checked)ink.copy(alpha=0.5f) else muted),modifier=Modifier.fillMaxWidth().semantics{this.selected=checked;contentDescription=category.replaceFirstChar{it.uppercase()}+if(checked)" selected" else " not selected"}) {

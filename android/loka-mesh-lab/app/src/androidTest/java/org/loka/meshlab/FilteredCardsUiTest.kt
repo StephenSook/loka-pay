@@ -15,28 +15,6 @@ class FilteredCardsUiTest {
     private fun photo(name:String) {
         android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p /data/local/tmp/loka-premium-$name.png")).use{it.readBytes()}
     }
-    private fun chooseBirthYear(year:Int) {
-        val instrumentation=InstrumentationRegistry.getInstrumentation()
-        fun find(view:android.view.View):android.widget.NumberPicker? {
-            if(view is android.widget.NumberPicker && view.contentDescription=="Birth year")return view
-            if(view is android.view.ViewGroup)for(i in 0 until view.childCount){find(view.getChildAt(i))?.let{return it}}
-            return null
-        }
-        var current=java.time.LocalDate.now().year
-        var steps=0
-        while(current!=year && steps++<120) {
-            instrumentation.runOnMainSync {
-                val wheel=android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull{find(it)} ?: error("Birth year wheel missing")
-                val action=if(wheel.value>year)android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD else android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                Assert.assertTrue(wheel.accessibilityNodeProvider.performAction(android.view.View.NO_ID,action,null))
-            }
-            android.os.SystemClock.sleep(450)
-            instrumentation.runOnMainSync {
-                current=android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull{find(it)}!!.value
-            }
-        }
-        Assert.assertEquals(year,current);ui.waitForIdle()
-    }
     private fun start(){val cards=listOf(PartyCard("a","x","Clean one","clean",setOf("group"),2,20,false),PartyCard("b","x","Clean two","clean",setOf("group"),2,20,false),PartyCard("c","x","Dirty one","dirty",setOf("group"),2,20,false,setOf("dirty"),true));ui.setContent{MaterialTheme{FilteredCardsContent(cards,{},{})}}}
     private fun closeSheet(){
         ui.onNodeWithTag("cards-sheet-handle",useUnmergedTree=true).performTouchInput{swipe(center,center+androidx.compose.ui.geometry.Offset(0f,900f),250)}
@@ -58,8 +36,8 @@ class FilteredCardsUiTest {
             tap("Continue")
         }
     }
-    @Test fun cleanDeckExhaustsAndCancelledRestrictedFiltersPreserveCard(){start();tap("Start playing →");val first=ui.onAllNodesWithText("Clean one").fetchSemanticsNodes().isNotEmpty();tap("Filters");ui.onNodeWithContentDescription("Dirty not selected").performClick();tap("Apply filters");ui.onNodeWithText("Confirm your age").assertExists();tap("Cancel");ui.onNodeWithText(if(first)"Clean one" else "Clean two").assertExists();tap("Next card");ui.onNodeWithText(if(first)"Clean two" else "Clean one").assertExists();tap("Skip");ui.onNodeWithText("You’ve finished this deck").assertExists();tap("Another round");ui.onNodeWithText("Filters").assertExists()}
-    @Test fun emptyCategorySelectionBlocksStartAndAdultYearEnablesDirty(){start();ui.onNodeWithContentDescription("Clean selected").performClick();ui.onNodeWithText("Start playing →").assertIsNotEnabled();ui.onNodeWithContentDescription("Dirty not selected").performClick();tap("Start playing →");ui.onNodeWithText("Confirm & play").assertIsNotEnabled();chooseBirthYear(2000);tap("Confirm & play");ui.onNodeWithText("Dirty one").assertExists();tap("Filters");ui.onNodeWithContentDescription("Dirty selected").performClick();ui.onNodeWithText("Apply filters").assertIsNotEnabled()}
+    @Test fun cleanDeckExhaustsAndCancelledFiltersPreserveCard(){start();tap("Start playing →");val first=ui.onAllNodesWithText("Clean one").fetchSemanticsNodes().isNotEmpty();tap("Filters");ui.onNodeWithContentDescription("Dirty not selected").assertDoesNotExist();ui.onNodeWithContentDescription("Drinking not selected").assertDoesNotExist();tap("Cancel");ui.onNodeWithText(if(first)"Clean one" else "Clean two").assertExists();tap("Next card");ui.onNodeWithText(if(first)"Clean two" else "Clean one").assertExists();tap("Skip");ui.onNodeWithText("You’ve finished this deck").assertExists();tap("Another round");ui.onNodeWithText("Filters").assertExists()}
+    @Test fun emptyCategorySelectionBlocksStartAndRestrictedCategoriesAreAbsent(){start();ui.onNodeWithContentDescription("Clean selected").performClick();ui.onNodeWithText("Start playing →").assertIsNotEnabled();ui.onNodeWithContentDescription("Dirty not selected").assertDoesNotExist();ui.onNodeWithContentDescription("Drinking not selected").assertDoesNotExist();ui.onNodeWithContentDescription("Clean not selected").performClick();tap("Start playing →");ui.onNodeWithText("Confirm & play").assertDoesNotExist();ui.onNodeWithText("Dirty one").assertDoesNotExist();tap("Filters");ui.onNodeWithContentDescription("Clean selected").performClick();ui.onNodeWithText("Apply filters").assertIsNotEnabled()}
     @Test fun shortDragReturnsAndBothSwipeDirectionsDrawOnce(){
         start();tap("Start playing →")
         val first=ui.onAllNodesWithText("Clean one").fetchSemanticsNodes().isNotEmpty()
@@ -127,14 +105,11 @@ class FilteredCardsUiTest {
         tap("Filters");tap("A couple");tap("Apply filters")
         ui.onNodeWithText("2 players · Couple").assertExists();ui.onNodeWithText("Friends prompt").assertDoesNotExist()
     }
-    @Test fun truthOrDrinkShowsTheAnswerOrDrinkRule() {
+    @Test fun drinkingTaggedCardsCannotBeSelected() {
         val card=PartyCard("drink","truth_or_drink","What is your secret talent?","clean",setOf("friends","couples","group"),2,12,false,setOf("drinking"),false,true,"Truth or Drink")
         ui.setContent{MaterialTheme{FilteredCardsContent(listOf(card),{},{})}}
-        tap("Two friends");ui.onNodeWithContentDescription("Clean selected").performClick();ui.onNodeWithContentDescription("Drinking not selected").performClick();tap("Start playing →")
-        chooseBirthYear(2000);tap("Confirm & play")
-        ui.onNodeWithTag("cards-game-title").assertTextEquals("Truth or Drink");ui.onNodeWithText(card.text).assertExists()
-        val rule="Answer the question or take a drink. You can always skip."
-        ui.onNodeWithText(rule).assertDoesNotExist();tap("How to play");ui.onNodeWithText(rule).assertExists();tap("Got it");ui.onNodeWithText(rule).assertDoesNotExist();ui.onNodeWithText(card.text).assertExists()
+        tap("Two friends");ui.onNodeWithContentDescription("Drinking not selected").assertDoesNotExist()
+        ui.onNodeWithText("No cards match. Change the pack, categories or player setup.").assertExists();ui.onNodeWithText("Start playing →").assertIsNotEnabled()
     }
     @Test fun headingTracksTheActiveGameAndRulesStayOutsideTheCard() {
         val a=PartyCard("a","a","First prompt","clean",setOf("friends"),2,2,false,gameName="Never Have I Ever",instructions=mapOf("friends" to "First game rules"))
@@ -158,14 +133,6 @@ class FilteredCardsUiTest {
         start.assertIsDisplayed();nearby.assertIsDisplayed()
         Assert.assertEquals(a,start.fetchSemanticsNode().boundsInRoot);Assert.assertEquals(b,nearby.fetchSemanticsNode().boundsInRoot)
     }
-    @Test fun birthdayWheelRequiresChoiceAndConfirmsEligibleYear() {
-        val card=PartyCard("drink","truth_or_drink","A question","clean",setOf("friends"),2,2,false,setOf("drinking"),false,true)
-        ui.setContent{MaterialTheme{FilteredCardsContent(listOf(card),{},{})}}
-        tap("Two friends");ui.onNodeWithContentDescription("Clean selected").performClick();ui.onNodeWithContentDescription("Drinking not selected").performClick();tap("Start playing →")
-        ui.onNodeWithText("Confirm & play").assertIsNotEnabled()
-        chooseBirthYear(2000);photo("birthday-wheel");ui.onNodeWithText("Ready to confirm.").assertExists();ui.onNodeWithText("Confirm & play").assertIsEnabled()
-        tap("Confirm & play");ui.onNodeWithText(card.text).assertExists()
-    }
     @Test fun localNamesRequiredAndTurnRotatesOnlyOnCompletedDraws() {
         val cards=(0..5).map{PartyCard("$it","x","Question $it","clean",setOf("friends"),2,2,false,gameName="A game")}
         ui.setContent{MaterialTheme{FilteredCardsContent(cards,{},{})}}
@@ -181,13 +148,6 @@ class FilteredCardsUiTest {
         tap("Skip");ui.onNodeWithTag("cards-current-player").assertTextEquals("Alex’s turn")
         ui.onNodeWithTag("swipe-card").performTouchInput{swipeLeft()};ui.onNodeWithTag("cards-current-player").assertTextEquals("Blair’s turn")
         tap("Filters");tap("Cancel");ui.onNodeWithTag("cards-current-player").assertTextEquals("Blair’s turn")
-    }
-    @Test fun birthdayWheelRejectsUnderageAndOffersClean() {
-        start();ui.onNodeWithContentDescription("Dirty not selected").performClick();tap("Start playing →")
-        chooseBirthYear(java.time.LocalDate.now().year-10)
-        tap("Confirm & play");ui.onNodeWithText("Those categories are unavailable for your age. You can play Clean cards.").assertExists()
-        tap("Play Clean cards");ui.onNodeWithText("Filters").assertExists()
-        Assert.assertFalse(prefs.getBoolean("18",false));Assert.assertFalse(prefs.getBoolean("21",false))
     }
     @Test fun playerNameFooterRemainsFixedWhenNamesScroll() {
         start();tap("A group");repeat(16){ui.onNodeWithContentDescription("More players").performClick()};ui.onNodeWithText("Start playing →").performClick()
@@ -221,9 +181,8 @@ class FilteredCardsUiTest {
         photo("uniform-rules");closeSheet();ui.onNodeWithText("Got it").assertDoesNotExist()
         tap("Filters")
         Assert.assertEquals(expected,ui.onNodeWithText("Apply filters").fetchSemanticsNode().boundsInRoot.size)
-        photo("uniform-filters");ui.onNodeWithContentDescription("Dirty not selected").performClick();tap("Apply filters")
-        Assert.assertEquals(expected,ui.onNodeWithText("Confirm & play").fetchSemanticsNode().boundsInRoot.size)
-        ui.onNodeWithText("Back to Clean cards").assertDoesNotExist();photo("uniform-birthday");closeSheet()
+        photo("uniform-filters");ui.onNodeWithContentDescription("Dirty not selected").assertDoesNotExist();ui.onNodeWithContentDescription("Drinking not selected").assertDoesNotExist()
+        ui.onNodeWithText("Back to Clean cards").assertDoesNotExist();closeSheet()
         ui.onNodeWithText("Confirm your age").assertDoesNotExist();ui.onNodeWithText("Next card").assertExists()
     }
 
