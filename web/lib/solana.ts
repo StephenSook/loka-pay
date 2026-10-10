@@ -52,15 +52,17 @@ export interface RpcOptions {
   url?: string;
   /** Per attempt. Default 8 seconds. */
   timeoutMs?: number;
-  /** Extra attempts after a timeout, a network error, HTTP 429 or a 5xx. Default 1. */
+  /** Extra attempts after a timeout, a network error or a 5xx. Default 1. */
   retries?: number;
 }
 
 const RETRY_DELAY_MS = 400;
 
+// HTTP 429 is not retried: public devnet answers it with Retry-After: 10, so an early
+// retry only spends more of the same limit. The page says the read was rate limited.
 function retryable(error: RpcError): boolean {
   if (error.kind === "timeout" || error.kind === "network") return true;
-  return error.kind === "http" && error.code !== null && (error.code === 429 || error.code >= 500);
+  return error.kind === "http" && error.code !== null && error.code >= 500;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,6 +85,9 @@ async function postOnce(url: string, body: string, timeoutMs: number): Promise<u
       throw new RpcError("timeout", `no answer from ${new URL(url).host} within ${timeoutMs / 1000} s`);
     }
     throw new RpcError("network", `could not reach ${new URL(url).host}`);
+  }
+  if (response.status === 429) {
+    throw new RpcError("http", `${new URL(url).host} is rate limiting requests (HTTP 429)`, 429);
   }
   if (!response.ok) {
     throw new RpcError("http", `${new URL(url).host} answered HTTP ${response.status}`, response.status);
