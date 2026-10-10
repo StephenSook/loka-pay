@@ -5,14 +5,29 @@
 // - main's checks: the result of each GitHub Actions job on main's latest commit (the check
 //   runs API), behind the program CI claim on /proof.
 
-import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
+import { cachedRead, sourceTag, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { KIT_TAG } from "./facts";
 import { REPO_URL } from "./site";
 
 export const REPO = "StephenSook/loka-pay";
-export const COMPARE_API_URL = `https://api.github.com/repos/${REPO}/compare/${KIT_TAG}...main`;
+export const DEFAULT_GITHUB_API = "https://api.github.com";
+
+/**
+ * The GitHub API base: GITHUB_API_URL (server only), or api.github.com. Only the e2e tests
+ * change it, to a local stand-in (playwright.config.ts). Read when each request is made.
+ */
+export function githubApiBase(): string {
+  return (process.env.GITHUB_API_URL?.trim() || DEFAULT_GITHUB_API).replace(/\/+$/, "");
+}
+
+export function compareApiUrl(): string {
+  return `${githubApiBase()}/repos/${REPO}/compare/${KIT_TAG}...main`;
+}
+
 /** The check runs of main's latest commit (one per GitHub Actions job), newest attempt of each. */
-export const CHECKS_API_URL = `https://api.github.com/repos/${REPO}/commits/main/check-runs?per_page=100&filter=latest`;
+export function checksApiUrl(): string {
+  return `${githubApiBase()}/repos/${REPO}/commits/main/check-runs?per_page=100&filter=latest`;
+}
 /** The program workflow's one job (.github/workflows/program.yml): the secp256r1 feature check, then anchor test. */
 export const PROGRAM_JOB = "program (secp256r1 feature check, anchor test)";
 /**
@@ -142,9 +157,13 @@ function githubToken(): string | null {
   return token ? token : null;
 }
 
-/** The headers of every GitHub API request: the token's Authorization only when GITHUB_TOKEN is set. */
-export function githubHeaders(): Record<string, string> {
-  const token = githubToken();
+/**
+ * The headers of a GitHub API request to `url`: the token's Authorization only when
+ * GITHUB_TOKEN is set AND the request goes to the configured API base, so the token is never
+ * sent to any other host.
+ */
+export function githubHeaders(url: string): Record<string, string> {
+  const token = new URL(url).origin === new URL(githubApiBase()).origin ? githubToken() : null;
   return {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
@@ -158,7 +177,7 @@ async function getGitHubJson(url: string, timeoutMs: number): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: githubHeaders(),
+      headers: githubHeaders(url),
       // lib/cached-read.ts caches the decoded summary with its read time, never the raw answer.
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
@@ -194,7 +213,7 @@ async function getGitHubJson(url: string, timeoutMs: number): Promise<unknown> {
 }
 
 /** The compare read. The URL and limit are parameters only so tests can point it at a local server. */
-export async function readCompareUncached(url: string = COMPARE_API_URL, timeoutMs = 10_000): Promise<BuiltThisWeekend> {
+export async function readCompareUncached(url: string = compareApiUrl(), timeoutMs = 10_000): Promise<BuiltThisWeekend> {
   return summarizeCompare(await getGitHubJson(url, timeoutMs));
 }
 
@@ -251,15 +270,15 @@ export function summarizeCheckRuns(body: unknown): MainChecks {
 }
 
 /** The check runs read. The URL and limit are parameters only so tests can point it at a local server. */
-export async function readMainChecksUncached(url: string = CHECKS_API_URL, timeoutMs = 10_000): Promise<MainChecks> {
+export async function readMainChecksUncached(url: string = checksApiUrl(), timeoutMs = 10_000): Promise<MainChecks> {
   return summarizeCheckRuns(await getGitHubJson(url, timeoutMs));
 }
 
 /** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readMainChecks(options: CachedReadOptions = {}): Promise<Read<MainChecks>> {
-  return cachedRead(`github-checks:${REPO}:main`, GITHUB_READS, () => readMainChecksUncached(), options);
+  return cachedRead(`github-checks:${sourceTag(githubApiBase())}:${REPO}:main`, GITHUB_READS, () => readMainChecksUncached(), options);
 }
 
 export function readBuiltThisWeekend(): Promise<Read<BuiltThisWeekend>> {
-  return cachedRead(`github-compare:${REPO}:${KIT_TAG}`, GITHUB_READS, () => readCompareUncached());
+  return cachedRead(`github-compare:${sourceTag(githubApiBase())}:${REPO}:${KIT_TAG}`, GITHUB_READS, () => readCompareUncached());
 }

@@ -34,20 +34,26 @@ async function withGitHubStandIn(status: number, run: (url: string, seen: Incomi
   }
 }
 
-function withToken<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
-  const before = process.env.GITHUB_TOKEN;
-  if (value === undefined) delete process.env.GITHUB_TOKEN;
-  else process.env.GITHUB_TOKEN = value;
-  return run().finally(() => {
-    if (before === undefined) delete process.env.GITHUB_TOKEN;
-    else process.env.GITHUB_TOKEN = before;
-  });
+function withEnv<T>(vars: Record<string, string | undefined>, run: () => Promise<T>): Promise<T> {
+  const before = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const set = (values: Record<string, string | undefined>) => {
+    for (const [k, v] of Object.entries(values)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
+  set(vars);
+  return run().finally(() => set(before));
 }
+
+/** GITHUB_TOKEN set (or not), with the stand-in as the configured API base. */
+const withToken = <T>(value: string | undefined, url: string, run: () => Promise<T>) =>
+  withEnv({ GITHUB_TOKEN: value, GITHUB_API_URL: new URL(url).origin }, run);
 
 test.describe("GITHUB_TOKEN", () => {
   test("set: GitHub requests carry it as a Bearer token", async () => {
-    await withToken(SENTINEL, () =>
-      withGitHubStandIn(200, async (url, seen) => {
+    await withGitHubStandIn(200, (url, seen) =>
+      withToken(SENTINEL, url, async () => {
         await readMainChecksUncached(url, 5000);
         expect(seen).toHaveLength(1);
         expect(seen[0].authorization).toBe(`Bearer ${SENTINEL}`);
@@ -57,19 +63,31 @@ test.describe("GITHUB_TOKEN", () => {
 
   test("unset or blank: no Authorization header at all", async () => {
     for (const value of [undefined, "", "   "]) {
-      await withToken(value, () =>
-        withGitHubStandIn(200, async (url, seen) => {
+      await withGitHubStandIn(200, (url, seen) =>
+        withToken(value, url, async () => {
           await readMainChecksUncached(url, 5000);
           expect(seen[0].authorization, JSON.stringify(value)).toBeUndefined();
+          expect(githubHeaders(url).authorization).toBeUndefined();
         }),
       );
-      await withToken(value, async () => expect(githubHeaders().authorization).toBeUndefined());
     }
   });
 
+  test("never sent to a host other than the configured API base", async () => {
+    await withGitHubStandIn(200, (url, seen) =>
+      withEnv({ GITHUB_TOKEN: SENTINEL, GITHUB_API_URL: undefined }, async () => {
+        // The base is api.github.com; this request goes elsewhere, so it carries no token.
+        await readMainChecksUncached(url, 5000);
+        expect(seen[0].authorization).toBeUndefined();
+        expect(githubHeaders("https://api.github.com/repos/x/y").authorization).toBe(`Bearer ${SENTINEL}`);
+        expect(githubHeaders("https://api.github.com.example.org/repos/x/y").authorization).toBeUndefined();
+      }),
+    );
+  });
+
   test("a spent limit with the token says so without ever printing the token", async () => {
-    await withToken(SENTINEL, () =>
-      withGitHubStandIn(403, async (url) => {
+    await withGitHubStandIn(403, (url) =>
+      withToken(SENTINEL, url, async () => {
         const error = await readMainChecksUncached(url, 5000).catch((e: unknown) => e);
         expect(error).toBeInstanceOf(GitHubError);
         expect((error as GitHubError).message).toBe("GitHub's limit for this site's token is used up");

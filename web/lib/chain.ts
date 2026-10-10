@@ -12,12 +12,12 @@
 // discriminator here; the fixed accounts are read together with getMultipleAccounts; a
 // batch never names the same method twice.
 
-import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
+import { cachedRead, sourceTag, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
 import { summarizeTransaction, type TxResult } from "./logs";
 import { isUnixSeconds } from "./time";
 import { PINS } from "./pins";
-import { serverReadOptions } from "./server-rpc";
+import { SERVER_RPC_URL, serverReadOptions } from "./server-rpc";
 import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOptions, type RpcOutcome } from "./solana";
 import {
   ACCOUNT_DISCRIMINATORS,
@@ -330,7 +330,7 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
 
 /** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readProgramFacts(options: CachedReadOptions = {}): Promise<Read<ProgramFacts>> {
-  return cachedRead(`program-facts:${PINS.programId}`, CHAIN_READS, () => readProgramFactsUncached(), options);
+  return cachedRead(`program-facts:${sourceTag(SERVER_RPC_URL)}:${PINS.programId}`, CHAIN_READS, () => readProgramFactsUncached(), options);
 }
 
 // ---------- proof of reserves (/proof, PLAN.md 3.24) ----------
@@ -457,5 +457,5 @@ export async function readReservesUncached(options: RpcOptions = serverReadOptio
 
 /** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readReserves(options: CachedReadOptions = {}): Promise<Read<ReservesRead>> {
-  return cachedRead(`reserves:${PINS.programId}`, CHAIN_READS, () => readReservesUncached(), options);
+  return cachedRead(`reserves:${sourceTag(SERVER_RPC_URL)}:${PINS.programId}`, CHAIN_READS, () => readReservesUncached(), options);
 }

@@ -18,6 +18,7 @@
 // many page views arrive, the reads they cause stay bounded, and a page that cannot read
 // again shows the last good read with its age.
 
+import { createHash } from "node:crypto";
 import { unstable_cache } from "next/cache";
 import { ReadGate, ReadNotMade, resolveRead, type FailedRead, type GateLimits, type Read, type Stamped } from "./read-state";
 import { describeFailure } from "./solana";
@@ -38,6 +39,15 @@ export interface ReadPolicy {
 export interface CachedReadOptions {
   /** For a page whose claims say Live: a current read (reused or made now), the cache only as a fallback. */
   needCurrent?: boolean;
+}
+
+/**
+ * A short tag for the endpoint a read comes from, for its cache key: reads from different
+ * endpoints (another RPC provider, the e2e tests' local stand-ins) never share a cache entry.
+ * A digest, so an endpoint URL that carries an API key never appears in the cache.
+ */
+export function sourceTag(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 12);
 }
 
 const gate = new ReadGate(Date.now);

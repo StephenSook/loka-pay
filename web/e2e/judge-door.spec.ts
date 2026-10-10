@@ -1,15 +1,19 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { E2E_GITHUB_TOKEN, EXPECTED, UPSTREAM } from "./fixtures/upstream";
+import { FAILING_URL } from "./fixtures/ports";
 
 // The judge door pages (PLAN.md 3.2, 3.24, 3.60, 3.72). /judge, /proof and /trust read
-// devnet and GitHub on the server, which Playwright cannot intercept, so those checks
-// accept either the real devnet facts or the page's honest failure notice, and assert
-// the shape of whichever one is on screen. /live reads devnet from the browser, so its
-// parser checks run against intercepted RPC and WebSocket traffic.
+// devnet and GitHub on the server. The e2e server they are tested on reads a local stand-in
+// for both (e2e/fixtures/upstream.ts, wired up in playwright.config.ts), so the success path
+// is asserted every run with known values. A second e2e server (FAILING_URL) reads a port
+// where nothing listens, so the failure path is asserted every run too. /live reads devnet
+// from the browser, so its parser checks run against intercepted RPC and WebSocket traffic.
 //
-// Expected values are read from config/pins.json and the recorded fixtures here, not
-// imported from the app, so a wrong page value fails instead of passing by construction.
+// Expected values are read from config/pins.json, the recorded fixtures and the stand-in's
+// EXPECTED literals, not imported from the app, so a wrong page value fails instead of
+// passing by construction.
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const pins = JSON.parse(readFileSync(path.join(repoRoot, "config", "pins.json"), "utf8"));
@@ -19,6 +23,9 @@ const INIT_TX = "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMk
 const FIRST_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
 const DEVNET = /^https:\/\/api\.devnet\.solana\.com\/?$/;
 const DEVNET_WS = /^wss:\/\/api\.devnet\.solana\.com\/?$/;
+// Why a read on the failing server did not succeed: nothing listens there, or this server's
+// read budget held a further attempt back (lib/read-state.ts ReadGate).
+const FAILED_READ = /127\.0\.0\.1:3191|did not read again|waits \d+ s more/;
 
 async function open(page: Page, url: string) {
   const response = await page.goto(url);
@@ -88,7 +95,11 @@ test("header and landing page link to every judge door page", async ({ page }) =
   }
 });
 
-test("/judge: seven numbered stops, the program facts or an honest failure, CI results read by the server", async ({ page, baseURL }) => {
+const WORKFLOW_FILES = readdirSync(path.join(repoRoot, ".github", "workflows"))
+  .filter((f) => f.endsWith(".yml"))
+  .map((f) => f.replace(/\.yml$/, ""));
+
+test("/judge: seven numbered stops, the program facts and each workflow's result, read by the server", async ({ page, baseURL }) => {
   const foreign = watchForeign(page, baseURL!);
   await open(page, "/judge");
   const steps = page.getByRole("list", { name: "Itinerary" }).getByRole("listitem").filter({ has: page.getByRole("heading", { level: 2 }) });
@@ -113,78 +124,62 @@ test("/judge: seven numbered stops, the program facts or an honest failure, CI r
     "href",
     `https://explorer.solana.com/address/${pins.programId}?cluster=devnet`,
   );
-  const facts = page.getByTestId("program-facts");
-  const failure = page.getByTestId("read-failure");
-  await expect(facts.or(failure)).toBeVisible();
-  if (await facts.isVisible()) {
-    await expect(page.getByTestId("fact-executable")).toHaveText("Yes, executable");
-    await expect(page.getByTestId("fact-authority")).toContainText(pins.upgradeAuthority);
-    await expect(page.getByTestId("fact-init")).toContainText("initialize_vault");
-    await expect(page.getByTestId("fact-init")).toContainText("Succeeded");
-    await expect(page.getByTestId("init-explorer-link")).toHaveAttribute("href", `https://explorer.solana.com/tx/${INIT_TX}?cluster=devnet`);
-    await expect(page.getByTestId("count-VaultConfig")).toHaveText("Config: 1");
-    await expect(page.getByTestId("program-read-stamp")).toContainText(/Read from Solana devnet at slots? \d+/);
-  } else {
-    test.info().annotations.push({ type: "devnet", description: "devnet read failed; checked the failure notice instead" });
-    await expect(failure).toContainText("Could not read the program from devnet.");
-    await expect(failure).toContainText("Tried at");
-  }
+  // The success path, every run: the stand-in's facts, never a failure notice.
+  await expect(page.getByTestId("read-failure")).toHaveCount(0);
+  await expect(page.getByTestId("program-facts")).toBeVisible();
+  await expect(page.getByTestId("fact-executable")).toHaveText("Yes, executable");
+  await expect(page.getByTestId("fact-authority")).toContainText(pins.upgradeAuthority);
+  await expect(page.getByTestId("fact-deployed")).toContainText(`Slot ${EXPECTED.deploySlot}`);
+  await expect(page.getByTestId("fact-size")).toHaveText(`${EXPECTED.programBytes.toLocaleString("en-US")} bytes`);
+  await expect(page.getByTestId("fact-vault")).toContainText(`${EXPECTED.vault} sandbox USDC`);
+  await expect(page.getByTestId("fact-init")).toContainText("initialize_vault");
+  await expect(page.getByTestId("fact-init")).toContainText("Succeeded");
+  await expect(page.getByTestId("init-explorer-link")).toHaveAttribute("href", `https://explorer.solana.com/tx/${INIT_TX}?cluster=devnet`);
+  await expect(page.getByTestId("count-VaultConfig")).toHaveText(`Config: ${EXPECTED.counts.VaultConfig}`);
+  await expect(page.getByTestId("count-VaultAuthority")).toHaveText(`Vault authority: ${EXPECTED.counts.VaultAuthority}`);
+  await expect(page.getByTestId("count-Allowance")).toHaveText(`Allowances: ${EXPECTED.counts.Allowance}`);
+  await expect(page.getByTestId("count-Merchant")).toHaveText(`Merchants: ${EXPECTED.counts.Merchant}`);
+  await expect(page.getByTestId("program-read-stamp")).toContainText(/Read from Solana devnet at slots? \d+/);
+  await expect(page.getByTestId("program-read-stamp")).toHaveAttribute("data-stale", "false");
 
   await expect(page.getByTestId("testflight-status")).toHaveText(
     "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves.",
   );
   await expect(page.getByTestId("repo-link")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay");
-  // Every workflow in .github/workflows has its line, so a red one cannot be left out.
-  const workflows = readdirSync(path.join(repoRoot, ".github", "workflows"))
-    .filter((f) => f.endsWith(".yml"))
-    .map((f) => f.replace(/\.yml$/, ""));
-  expect(workflows.length).toBeGreaterThanOrEqual(6);
-  await expect(page.getByRole("list", { name: "GitHub Actions workflows" }).getByRole("listitem")).toHaveCount(workflows.length);
-  // The results come from the server's read of GitHub's API, or the page says that read failed.
-  const ciStamp = page.getByTestId("ci-read-stamp");
-  const ciFailure = page.getByTestId("ci-read-failure");
-  await expect(ciStamp.or(ciFailure)).toBeVisible();
-  const ciRead = await ciStamp.isVisible();
-  if (ciRead) await expect(ciStamp).toContainText(/Read from GitHub's API at main's latest commit [0-9a-f]{7}/);
-  else test.info().annotations.push({ type: "github", description: await ciFailure.innerText() });
-  const results = ["success", "failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", "stale", "queued", "in_progress", "missing"];
-  for (const file of workflows) {
+  // Every workflow in .github/workflows has its line, so a red one cannot be left out, and
+  // each shows the result the stand-in reports for main's latest commit.
+  expect(WORKFLOW_FILES.length).toBeGreaterThanOrEqual(6);
+  await expect(page.getByRole("list", { name: "GitHub Actions workflows" }).getByRole("listitem")).toHaveCount(WORKFLOW_FILES.length);
+  await expect(page.getByTestId("ci-read-failure")).toHaveCount(0);
+  await expect(page.getByTestId("ci-read-stamp")).toContainText(`Read from GitHub's API at main's latest commit ${EXPECTED.mainCommit}`);
+  for (const file of WORKFLOW_FILES) {
     const line = page.getByTestId(`ci-${file}`);
-    const result = await line.getAttribute("data-result");
-    if (ciRead) {
-      expect(results, `${file}: ${result}`).toContain(result);
-      await expect(line.getByTestId("ci-result")).toBeVisible();
-    } else {
-      // No read, no result: never a status from nowhere.
-      expect(result).toBe("not-read");
-      await expect(line.getByTestId("ci-result")).toHaveCount(0);
-    }
-    await expect(line.getByRole("link")).toHaveAttribute("href", /^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\//);
+    await expect(line, file).toHaveAttribute("data-result", EXPECTED.ci[file]);
+    await expect(line.getByTestId("ci-result")).toHaveText(EXPECTED.ci[file] === "success" ? "Passed" : "Failed");
+    await expect(line.getByRole("link")).toHaveAttribute("href", /^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\/runs\/\d+\/job\/\d+$/);
   }
-  // The note about the server workflow only when its job did not pass.
-  const serverResult = await page.getByTestId("ci-server").getAttribute("data-result");
-  if (ciRead && serverResult !== "success" && serverResult !== "missing") {
-    await expect(page.getByTestId("server-workflow-note")).toContainText("does not pass until that code is merged");
-  } else {
-    await expect(page.getByTestId("server-workflow-note")).toHaveCount(0);
-  }
+  // The stand-in's server job failed, so the note about it is shown.
+  await expect(page.getByTestId("server-workflow-note")).toContainText("does not pass until that code is merged");
   // No image from GitHub: a hotlinked badge would send the visitor's GitHub cookies with it.
   await expect(page.locator("img")).toHaveCount(0);
   await page.waitForLoadState("networkidle");
   expect(foreign).toEqual([]);
 });
 
-test("/trust: pilot status, custody, the checks and the limits; no request leaves the site", async ({ page, baseURL }) => {
+test("/trust: pilot status from the authority read, custody, the checks and the limits; no request leaves the site", async ({ page, baseURL }) => {
   const foreign = watchForeign(page, baseURL!);
   await open(page, "/trust");
-  // The heading follows the upgrade authority read (lib/claims.ts upgradeability), so it can
-  // never contradict the custody section below it.
+  // The heading follows the upgrade authority read (lib/claims.ts upgradeability): said in
+  // the present only from a current read, otherwise as of the dated read.
   const pilot = page.getByTestId("pilot-status");
-  const pilotKind = await pilot.getAttribute("data-upgradeability");
+  await expect(pilot).toHaveAttribute("data-upgradeability", "upgradeable");
   const pilotAsOf = await pilot.getAttribute("data-as-of");
-  expect(["upgradeable", "frozen", "unknown"]).toContain(pilotKind);
-  // Said in the present only from a current read; otherwise as of a dated read, or unknown.
-  expect(["current", "dated", "none"]).toContain(pilotAsOf);
+  expect(["current", "dated"]).toContain(pilotAsOf);
+  await expect(pilot).toHaveText(
+    pilotAsOf === "current"
+      ? "Devnet pilot, unaudited, not frozen on purpose."
+      : /^Devnet pilot, unaudited\. Not frozen on purpose, as of a devnet read \d+ (s|min) ago\.$/,
+  );
   for (const name of ["Who holds what", "What the program checks before it moves money", "What the protocol does not promise"]) {
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
@@ -201,36 +196,10 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
   } else {
     await expect(server).toContainText(pins.serverEd25519PublicKey);
   }
-  const authority = page.getByTestId("upgrade-authority");
-  const failure = page.getByTestId("read-failure");
-  await expect(authority.or(failure)).toBeVisible();
-  if (await authority.isVisible()) {
-    await expect(authority).toHaveText(pins.upgradeAuthority);
-    await expect(page.getByTestId("custody-authority")).toContainText("A 2-of-3 multisig is planned (task 3.46), not done.");
-  }
-  if (pilotKind === "upgradeable") {
-    await expect(pilot).toHaveText(
-      pilotAsOf === "current"
-        ? "Devnet pilot, unaudited, not frozen on purpose."
-        : /^Devnet pilot, unaudited\. Not frozen on purpose, as of a devnet read \d+ (s|min|h) ago\.$/,
-    );
-    await expect(authority).toBeVisible();
-  } else if (pilotKind === "frozen") {
-    await expect(pilot).toHaveText(
-      pilotAsOf === "current"
-        ? "Devnet pilot, unaudited, and frozen: the program can no longer be changed."
-        : /^Devnet pilot, unaudited\. Frozen as of a devnet read \d+ (s|min|h) ago: it could no longer be changed\.$/,
-    );
-    await expect(page.getByTestId("custody-authority")).toContainText("the program is frozen");
-  } else {
-    await expect(pilot).toHaveText("Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.");
-    // Unknown only when the read behind it failed or is stale, which the page says too.
-    const failureShown = page
-      .getByTestId("read-failure")
-      .or(page.locator('[data-testid="trust-read-stamp"][data-stale="true"]'))
-      .or(page.getByTestId("custody-authority").getByText(/^Not read:/));
-    await expect(failureShown.first()).toBeVisible();
-  }
+  await expect(page.getByTestId("read-failure")).toHaveCount(0);
+  await expect(page.getByTestId("upgrade-authority")).toHaveText(pins.upgradeAuthority);
+  await expect(page.getByTestId("custody-authority")).toContainText("A 2-of-3 multisig is planned (task 3.46), not done.");
+  await expect(page.getByTestId("custody-vault")).toContainText(`${EXPECTED.vault} sandbox USDC`);
   await expect(page.getByRole("main")).toContainText("Double spending is bounded, not prevented.");
   await page.waitForLoadState("networkidle");
   expect(foreign).toEqual([]);
@@ -247,13 +216,8 @@ const READ_BACKED: Record<string, { source: string; maxAgeS: number }> = {
   "program-ci": { source: "GitHub", maxAgeS: 60 },
 };
 
-test("/proof: Live claims link their evidence and the current read behind it, others link nothing; reserves and commits or honest failures", async ({
-  page,
-  baseURL,
-  request,
-}) => {
-  const foreign = watchForeign(page, baseURL!);
-  await open(page, "/proof");
+/** Every claim on /proof by id: its status, after checking the rules each status must follow. */
+async function readClaims(page: Page): Promise<Record<string, string | null>> {
   const claims = page.locator('[data-testid^="claim-"][data-status]');
   expect(await claims.count()).toBeGreaterThanOrEqual(8);
   const statusOf: Record<string, string | null> = {};
@@ -295,85 +259,133 @@ test("/proof: Live claims link their evidence and the current read behind it, ot
   // the verifier runs in the visitor's browser, so it is Available, not Live.
   expect(statusOf.live).toBe("unchecked");
   expect(statusOf.verify).toBe("available");
-  // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
-  // /live's newest rows; /live is the second link.
-  const redeemed = page.getByTestId("claim-redeemed");
-  if ((await redeemed.getAttribute("data-status")) === "live") {
-    await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${FIRST_REDEEM_TX}?cluster=devnet`);
-    await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
-  } else {
-    test.info().annotations.push({ type: "devnet", description: `redeemed claim: ${await redeemed.innerText()}` });
-  }
   await expect(page.getByTestId("claim-server")).toHaveAttribute("data-status", "building");
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");
   // The same dated status as /judge step 6.
   await expect(page.getByTestId("claim-testflight")).toContainText(
     "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves. Status as of 2026-10-10.",
   );
+  return statusOf;
+}
 
-  // Proof of reserves: liabilities plus the difference equal the assets, as printed, compared
-  // exactly in base units. Every field must show an amount: a blank or garbled one fails.
-  const reserves = page.getByTestId("reserves");
-  const reservesFailure = page.locator("#reserves").getByTestId("read-failure");
-  await expect(reserves.or(reservesFailure)).toBeVisible();
-  if (await reserves.isVisible()) {
-    const baseUnits = async (id: string): Promise<bigint> => {
-      const text = (await page.getByTestId(id).innerText()).trim();
-      const m = text.match(/^(-?)(\d{1,3}(?:,\d{3})*)\.(\d{2,6}) sandbox USDC$/);
-      expect(m, `${id} shows "${text}", not an amount`).not.toBeNull();
-      const units = BigInt(m![2].replace(/,/g, "")) * BigInt(1_000_000) + BigInt(m![3].padEnd(6, "0"));
-      return m![1] === "-" ? -units : units;
-    };
-    const assets = await baseUnits("reserves-assets");
-    const liabilities = await baseUnits("reserves-liabilities");
-    const difference = await baseUnits("reserves-difference");
-    const parts = (await baseUnits("reserves-allowances")) + (await baseUnits("reserves-bonds")) + (await baseUnits("reserves-merchants"));
-    expect(liabilities).toBe(parts);
-    expect(assets - liabilities).toBe(difference);
-    await expect(page.getByTestId("reserves-verdict")).toHaveText(difference >= BigInt(0) ? "Covered" : "Short");
-    // The slots it names are in order: listed, then every balance, then listed again at or after it.
-    const stampText = await page.getByTestId("reserves-read-stamp").innerText();
-    const slots = stampText.match(/slot (\d+), every balance in one call \(accounts listed at slot (\d+) and checked again at slot (\d+)\)/);
-    expect(slots, stampText).not.toBeNull();
-    const [read, listed, check] = [Number(slots![1]), Number(slots![2]), Number(slots![3])];
-    expect(listed).toBeLessThanOrEqual(read);
-    expect(check).toBeGreaterThanOrEqual(read);
-    // The reserves claim is Live exactly when this panel shows a current read.
-    const current = (await page.getByTestId("reserves-read-stamp").getAttribute("data-current")) === "true";
-    expect(statusOf.reserves === "live").toBe(current);
-  } else {
-    expect(statusOf.reserves).toBe("unchecked");
+test("/proof: every read-backed claim Live from its current read, exact reserves, the commit count; no request leaves the site", async ({
+  page,
+  baseURL,
+  request,
+}) => {
+  const foreign = watchForeign(page, baseURL!);
+  await open(page, "/proof");
+  const statusOf = await readClaims(page);
+  // The success path, every run: each read-backed claim is Live from the stand-in's reads.
+  for (const id of Object.keys(READ_BACKED)) expect(statusOf[id], id).toBe("live");
+  // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
+  // /live's newest rows; /live is the second link.
+  const redeemed = page.getByTestId("claim-redeemed");
+  await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${FIRST_REDEEM_TX}?cluster=devnet`);
+  await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
+  await expect(page.getByTestId("claim-precompile").getByTestId("claim-evidence")).toContainText("active since slot 380592000");
+  await expect(page.getByTestId("claim-program-ci").getByTestId("claim-evidence")).toContainText(`(${EXPECTED.mainCommit})`);
+
+  // Proof of reserves: the stand-in's amounts exactly, and liabilities plus the difference
+  // equal the assets, as printed, compared in base units. Every field must show an amount.
+  await expect(page.locator("#reserves").getByTestId("read-failure")).toHaveCount(0);
+  await expect(page.getByTestId("reserves")).toBeVisible();
+  const baseUnits = async (id: string): Promise<bigint> => {
+    const text = (await page.getByTestId(id).innerText()).trim();
+    const m = text.match(/^(-?)(\d{1,3}(?:,\d{3})*)\.(\d{2,6}) sandbox USDC$/);
+    expect(m, `${id} shows "${text}", not an amount`).not.toBeNull();
+    const units = BigInt(m![2].replace(/,/g, "")) * BigInt(1_000_000) + BigInt(m![3].padEnd(6, "0"));
+    return m![1] === "-" ? -units : units;
+  };
+  for (const [id, expected] of [
+    ["reserves-assets", EXPECTED.reserves.assets],
+    ["reserves-allowances", EXPECTED.reserves.allowances],
+    ["reserves-bonds", EXPECTED.reserves.bonds],
+    ["reserves-merchants", EXPECTED.reserves.merchants],
+    ["reserves-liabilities", EXPECTED.reserves.liabilities],
+    ["reserves-difference", EXPECTED.reserves.difference],
+  ] as const) {
+    await expect(page.getByTestId(id)).toHaveText(`${expected} sandbox USDC`);
   }
+  const assets = await baseUnits("reserves-assets");
+  const liabilities = await baseUnits("reserves-liabilities");
+  const difference = await baseUnits("reserves-difference");
+  const parts = (await baseUnits("reserves-allowances")) + (await baseUnits("reserves-bonds")) + (await baseUnits("reserves-merchants"));
+  expect(liabilities).toBe(parts);
+  expect(assets - liabilities).toBe(difference);
+  await expect(page.getByTestId("reserves-verdict")).toHaveText(EXPECTED.reserves.verdict);
+  // The slots it names are in order: listed, then every balance, then listed again at or after it.
+  const stampText = await page.getByTestId("reserves-read-stamp").innerText();
+  const slots = stampText.match(/slot (\d+), every balance in one call \(accounts listed at slot (\d+) and checked again at slot (\d+)\)/);
+  expect(slots, stampText).not.toBeNull();
+  const [read, listed, check] = [Number(slots![1]), Number(slots![2]), Number(slots![3])];
+  expect(listed).toBeLessThanOrEqual(read);
+  expect(check).toBeGreaterThanOrEqual(read);
+  // The reserves claim is Live, and the panel shows the same current read.
+  await expect(page.getByTestId("reserves-read-stamp")).toHaveAttribute("data-current", "true");
   await expect(page.getByTestId("reserves-not-shown")).toContainText("Bounty and operator credits");
 
-  // Built this weekend: the compare link always; the numbers only from a successful read.
+  // Built this weekend: the stand-in's compare answer, exactly.
   await expect(page.getByTestId("built-label")).toContainText("since hacking started, Fri Oct 9 8:08 PM ET");
   await expect(page.getByTestId("compare-link")).toHaveAttribute(
     "href",
     "https://github.com/StephenSook/loka-pay/compare/pre-hacklanta-kit...main",
   );
-  const commits = page.getByTestId("built-commits");
-  const unavailable = page.getByTestId("built-unavailable");
-  await expect(commits.or(unavailable)).toBeVisible();
-  if (await commits.isVisible()) {
-    const shown = Number((await commits.innerText()).replace(/,/g, ""));
-    expect(shown).toBeGreaterThan(0);
-    // The same API, read by the test now. The page's read is cached for up to 5 minutes,
-    // so a commit may land in between; the page can be behind, never ahead.
-    const api = await request.get("https://api.github.com/repos/StephenSook/loka-pay/compare/pre-hacklanta-kit...main", {
-      headers: { accept: "application/vnd.github+json" },
-    });
-    if (api.ok()) {
-      const total = (await api.json()).total_commits as number;
-      expect(shown).toBeLessThanOrEqual(total);
-    } else {
-      test.info().annotations.push({ type: "github", description: `test's own compare read answered ${api.status()}` });
-    }
-  } else {
-    await expect(unavailable).toContainText("Could not read the commit count from GitHub.");
-  }
+  await expect(page.getByTestId("built-unavailable")).toHaveCount(0);
+  await expect(page.getByTestId("built-commits")).toHaveText(String(EXPECTED.commits));
+  await expect(page.getByTestId("built-authors")).toHaveText(String(EXPECTED.authors.length));
+  await expect(page.getByTestId("built-files")).toHaveText(String(EXPECTED.filesChanged));
+  await expect(page.getByTestId("built-additions")).toHaveText(String(EXPECTED.additions));
+  await expect(page.getByTestId("built-logins")).toContainText(EXPECTED.authors.join(", "));
+
+  // GITHUB_TOKEN: the server sent it to the configured GitHub API, and the page never shows it.
+  const seen = (await (await request.get(`${UPSTREAM}/__seen`)).json()) as { githubAuthorization: string[] };
+  expect(seen.githubAuthorization.length).toBeGreaterThan(0);
+  for (const header of seen.githubAuthorization) expect(header).toBe(`Bearer ${E2E_GITHUB_TOKEN}`);
+  expect(await page.content()).not.toContain(E2E_GITHUB_TOKEN);
   await page.waitForLoadState("networkidle");
   expect(foreign).toEqual([]);
+});
+
+// ---------- the failure path: the second e2e server, whose reads all fail ----------
+
+test("failing reads: /judge says each read failed and shows no fact and no workflow result", async ({ page }) => {
+  await open(page, `${FAILING_URL}/judge`);
+  await expect(page.getByTestId("program-facts")).toHaveCount(0);
+  const failure = page.getByTestId("read-failure");
+  await expect(failure).toContainText("Could not read the program from devnet.");
+  await expect(failure).toContainText(FAILED_READ);
+  await expect(page.getByTestId("ci-read-failure")).toContainText("Could not read the workflow results from GitHub.");
+  await expect(page.getByTestId("ci-read-stamp")).toHaveCount(0);
+  for (const file of WORKFLOW_FILES) {
+    // No read, no result: never a status from nowhere.
+    await expect(page.getByTestId(`ci-${file}`)).toHaveAttribute("data-result", "not-read");
+    await expect(page.getByTestId(`ci-${file}`).getByTestId("ci-result")).toHaveCount(0);
+  }
+  await expect(page.getByTestId("server-workflow-note")).toHaveCount(0);
+});
+
+test("failing reads: /trust says whether it can be upgraded is not known, and why", async ({ page }) => {
+  await open(page, `${FAILING_URL}/trust`);
+  const pilot = page.getByTestId("pilot-status");
+  await expect(pilot).toHaveAttribute("data-upgradeability", "unknown");
+  await expect(pilot).toHaveText("Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.");
+  await expect(page.getByTestId("read-failure")).toContainText(FAILED_READ);
+  await expect(page.getByTestId("upgrade-authority")).toHaveCount(0);
+});
+
+test("failing reads: /proof calls nothing Live, says why for each claim, and shows no reserves or count", async ({ page }) => {
+  await open(page, `${FAILING_URL}/proof`);
+  const statusOf = await readClaims(page);
+  expect(Object.values(statusOf)).not.toContain("live");
+  for (const id of Object.keys(READ_BACKED)) {
+    expect(statusOf[id], id).toBe("unchecked");
+    await expect(page.getByTestId(`claim-${id}`).getByTestId("claim-note")).toContainText(FAILED_READ);
+  }
+  await expect(page.getByTestId("reserves")).toHaveCount(0);
+  await expect(page.locator("#reserves").getByTestId("read-failure")).toContainText("Could not read the reserves from devnet.");
+  await expect(page.getByTestId("built-commits")).toHaveCount(0);
+  await expect(page.getByTestId("built-unavailable")).toContainText("Could not read the commit count from GitHub.");
 });
 
 // ---------- /live against intercepted devnet traffic ----------
