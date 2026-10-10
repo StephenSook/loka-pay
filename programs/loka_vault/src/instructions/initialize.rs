@@ -23,7 +23,8 @@ pub struct InitializeVault<'info> {
     pub vault: Account<'info, VaultAuthority>,
     #[account(constraint = mint.decimals == MINT_DECIMALS @ VaultError::InvalidMintDecimals)]
     pub mint: Account<'info, Mint>,
-    #[account(init, payer = authority, associated_token::mint = mint, associated_token::authority = vault)]
+    // A third party may create this canonical ATA before initialization.
+    #[account(init_if_needed, payer = authority, associated_token::mint = mint, associated_token::authority = vault)]
     pub vault_tokens: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,

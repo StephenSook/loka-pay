@@ -83,6 +83,9 @@ export async function fixture(): Promise<Fixture> {
     };
     const stranger = Keypair.generate();
     await send(f, [SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: stranger.publicKey, lamports: 100_000_000 })]);
+    // Anyone can precreate a PDA's ATA. This must not deny vault initialization.
+    const precreated = await getOrCreateAssociatedTokenAccount(provider.connection, stranger, mint, vault, true);
+    expect(precreated.address.equals(vaultTokens)).toBe(true);
     // An arbitrary signer cannot seize deployment configuration before its owner initializes.
     await expect(program.methods.initializeVault(0).accountsStrict({ ...accounts, authority: stranger.publicKey })
       .signers([stranger]).rpc()).rejects.toThrow(/InvalidAuthority/);

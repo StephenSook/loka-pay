@@ -40,13 +40,19 @@ Verified locally on 2026-10-09 after the upstream merge at `8ddd43a`:
 - `pnpm typecheck`, `cargo fmt --all --check` and the frozen pnpm install pass.
 - `scripts/assert-secp256r1-active.sh` reports the local feature active from
   epoch 0 and stops its validator afterward.
-- The local SBF artifact is 359712 bytes. This is a local build measurement,
+- The reviewed local SBF artifact is 364384 bytes after the vault ATA fix.
+  This is a local build measurement,
   not a verified-build or deployed-program claim.
 - Test first: the initial integration run failed because the scaffold had no
   `initializeVault` method. The implementation was added after those tests.
 - GitHub Actions has not run on this change. No external funding, faucet
   request or devnet deployment was performed. Task 1.4 remains incomplete
   until its approved deployment and public pins are verified.
+
+The subsequent independent review and ATA regression are recorded in `REVIEW.md`.
+All 34 TypeScript tests and 3 Rust tests also pass with that fix. The persistent
+`ignore-scripts=true` package policy avoids executing optional dependency install
+scripts during automatic pnpm installs.
 
 ## Task 0.4 evidence
 

@@ -96,8 +96,11 @@ when used. Registration alone proves no possession of a key.
 Bond payouts, reclaiming expired allowances, batching, fees, refunds and WebAuthn
 are separate tasks and are not implemented. Unspent funds and bonds remain locked
 in this T1 version. Upgrade authority can replace the program and change custody
-rules; this program is not frozen or audited. Independent adversarial review is
-still required before merge. Shared contracts and PLAN.md are unchanged in Gate B.
+rules; this program is not frozen or audited. A separate review agent found an
+initialization denial of service, fixed by accepting a precreated canonical vault
+ATA. The second review was clean; see `REVIEW.md`. Human owner review and remote
+CI remain required before merge. The withdrawal and expiry contracts are now
+announced in PLAN.md; the user controls their separate commit.
 
 ## Dependency review
 

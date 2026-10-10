@@ -22,7 +22,7 @@ custom-panic = []
 
 
 [dependencies]
-anchor-lang = "=1.1.2"
+anchor-lang = { version = "=1.1.2", features = ["init-if-needed"] }
 anchor-spl = { version = "=1.1.2", default-features = false, features = ["token", "associated_token"] }
 solana-sha256-hasher = { version = "=3.0.0", features = ["sha2"] }
 solana-instructions-sysvar = "=3.0.1"
