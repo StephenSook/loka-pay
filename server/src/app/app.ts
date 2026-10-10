@@ -51,7 +51,9 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
     if (origin && options.origins.includes(origin)) {
       reply.header('access-control-allow-origin', origin).header('vary', 'Origin')
         .header('access-control-allow-methods', 'GET, POST, OPTIONS')
-        .header('access-control-allow-headers', 'Content-Type');
+        .header('access-control-allow-headers', 'Content-Type')
+        // Lets /send read Retry-After on a 429 and say when to try again.
+        .header('access-control-expose-headers', 'Retry-After');
     }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     const now = Date.now();

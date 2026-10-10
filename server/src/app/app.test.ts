@@ -87,6 +87,20 @@ describe('routing, CORS and the burst guard', () => {
     const preflight = await app.inject({ method: 'OPTIONS', url: '/v1/notes', headers: { origin: 'https://zerobars.us' } });
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers['access-control-allow-methods']).toContain('POST');
+    expect(ours.headers['access-control-expose-headers']).toBe('Retry-After');
+    expect(theirs.headers['access-control-expose-headers']).toBeUndefined();
+    await app.close();
+  });
+
+  test('a 429 to our origin exposes Retry-After so the browser can read it', async () => {
+    const app = await buildApp(options({ burstLimit: 1 }));
+    const from = () => app.inject({ url: '/api/health', remoteAddress: '198.51.100.7', headers: { origin: 'https://zerobars.us' } });
+    expect((await from()).statusCode).toBe(200);
+    const limited = await from();
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['access-control-allow-origin']).toBe('https://zerobars.us');
+    expect(limited.headers['access-control-expose-headers']).toBe('Retry-After');
+    expect(limited.headers['retry-after']).toBe('60');
     await app.close();
   });
 
