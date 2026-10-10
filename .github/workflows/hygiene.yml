@@ -67,6 +67,11 @@ jobs:
           python3 tools/hygiene/no_tracking.py
           python3 -m unittest tools/hygiene/test_no_tracking.py -v
 
+      - name: EXP-PAY-001 measurement decoder and classifier (task 3.6; recorded fixtures, no network)
+        run: |
+          set -euo pipefail
+          python3 -m unittest tools/measure/test_exp_pay_001.py -v
+
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: tools/vectors/package.json
