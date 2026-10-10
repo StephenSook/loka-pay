@@ -31,20 +31,26 @@ export class RegistrationService {
     const request = validateRegistration(kind, input);
     const pool = this.options.teamKeys.includes(request.keyHash) ? 'team' : 'public';
     const policy = this.options.policies[pool]; const now = this.now();
-    const job: Job = { id: randomUUID(), plan: { ...request, kind, pool, policy, expiry: now + policy.lifetimeSeconds },
+    let job: Job = { id: randomUUID(), plan: { ...request, kind, pool, policy, expiry: now + policy.lifetimeSeconds },
       attempt: null, result: null };
-    if (!await this.options.store.claim(job, now)) {
+    const token = await this.options.store.claim(job, now);
+    if (!token) {
       return this.resolve(await this.options.store.get(kind, request.keyHash), false);
     }
-    // Only this request can sign/send. Pollers and restarted processes only observe the journal.
+    // A takeover keeps the original name, pool, policy and expiry. Renewal has a new plan and job id.
+    job = await this.options.store.get(kind, request.keyHash);
+    // Only a fenced winner can save then send. A saved attempt is never taken over by the lease.
     let reserved = false;
     try {
       if (kind === 'merchant') {
-        const existing = await this.options.chain.existingMerchant(request.publicKey);
+        const existing = await this.options.chain.existingMerchant(job.plan.publicKey);
         if (existing) {
           reserved = true;
           const attempt = { signature: existing, rawTransaction: '', blockhash: '', lastValidBlockHeight: 0 };
-          await this.options.store.saveAttempt(job, job.plan, attempt); job.attempt = attempt;
+          if (!await this.options.store.saveAttempt(job, job.plan, attempt, token)) {
+            return this.resolve(await this.options.store.get(kind, request.keyHash), false);
+          }
+          job.attempt = attempt;
           return await this.complete(job, existing, false);
         }
       }
@@ -58,14 +64,17 @@ export class RegistrationService {
         const day = new Date(this.now() * 1000).toISOString().slice(0, 10);
         // Mark uncertainty before the database call: a lost response may still have reserved funds.
         reserved = true;
-        const admitted = await this.options.store.reserve(pool, day, quote.cost, policy.daily);
+        const admitted = await this.options.store.reserve(job.plan.pool, day, quote.cost, job.plan.policy.daily, { id: job.id, token });
         if (!admitted) {
           if (job.attempt) return this.pending(job);
           reserved = false;
           throw new HttpError(429, 'budget_exhausted');
         }
         const attempt = await this.options.chain.sign(quote, plan);
-        await this.options.store.saveAttempt(job, plan, attempt);
+        // The token and lease are checked in the same durable write as the signature history.
+        if (!await this.options.store.saveAttempt(job, plan, attempt, token)) {
+          return this.resolve(await this.options.store.get(kind, request.keyHash), false);
+        }
         job.plan = plan; job.attempt = attempt;
         await this.options.chain.send(attempt);
         const outcome = await this.options.chain.observe(attempt, plan);
@@ -75,8 +84,15 @@ export class RegistrationService {
       if (reserved) return this.pending(job);
       throw new HttpError(503, 'chain_unavailable');
     } catch (error) {
-      if (reserved) return this.pending(job);
-      await this.options.store.releaseUnsigned(job.id);
+      if (reserved) {
+        try {
+          const current = await this.options.store.get(kind, request.keyHash);
+          return current.result ?? this.pending(current);
+        } catch { return this.pending(job); }
+      }
+      if (!await this.options.store.releaseUnsigned(job.id, token)) {
+        return this.resolve(await this.options.store.get(kind, request.keyHash), false);
+      }
       if (error instanceof HttpError) throw error;
       throw new HttpError(503, 'chain_unavailable');
     }
