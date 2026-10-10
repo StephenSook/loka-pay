@@ -197,7 +197,12 @@ export async function resolveRead<T>(input: ResolveInput<T>): Promise<Read<T>> {
 
   if (input.needCurrent) {
     const kept = input.lastGoodRead();
-    if (kept && input.now() - kept.readAtMs <= (input.reuseForMs ?? input.currentForMs)) return answer(kept, null);
+    // A read that failed after the kept one (the cache's background refresh, another page's
+    // read) makes it stale: it is not reused however young, and if no new read succeeds the
+    // page shows that failure.
+    const known = input.lastFailure();
+    const keptFailedSince = kept !== null && known !== null && known.atMs > kept.readAtMs;
+    if (kept && !keptFailedSince && input.now() - kept.readAtMs <= (input.reuseForMs ?? input.currentForMs)) return answer(kept, null);
     let failure: FailedRead;
     try {
       const entry = await input.readNow();
@@ -214,7 +219,10 @@ export async function resolveRead<T>(input: ResolveInput<T>): Promise<Read<T>> {
     }
     const entry = newest(kept, cachedEntry);
     if (!entry) return { ok: false, ...failure };
-    return answer(entry, entry.readAtMs > failure.atMs ? null : failure);
+    if (entry.readAtMs > failure.atMs) return answer(entry, null);
+    // When no read was sent now, the recorded failure since the entry says more than "not made".
+    const recorded = known !== null && known.atMs > entry.readAtMs ? known : null;
+    return answer(entry, failure.notMade && recorded ? recorded : failure);
   }
 
   let entry: Stamped<T> | null = null;

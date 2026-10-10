@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { ReadGate, resolveRead, shownAt, shownTogether, type FailedRead, type GateLimits, type Read, type ResolveInput, type Stamped } from "../lib/read-state";
+import { ReadGate, ReadNotMade, resolveRead, shownAt, shownTogether, type FailedRead, type GateLimits, type Read, type ResolveInput, type Stamped } from "../lib/read-state";
 import { RpcError } from "../lib/solana";
 
 // lib/read-state.ts decides what a cached server read hands the page. A page must never
@@ -404,4 +404,47 @@ test("shownTogether stamps every read of a page with the same render time", () =
   expect(x.ok && x.shownAtMs).toBeGreaterThan(1);
   // Read at time 1, shown now: long past the window.
   expect(x.ok && x.current).toBe(false);
+});
+
+// A recent success followed by a newer failure (recorded by the cache's background refresh or
+// another page's read) is not current: needCurrent does not reuse it, and if no new read
+// succeeds the page shows the failure.
+test.describe("a newer recorded failure outranks a recent kept success", () => {
+  const recorded: FailedRead = { reason: "node is behind", atMs: NOW - 1_000 };
+
+  test("4 s old success, then a failure, and no new read can be made: not current, showing the failure", async () => {
+    const i = input({
+      cached: new Error("nothing cached"),
+      kept: { data: "kept", readAtMs: NOW - 4_000 },
+      lastFailure: recorded,
+      readNow: new ReadNotMade("this server already made 3 reads in the last 10 s, so it did not read again"),
+      needCurrent: true,
+    });
+    const read = await resolveRead(i.value);
+    expect(read).toEqual(ok("kept", NOW - 4_000, false, recorded));
+    // It tried to read again instead of reusing the kept read.
+    expect(i.calls()).toBe(1);
+  });
+
+  test("4 s old success, then a failure, then this page's own read fails: not current, showing that failure", async () => {
+    const i = input({
+      cached: new Error("nothing cached"),
+      kept: { data: "kept", readAtMs: NOW - 4_000 },
+      lastFailure: recorded,
+      readNow: new Error("could not reach api.devnet.solana.com"),
+      needCurrent: true,
+    });
+    expect(await resolveRead(i.value)).toEqual(ok("kept", NOW - 4_000, false, { reason: "could not reach api.devnet.solana.com", atMs: NOW }));
+  });
+
+  test("4 s old success, then a failure, then a new read succeeds: the new read, current", async () => {
+    const i = input({ cached: new Error("not used"), kept: { data: "kept", readAtMs: NOW - 4_000 }, lastFailure: recorded, readNow: { data: "now", readAtMs: NOW }, needCurrent: true });
+    expect(await resolveRead(i.value)).toEqual(ok("now", NOW, true));
+  });
+
+  test("a failure older than the kept success is history: the kept read is reused", async () => {
+    const i = input({ cached: new Error("not used"), kept: { data: "kept", readAtMs: NOW - 4_000 }, lastFailure: { reason: "earlier", atMs: NOW - 9_000 }, needCurrent: true });
+    expect(await resolveRead(i.value)).toEqual(ok("kept", NOW - 4_000, true));
+    expect(i.calls()).toBe(0);
+  });
 });
