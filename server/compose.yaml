@@ -50,6 +50,22 @@ services:
       PUBLIC_DAILY_FEE_LAMPORTS: ${PUBLIC_DAILY_FEE_LAMPORTS:-100000000}
       NOTE_DAILY_FEE_LAMPORTS: ${NOTE_DAILY_FEE_LAMPORTS:-200000000}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://zerobars.us,https://www.zerobars.us}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      # Phase 3 routes (server/src/app/phase3.ts) stay off until their values are set in /etc/loka-pay/api.env.
+      # REMIT_SEND_KEYPAIR_PATH points inside the container, e.g. /run/keys/funding-send.json.
+      TRUST_ENABLED: ${TRUST_ENABLED:-}
+      RESERVES_ENABLED: ${RESERVES_ENABLED:-}
+      VOLUME_MEASUREMENT_PATH: ${VOLUME_MEASUREMENT_PATH:-}
+      VOLUME_BENCHMARK_PATH: ${VOLUME_BENCHMARK_PATH:-}
+      VOLUME_BLOCK_COMPUTE_UNITS: ${VOLUME_BLOCK_COMPUTE_UNITS:-}
+      VOLUME_BLOCK_LIMIT_SOURCE: ${VOLUME_BLOCK_LIMIT_SOURCE:-}
+      REMIT_SEND_KEYPAIR_PATH: ${REMIT_SEND_KEYPAIR_PATH:-}
+      REMIT_CAP_UNITS: ${REMIT_CAP_UNITS:-}
+      REMIT_LIFETIME_SECONDS: ${REMIT_LIFETIME_SECONDS:-}
+      REMIT_EARMARKS: ${REMIT_EARMARKS:-}
+      REMIT_DAILY_UNITS: ${REMIT_DAILY_UNITS:-}
+      REMIT_DAILY_FUNDER_LAMPORTS: ${REMIT_DAILY_FUNDER_LAMPORTS:-}
+      REMIT_DAILY_FEE_LAMPORTS: ${REMIT_DAILY_FEE_LAMPORTS:-}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
