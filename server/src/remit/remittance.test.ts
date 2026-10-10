@@ -254,3 +254,29 @@ test('a saved pending attempt is not reopened even after its plan and lease expi
   expect((await f.store.get('1')).attempt).toEqual(row.attempt);
   expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
 });
+
+test('an observation error preserves the saved attempt, claim and budget while returning pending', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '7' };
+  f.chain.observe.mockResolvedValueOnce(null);
+  const first = await f.service.submit(input, 'venue');
+  expect(first).toEqual({ statusCode: 202, body: { status: 'pending', recipientAllowanceId: '1', signature: 'fixture-signature', retryAfter: 2 } });
+  // Expired time must not turn a saved attempt into an unsigned recovery or renewal.
+  await f.db.query(`UPDATE remittance_jobs SET lease_expires_at=0,plan=jsonb_set(plan,'{expiry}','1799999999'::jsonb)`);
+  const job = await f.db.query('SELECT * FROM remittance_jobs WHERE recipient=$1', ['1']);
+  const budget = await f.db.query('SELECT * FROM remittance_budgets');
+  expect(job.rows[0].attempt).not.toBeNull(); expect(job.rows[0].result).toBeNull();
+  expect(String(budget.rows[0].units)).toBe('7');
+  const claim = vi.spyOn(f.store, 'claim'), reserve = vi.spyOn(f.store, 'reserve'), save = vi.spyOn(f.store, 'save');
+  f.chain.observe.mockRejectedValue(new Error('RPC observation unavailable'));
+  for (let poll = 0; poll < 2; poll++) {
+    expect(await f.service.submit({ ...input, amountUnits: '9' }, 'venue')).toEqual(first);
+    expect((await f.db.query('SELECT * FROM remittance_jobs WHERE recipient=$1', ['1'])).rows).toEqual(job.rows);
+    expect((await f.db.query('SELECT * FROM remittance_budgets')).rows).toEqual(budget.rows);
+  }
+  expect(f.chain.observe).toHaveBeenCalledTimes(3);
+  expect(f.chain.observe).toHaveBeenNthCalledWith(2, job.rows[0].attempt, job.rows[0].plan);
+  expect(f.chain.observe).toHaveBeenNthCalledWith(3, job.rows[0].attempt, job.rows[0].plan);
+  expect(claim).not.toHaveBeenCalled(); expect(reserve).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  expect(f.chain.quote).toHaveBeenCalledTimes(1); expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
