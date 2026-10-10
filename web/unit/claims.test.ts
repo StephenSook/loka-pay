@@ -23,7 +23,7 @@ function facts(): ProgramFacts {
       value: { amountUnits: "7000000", decimals: 6, mint: PINS.mint, owner: PINS.accounts.vault, mintMatchesPins: true, ownerIsVault: true },
     },
     counts: { ok: true, value: { byType: { Allowance: 1, Merchant: 1, VaultAuthority: 1, VaultConfig: 1 }, other: 0 } },
-    init: { ok: true, value: { found: true, slot: 509_428_827, blockTimeMs: NOW - 80_000_000, failed: false, actions: ["initialize_vault"] } },
+    init: { ok: true, value: { found: true, slot: 509_428_827, blockTimeMs: NOW - 80_000_000, result: "succeeded", actions: ["initialize_vault"] } },
     secp256r1: { ok: true, value: { exists: true, activatedAt: 380_592_000, active: true, slot: 600_000_000 } },
   };
 }

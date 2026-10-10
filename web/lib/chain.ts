@@ -14,7 +14,7 @@
 
 import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
-import { summarizeTransaction } from "./logs";
+import { summarizeTransaction, type TxResult } from "./logs";
 import { PINS } from "./pins";
 import { serverReadOptions } from "./server-rpc";
 import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOptions, type RpcOutcome } from "./solana";
@@ -142,7 +142,7 @@ export interface ProgramFacts {
   config: Part<{ exists: boolean; mint: string | null; cluster: number | null; mintMatchesPins: boolean }>;
   vault: Part<VaultTokenFacts>;
   counts: Part<{ byType: Record<AccountName, number>; other: number }>;
-  init: Part<{ found: boolean; slot: number | null; blockTimeMs: number | null; failed: boolean; actions: string[] }>;
+  init: Part<{ found: boolean; slot: number | null; blockTimeMs: number | null; result: TxResult | null; actions: string[] }>;
   /**
    * The runtime feature behind Solana's secp256r1 precompile, read at the same slot as the
    * program: active when it was activated at or before that slot.
@@ -249,14 +249,14 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
   }
 
   const initPart = part(init, (result) => {
-    if (result === null) return { found: false, slot: null, blockTimeMs: null, failed: false, actions: [] };
+    if (result === null) return { found: false, slot: null, blockTimeMs: null, result: null, actions: [] };
     const summary = summarizeTransaction(result, PINS.programId);
     if (!summary) throw new RpcError("shape", "the initialize transaction answer had an unexpected shape");
     return {
       found: true,
       slot: summary.slot,
       blockTimeMs: summary.blockTime === null ? null : summary.blockTime * 1000,
-      failed: summary.failed,
+      result: summary.result,
       actions: summary.actions,
     };
   });

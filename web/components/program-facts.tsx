@@ -164,9 +164,9 @@ function Facts({
         <Fact label="Initialize transaction" testId="fact-init">
           <span className="flex flex-col gap-1">
             {partOrNotRead(init, (i) =>
-              i.found ? (
+              i.found && i.result !== null ? (
                 <span className="flex flex-wrap items-center gap-2">
-                  <TxStatusChip failed={i.failed} />
+                  <TxStatusChip result={i.result} />
                   <span>
                     {i.actions.length > 0 ? <code className="font-mono text-sm">{i.actions.join(", ")}</code> : "no loka_vault instruction in its logs"}
                     {i.slot !== null ? <>, slot {i.slot}</> : null}

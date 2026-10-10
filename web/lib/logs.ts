@@ -104,19 +104,33 @@ export interface Amount {
   units: string;
 }
 
+/**
+ * How a transaction ended, from the `err` field the node sent: null is "succeeded", an error
+ * is "failed", and a missing or malformed field (Solana allows a transaction's metadata to be
+ * null) is "unknown". Never guessed: an unknown result is shown as unknown.
+ */
+export type TxResult = "succeeded" | "failed" | "unknown";
+
+/** The result an `err` field says. `undefined` (the field was missing) is unknown. */
+export function resultOf(err: unknown): TxResult {
+  if (err === null) return "succeeded";
+  if ((typeof err === "object" && err !== null) || (typeof err === "string" && err.length > 0)) return "failed";
+  return "unknown";
+}
+
 export interface TxSummary {
   signature: string;
   slot: number | null;
   /** Unix seconds, or null when not known yet (a notification carries none). */
   blockTime: number | null;
-  failed: boolean;
+  result: TxResult;
   /** What ran, for the row title: loka_vault instructions, or a loader action. */
   actions: string[];
   /**
-   * Amounts from the program's events and the open_allowance arguments. Always empty for a
-   * failed transaction: a failed transaction moved nothing, its events were rolled back,
-   * and its instruction data was never checked by the program, so anyone could type any
-   * amount into it.
+   * Amounts from the program's events and the open_allowance arguments. Empty unless the
+   * transaction is known to have succeeded: a failed transaction moved nothing, its events
+   * were rolled back, and its instruction data was never checked by the program, so anyone
+   * could type any amount into it; for an unknown result, nobody can say which it was.
    */
   amounts: Amount[];
   error: ProgramError | null;
@@ -133,7 +147,10 @@ function amountsFromEvents(events: VaultEvent[]): Amount[] {
   );
 }
 
-/** A summary from log lines alone (a logsSubscribe notification). */
+/**
+ * A summary from log lines alone (a logsSubscribe notification). `err` is the field as the
+ * node sent it; pass `undefined` when the answer had none, and the result is unknown.
+ */
 export function summarizeLogs(
   signature: string,
   slot: number | null,
@@ -144,16 +161,16 @@ export function summarizeLogs(
   const parsed = parseProgramLogs(logs, programId);
   const actions = [...parsed.instructions];
   if (parsed.loader) actions.push(parsed.loader === "deployed" ? "program deployed" : "program upgraded");
-  const failed = err !== null && err !== undefined;
+  const result = resultOf(err);
   return {
     signature,
     slot,
     blockTime: null,
-    failed,
+    result,
     actions,
-    amounts: failed ? [] : amountsFromEvents(parsed.events),
+    amounts: result === "succeeded" ? amountsFromEvents(parsed.events) : [],
     error: parsed.error,
-    errText: err === null || err === undefined ? null : JSON.stringify(err),
+    errText: result === "failed" ? JSON.stringify(err) : null,
     truncated: parsed.truncated,
   };
 }
@@ -167,7 +184,7 @@ interface RawInstruction {
 interface RawTransaction {
   slot: number;
   blockTime: number | null;
-  meta: { err: unknown; logMessages?: string[] | null; loadedAddresses?: { writable?: string[]; readonly?: string[] } } | null;
+  meta: { err?: unknown; logMessages?: string[] | null; loadedAddresses?: { writable?: string[]; readonly?: string[] } } | null;
   transaction: { signatures: string[]; message: { accountKeys: string[]; instructions: RawInstruction[] } };
 }
 
@@ -190,9 +207,13 @@ function isRawTransaction(value: unknown): value is RawTransaction {
  */
 export function summarizeTransaction(value: unknown, programId: string): TxSummary | null {
   if (!isRawTransaction(value)) return null;
-  const { transaction, meta } = value;
+  const { transaction } = value;
+  // Solana allows null metadata, and an answer may lack its err field: both leave the result
+  // unknown, never "succeeded".
+  const meta = typeof value.meta === "object" && value.meta !== null ? value.meta : null;
+  const err = meta !== null && "err" in meta ? meta.err : undefined;
   const signature = transaction.signatures[0];
-  const base = summarizeLogs(signature, value.slot, meta?.err ?? null, meta?.logMessages ?? [], programId);
+  const base = summarizeLogs(signature, value.slot, err, meta?.logMessages ?? [], programId);
   base.blockTime = value.blockTime ?? null;
   const keys = [
     ...transaction.message.accountKeys,
@@ -213,7 +234,7 @@ export function summarizeTransaction(value: unknown, programId: string): TxSumma
       if (name) fromData.push(name);
       // Only a transaction that succeeded deposited anything; the data of a failed one is
       // whatever the sender typed.
-      if (name === "open_allowance" && !base.failed) {
+      if (name === "open_allowance" && base.result === "succeeded") {
         try {
           const args = decodeOpenAllowanceArgs(data);
           base.amounts.push({ label: "Deposited (cap + bond)", units: (args.cap + args.bond).toString() });

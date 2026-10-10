@@ -5,11 +5,13 @@ import {
   STALL_AFTER_MS,
   keepNewest,
   loadDetails,
+  mergeDetails,
   mergeHistory,
   type Details,
   type FeedClock,
   type Row,
 } from "../lib/program-feed";
+import { summarizeTransaction } from "../lib/logs";
 import { PINS } from "../lib/pins";
 
 // The /live engine's bookkeeping (lib/program-feed.ts). Rows here are TEST FIXTURES with
@@ -20,7 +22,7 @@ function row(signature: string, slot: number | null, details: Details = "read", 
     signature,
     slot,
     blockTime: null,
-    failed: false,
+    result: "succeeded",
     actions: [],
     amounts: [],
     error: null,
@@ -78,6 +80,30 @@ test.describe("merging a history read", () => {
     ]);
     // A row reset for another try keeps what it had, such as the New mark from the socket.
     expect(changed.find((r) => r.signature === "unread-live-row")?.arrivedLive).toBe(true);
+  });
+});
+
+// A row the signature list says failed keeps that result when getTransaction's answer does
+// not say how it ended (null metadata): it never becomes a success or an unknown.
+test.describe("merging details into a row", () => {
+  const P = PINS.programId;
+  const failedRow: Row = { ...row("fixture-failed", 70, "reading"), result: "failed", errText: '{"InstructionError":[0,{"Custom":6011}]}' };
+  const answer = (meta: unknown) =>
+    summarizeTransaction({ slot: 70, blockTime: 1_791_700_000, meta, transaction: { signatures: ["fixture-failed"], message: { accountKeys: [P], instructions: [] } } }, P)!;
+
+  test("an answer with null metadata keeps the known failure and its error text", () => {
+    const merged = mergeDetails(failedRow, answer(null));
+    expect(merged.result).toBe("failed");
+    expect(merged.errText).toBe('{"InstructionError":[0,{"Custom":6011}]}');
+    expect(merged.amounts).toEqual([]);
+    expect(merged.details).toBe("read");
+    expect(merged.blockTime).toBe(1_791_700_000);
+  });
+
+  test("an answer that states the result is taken", () => {
+    expect(mergeDetails(failedRow, answer({ err: null, logMessages: [] })).result).toBe("succeeded");
+    const unknownRow: Row = { ...row("fixture-failed", 70, "reading"), result: "unknown" };
+    expect(mergeDetails(unknownRow, answer({ err: { InstructionError: [0, { Custom: 1 }] }, logMessages: [] })).result).toBe("failed");
   });
 });
 

@@ -24,7 +24,7 @@
 // answer in a batch is read on its own: one this page cannot read marks only its own row
 // "unavailable", and the other rows of the batch still get their details.
 
-import { summarizeLogs, summarizeTransaction, type TxSummary } from "./logs";
+import { resultOf, summarizeLogs, summarizeTransaction, type TxResult, type TxSummary } from "./logs";
 import { WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
 
 export const HISTORY_LIMIT = 20;
@@ -143,11 +143,12 @@ export async function loadSignatures(programId: string): Promise<Row[]> {
     signature: s.signature,
     slot: s.slot,
     blockTime: typeof s.blockTime === "number" ? s.blockTime : null,
-    failed: s.err !== null && s.err !== undefined,
+    // A missing err field is an unknown result, never a success.
+    result: resultOf(s.err),
     actions: [],
     amounts: [],
     error: null,
-    errText: s.err === null || s.err === undefined ? null : JSON.stringify(s.err),
+    errText: resultOf(s.err) === "failed" ? JSON.stringify(s.err) : null,
     truncated: false,
     arrivedLive: false,
     seenAtMs: null,
@@ -187,6 +188,29 @@ export async function loadDetails(signatures: string[], programId: string): Prom
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A row with the details getTransaction answered. An answer that does not say how the
+ * transaction ended (null metadata, no err field) keeps the result an earlier answer gave,
+ * so a row known to have failed is never turned into a success or an unknown.
+ */
+export function mergeDetails(current: Row, summary: TxSummary): Row {
+  const known = summary.result !== "unknown";
+  return {
+    ...current,
+    ...summary,
+    blockTime: summary.blockTime ?? current.blockTime,
+    result: known ? summary.result : current.result,
+    errText: known ? summary.errText : current.errText,
+    error: summary.error ?? current.error,
+    details: "read",
+  };
+}
+
+/** The words for a result, for the screen-reader announcement. */
+function resultWords(result: TxResult): string {
+  return result === "unknown" ? "result unknown" : result;
+}
 
 interface LogsNotification {
   method?: unknown;
@@ -319,7 +343,7 @@ export class ProgramFeed {
           // Dropped past MAX_ROWS while its details were being read: not added back.
           if (!current) return;
           if (outcome.kind === "read") {
-            this.setRow({ ...current, ...outcome.summary, blockTime: outcome.summary.blockTime ?? current.blockTime, details: "read" });
+            this.setRow(mergeDetails(current, outcome.summary));
           } else if (outcome.kind === "unread" || outcome.kind === "unavailable") {
             this.setRow({ ...current, details: outcome.kind });
           }
@@ -340,13 +364,14 @@ export class ProgramFeed {
     const slotValue = message.params?.result?.context?.slot;
     const slot = typeof slotValue === "number" ? slotValue : null;
     const logs = value.logs.filter((l): l is string => typeof l === "string");
-    const summary = summarizeLogs(value.signature, slot, value.err ?? null, logs, this.programId);
+    // A notification without an err field leaves the result unknown until getTransaction says.
+    const summary = summarizeLogs(value.signature, slot, value.err, logs, this.programId);
     const now = this.clock.now();
     // A transaction already shown from history keeps its fuller details.
     if (this.rows.has(summary.signature)) return;
     this.setRow({ ...summary, arrivedLive: true, seenAtMs: now, details: "reading" });
     const what = summary.actions.join(", ") || "no loka_vault instruction";
-    this.update({ lastEventMs: now, announcement: `New transaction: ${what}, ${summary.failed ? "failed" : "succeeded"}.` });
+    this.update({ lastEventMs: now, announcement: `New transaction: ${what}, ${resultWords(summary.result)}.` });
     void this.enrichLive(summary.signature);
   }
 
@@ -367,7 +392,7 @@ export class ProgramFeed {
       const current = this.rows.get(signature);
       if (!current || !this.running) return;
       if (outcome.kind === "read") {
-        this.setRow({ ...current, ...outcome.summary, blockTime: outcome.summary.blockTime ?? current.blockTime, details: "read" });
+        this.setRow(mergeDetails(current, outcome.summary));
         this.update({});
         return;
       }

@@ -4,6 +4,7 @@
 import { OutlineChip, StateChip } from "./chips";
 import { AlertIcon, ArrowUpRightIcon, CheckIcon, CircleIcon, ClockIcon } from "./icons";
 import type { ClaimStatus } from "@/lib/claims";
+import type { TxResult } from "@/lib/logs";
 import type { FailedRead } from "@/lib/read-state";
 import { formatAge, formatEt, isoUtc } from "@/lib/time";
 
@@ -147,11 +148,10 @@ export function ClaimChip({ status }: { status: ClaimStatus }) {
   return <StateChip state="warning" label="Not checked" testId="claim-status" />;
 }
 
-export function TxStatusChip({ failed, errorName }: { failed: boolean; errorName?: string | null }) {
-  return failed ? (
-    <StateChip state="failed" label={errorName ? `Failed: ${errorName}` : "Failed"} testId="tx-status" />
-  ) : (
-    <OutlineChip label="Succeeded" Icon={CheckIcon} testId="tx-status" />
-  );
+/** Succeeded, Failed, or Result unknown when the node's answer did not say (lib/logs.ts TxResult). */
+export function TxStatusChip({ result, errorName }: { result: TxResult; errorName?: string | null }) {
+  if (result === "failed") return <StateChip state="failed" label={errorName ? `Failed: ${errorName}` : "Failed"} testId="tx-status" />;
+  if (result === "unknown") return <StateChip state="warning" label="Result unknown" testId="tx-status" />;
+  return <OutlineChip label="Succeeded" Icon={CheckIcon} testId="tx-status" />;
 }
 

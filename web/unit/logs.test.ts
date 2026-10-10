@@ -55,7 +55,7 @@ test("summarizeTransaction on the recorded initialize transaction", () => {
     signature: "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R",
     slot: 509428827,
     blockTime: 1791608579,
-    failed: false,
+    result: "succeeded",
     actions: ["initialize_vault"],
     amounts: [],
     error: null,
@@ -65,7 +65,7 @@ test("summarizeTransaction on the recorded initialize transaction", () => {
 test("summarizeTransaction on the recorded deploy: the loader deployed this program", () => {
   const summary = summarizeTransaction(recorded.deploy, P);
   expect(summary?.actions).toEqual(["program deployed"]);
-  expect(summary?.failed).toBe(false);
+  expect(summary?.result).toBe("succeeded");
   expect(summary?.slot).toBe(509428340);
 });
 
@@ -85,7 +85,7 @@ test("redeem_note with its NoteRedeemed event (test fixture logs)", () => {
   const s = summarizeLogs("sig", 5, null, REDEEM_LOGS, P);
   expect(s.actions).toEqual(["redeem_note"]);
   expect(s.amounts).toEqual([{ label: "Note redeemed", units: "2500000" }]);
-  expect(s.failed).toBe(false);
+  expect(s.result).toBe("succeeded");
 });
 
 test("withdraw with its Withdrawn event; a token transfer inside our frame is not our instruction", () => {
@@ -111,7 +111,7 @@ test("an event logged by another program is not ours", () => {
 
 test("the program's named error from a failed redeem (test fixture logs)", () => {
   const s = summarizeLogs("sig", 9, { InstructionError: [0, { Custom: 6011 }] }, SERIAL_USED_LOGS, P);
-  expect(s.failed).toBe(true);
+  expect(s.result).toBe("failed");
   expect(s.error).toEqual({ name: "SerialUsed", number: 6011, message: "This allowance serial was already redeemed" });
   expect(s.errText).toBe('{"InstructionError":[0,{"Custom":6011}]}');
   expect(s.actions).toEqual(["redeem_note"]);
@@ -214,7 +214,7 @@ function openAllowanceTx(err: unknown) {
 
 test("a failed open_allowance shows no deposit, whatever its instruction data says (test fixture transaction)", () => {
   const s = summarizeTransaction(openAllowanceTx({ InstructionError: [0, { Custom: 1 }] }), P);
-  expect(s?.failed).toBe(true);
+  expect(s?.result).toBe("failed");
   expect(s?.actions).toEqual(["open_allowance"]);
   expect(s?.amounts).toEqual([]);
   // The same transaction, had it succeeded, would show the amount: the guard is the failure.
@@ -232,7 +232,7 @@ test("a failed redeem shows no amount from its rolled-back event (test fixture l
   ];
   const err = { InstructionError: [0, { Custom: 6011 }] };
   const fromLogs = summarizeLogs("sig", 10, err, logs, P);
-  expect(fromLogs.failed).toBe(true);
+  expect(fromLogs.result).toBe("failed");
   expect(fromLogs.amounts).toEqual([]);
   // The event is still parsed (the logs say it was emitted); it is only not shown as money.
   expect(parseProgramLogs(logs, P).events).toHaveLength(1);
@@ -245,11 +245,55 @@ test("a failed redeem shows no amount from its rolled-back event (test fixture l
     },
     P,
   );
-  expect(fromTx?.failed).toBe(true);
+  expect(fromTx?.result).toBe("failed");
   expect(fromTx?.amounts).toEqual([]);
 });
 
 test("summarizeTransaction refuses an answer of the wrong shape", () => {
   expect(summarizeTransaction(null, P)).toBeNull();
   expect(summarizeTransaction({ slot: 1 }, P)).toBeNull();
+});
+
+// Solana allows a transaction's metadata to be null, and an answer may lack its err field.
+// Neither says the transaction succeeded: the result is unknown and no amount is shown, even
+// when the logs carry an event (TEST FIXTURE transactions).
+test.describe("a result the answer does not state is unknown, never Succeeded", () => {
+  const tx = (meta: unknown) => ({
+    slot: 603,
+    blockTime: 1_791_700_200,
+    meta,
+    transaction: { signatures: ["fixture-no-meta"], message: { accountKeys: [P], instructions: [] } },
+  });
+
+  test("null metadata", () => {
+    const s = summarizeTransaction(tx(null), P);
+    expect(s?.result).toBe("unknown");
+    expect(s?.amounts).toEqual([]);
+    expect(s?.errText).toBeNull();
+  });
+
+  test("metadata with no err field, even with a redeem event in its logs", () => {
+    const s = summarizeTransaction(tx({ logMessages: REDEEM_LOGS }), P);
+    expect(s?.result).toBe("unknown");
+    expect(s?.actions).toEqual(["redeem_note"]);
+    expect(s?.amounts).toEqual([]);
+    expect(summarizeTransaction(tx({}), P)?.result).toBe("unknown");
+  });
+
+  test("failure logs with no err field: the program's error is still named, the result is unknown", () => {
+    const s = summarizeTransaction(tx({ logMessages: SERIAL_USED_LOGS }), P);
+    expect(s?.result).toBe("unknown");
+    expect(s?.error?.name).toBe("SerialUsed");
+  });
+
+  test("a notification with no err field, or a malformed one", () => {
+    expect(summarizeLogs("sig", 11, undefined, REDEEM_LOGS, P)).toMatchObject({ result: "unknown", amounts: [] });
+    expect(summarizeLogs("sig", 11, 42, REDEEM_LOGS, P)).toMatchObject({ result: "unknown", amounts: [] });
+  });
+
+  test("an err field that names an error by string is a failure", () => {
+    const s = summarizeTransaction(tx({ err: "AccountInUse", logMessages: [] }), P);
+    expect(s?.result).toBe("failed");
+    expect(s?.errText).toBe('"AccountInUse"');
+  });
 });

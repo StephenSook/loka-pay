@@ -182,11 +182,11 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
         </h3>
         <span className="flex flex-wrap items-center gap-2">
           {row.arrivedLive ? <OutlineChip label="New" Icon={CircleIcon} testId="tx-new" /> : null}
-          <TxStatusChip failed={row.failed} errorName={row.error?.name} />
+          <TxStatusChip result={row.result} errorName={row.error?.name} />
         </span>
       </div>
-      {/* A failed transaction moved nothing, so no amount is shown for it (lib/logs.ts). */}
-      {!row.failed && row.amounts.length > 0 ? (
+      {/* Amounts only for a transaction known to have succeeded (lib/logs.ts). */}
+      {row.result === "succeeded" && row.amounts.length > 0 ? (
         <ul className="flex flex-col gap-1" data-testid="tx-amounts">
           {row.amounts.map((a, i) => (
             <li key={i} className="font-bold">
@@ -195,9 +195,14 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
           ))}
         </ul>
       ) : null}
-      {row.failed ? (
+      {row.result === "failed" ? (
         <p className="break-words text-sm" data-testid="tx-error">
           {row.error ? `${row.error.name} (${row.error.number}): ${row.error.message}.` : `Transaction error: ${row.errText ?? "unknown"}.`}
+        </p>
+      ) : null}
+      {row.result === "unknown" ? (
+        <p className="break-words text-sm" data-testid="tx-result-unknown">
+          Devnet&apos;s answer did not say whether this transaction succeeded, so no amount is shown.
         </p>
       ) : null}
       <p className="text-sm">
