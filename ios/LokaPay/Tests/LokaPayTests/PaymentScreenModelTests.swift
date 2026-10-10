@@ -459,21 +459,264 @@ struct SettleScreenTests {
         #expect(none.phase == .received)
     }
 
-    @Test("a pending answer keeps waiting; Check again reads the decision")
+    @Test("a note still pending when the 20 s Settle wait runs out keeps waiting; Check again reads the decision (2.22)")
     func pendingThenDecided() async throws {
         let n = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
         let pendingBody = APIFixtures.json(["noteId": n.noteId.hex, "status": "pending", "signature": NSNull(), "retryAfter": 2])
         let conf = F.confWire(noteId: n.noteId, status: 1)
-        let (model, _, _, stub) = try await received([
-            StubReply(status: 202, body: pendingBody),
-            StubReply(status: 200, body: F.decisionBody(conf: conf, noteId: n.noteId, jsonStatus: "settled")),
-        ])
+        // The upload and five polls (at 2, 4, 8, 16 and 19 s) all answer 202; the wait then ends.
+        let (model, _, ledger, stub) = try await received(
+            Array(repeating: StubReply(status: 202, body: pendingBody), count: 6)
+                + [StubReply(status: 200, body: F.decisionBody(conf: conf, noteId: n.noteId, jsonStatus: "settled"))])
+        #expect(ReceiveModel.settleWaitBudget == 20)
         await model.settle()
+        #expect(stub?.requests.count == 6)
         #expect(model.phase == .received)
         #expect(model.pendingSettlement?.retryAfter == 2)
+        #expect(model.offersCheckAgain)
+        #expect(!model.settlementOutcomeUnknown, "the server answered 202: it holds the note")
+        #expect(model.issue == nil)
+        #expect(!model.isWaitingForChain && !model.isWorking)
+        #expect(try ledger.entries().first?.state == .pending)
         await model.checkAgain()
         #expect(model.phase == .settled)
         #expect(model.settlement?.status == .paid)
+        #expect(stub?.requests.count == 7)
         #expect(stub?.requests.last?.url?.path == "/v1/notes/\(n.noteId.hex)")
+    }
+}
+
+@Suite("Settle waits for the chain (2.22)")
+@MainActor
+struct SettleWaitTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func client(_ transport: any HTTPTransport, clock: SettlementClock, retry: RetryPolicy = .never) -> SettlementClient {
+        SettlementClient(deployment: F.deployment, serverPublicKey: F.serverKey, baseURL: APIFixtures.baseURL,
+                         transport: transport, retryPolicy: retry, clock: clock)
+    }
+
+    /// A Receive model holding one accepted, acknowledged note, settling through `client`.
+    func received(_ client: SettlementClient) async throws -> (ReceiveModel, SignedNote, OfflineLedger) {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: ledger, settlementClient: client, deployment: F.deployment,
+                                 serverPublicKey: F.serverKey, now: { F.now })
+        await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.payment?.ack != nil)
+        return (model, note, ledger)
+    }
+
+    func noteId() throws -> Data {
+        try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0).noteId
+    }
+
+    func pendingReply(_ noteId: Data, retryAfter: Int = 2) -> StubReply {
+        StubReply(status: 202, body: APIFixtures.json(["noteId": noteId.hex, "status": "pending",
+                                                       "signature": NSNull(), "retryAfter": retryAfter]))
+    }
+
+    func decisionReply(_ conf: Data, _ noteId: Data, jsonStatus: String, error: String? = nil) -> StubReply {
+        StubReply(status: 200, body: F.decisionBody(conf: conf, noteId: noteId, jsonStatus: jsonStatus, error: error))
+    }
+
+    @Test("a 202 and then a settled CONF end on Paid after one Settle tap")
+    func oneTapToPaid() async throws {
+        let id = try noteId()
+        let stub = StubTransport([pendingReply(id, retryAfter: 1), decisionReply(F.confWire(noteId: id, status: 1), id,
+                                                                                 jsonStatus: "settled")])
+        let clock = FakeClock()
+        let (model, note, ledger) = try await received(client(stub, clock: clock.clock))
+        await model.settle()
+        #expect(model.phase == .settled)
+        let settlement = try #require(model.settlement)
+        #expect(settlement.status == .paid)
+        #expect(settlement.receipt.confirmation?.status == .settled)
+        #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
+        #expect(stub.requests.last?.url?.path == "/v1/notes/\(note.noteId.hex)")
+        #expect(clock.sleeps == [1], "one wait, the server's retryAfter")
+        #expect(model.pendingSettlement == nil && !model.offersCheckAgain)
+        #expect(!model.isWaitingForChain && !model.isWorking)
+        #expect(try ledger.entries().first?.state == .settled)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 0)
+    }
+
+    @Test("a 202 and then a failed CONF with SerialUsed 6011 show Failed (already spent), only from the signed code")
+    func waitEndsOnAlreadySpent() async throws {
+        let id = try noteId()
+        let failed = F.confWire(noteId: id, status: 2, errorCode: LokaVaultError.serialUsed)
+        let stub = StubTransport([pendingReply(id), decisionReply(failed, id, jsonStatus: "failed", error: "SerialUsed")])
+        let (model, _, ledger) = try await received(client(stub, clock: FakeClock().clock))
+        await model.settle()
+        #expect(model.phase == .settled)
+        let settlement = try #require(model.settlement)
+        #expect(settlement.status == .failed)
+        let facts = settlement.facts(clusterId: F.deployment.clusterId)
+        #expect(facts.errorCode == 6011)
+        #expect(facts.statusDetail == "already spent")
+        #expect(MoneyStatusChip.word(settlement.status, detail: facts.statusDetail) == "Failed (already spent)")
+        #expect(try ledger.entries().first?.state == .refused)
+
+        // The same wait with a settled CONF whose JSON says SerialUsed is Paid: the JSON is never read.
+        let lying = StubTransport([pendingReply(id), decisionReply(F.confWire(noteId: id, status: 1), id,
+                                                                   jsonStatus: "failed", error: "SerialUsed")])
+        let (paid, _, _) = try await received(client(lying, clock: FakeClock().clock))
+        await paid.settle()
+        #expect(paid.settlement?.status == .paid)
+        #expect(paid.settlement?.facts(clusterId: F.deployment.clusterId).statusDetail == nil)
+    }
+
+    @Test("a CONF that does not verify at the end of the wait is not trusted: the outcome is unknown and the note held")
+    func rogueConfAfterWait() async throws {
+        let id = try noteId()
+        let rogue = F.confWire(noteId: id, status: 1, signedBy: Curve25519.Signing.PrivateKey())
+        let stub = StubTransport([pendingReply(id), decisionReply(rogue, id, jsonStatus: "settled")])
+        let (model, _, ledger) = try await received(client(stub, clock: FakeClock().clock))
+        await model.settle()
+        #expect(model.phase == .received)
+        #expect(model.settlement == nil)
+        #expect(model.issue?.kind == .settlement(.verification(.badSignature)))
+        #expect(model.settlementOutcomeUnknown)
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("the budget running out during the upload leaves the outcome unknown, never pending")
+    func budgetEndsDuringUpload() async throws {
+        let id = try noteId()
+        let clock = FakeClock()
+        // The server takes 25 s to answer the upload: the 20 s budget ends first.
+        let stub = StubTransport([decisionReply(F.confWire(noteId: id, status: 1), id, jsonStatus: "settled").delayed(25)],
+                                 clock: clock)
+        let (model, _, ledger) = try await received(client(stub, clock: clock.clock))
+        await model.settle()
+        #expect(clock.now <= ReceiveModel.settleWaitBudget)
+        #expect(stub.requests.count == 1)
+        #expect(model.phase == .received)
+        #expect(model.pendingSettlement == nil, "no 202 came back, so the screen never says the server has the note")
+        #expect(model.settlementOutcomeUnknown)
+        #expect(model.issue?.kind == .settlement(.network(.timedOut)))
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("leaving the screen stops the wait: no poll after it, a second tap sends nothing, the 202 keeps Check again",
+          .timeLimit(.minutes(1)))
+    func leavingStopsThePolls() async throws {
+        let id = try noteId()
+        let stub = StubTransport([pendingReply(id), pendingReply(id)])
+        let held = HeldClock()
+        let (model, _, ledger) = try await received(client(stub, clock: held.clock))
+        let settling = Task { await model.settle() }
+        var sleeps = held.started.makeAsyncIterator()
+        _ = await sleeps.next()  // the upload answered 202; the wait sleeps before its first poll
+        #expect(model.isWaitingForChain)
+        #expect(model.pendingSettlement?.noteId == id, "the 202 shows during the wait")
+        await model.settle()  // a second tap during the wait
+        #expect(stub.requests.count == 1, "a second tap sends nothing while the first waits")
+        model.stopWaiting()
+        await settling.value
+        #expect(stub.requests.count == 1, "no poll after the screen went away")
+        #expect(!model.isWaitingForChain && !model.isWorking)
+        #expect(model.phase == .received)
+        #expect(model.settlement == nil)
+        #expect(model.issue == nil, "leaving the screen is not an error")
+        #expect(model.offersCheckAgain)
+        #expect(!model.settlementOutcomeUnknown)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("leaving the screen while the upload is unanswered leaves the outcome unknown", .timeLimit(.minutes(1)))
+    func leavingDuringUploadIsUnknown() async throws {
+        let transport = HeldTransport()
+        let (model, _, ledger) = try await received(client(transport, clock: FakeClock().clock, retry: .standard))
+        let settling = Task { await model.settle() }
+        var uploads = transport.started.makeAsyncIterator()
+        _ = await uploads.next()  // the upload is on the wire
+        model.stopWaiting()
+        await settling.value
+        #expect(transport.requests == 1, "a cancelled upload is not retried")
+        #expect(model.phase == .received)
+        #expect(model.pendingSettlement == nil)
+        #expect(model.settlementOutcomeUnknown, "the server may have the note: unknown, never unsent")
+        #expect(model.offersCheckAgain)
+        #expect(model.issue == nil)
+        #expect(!model.isWaitingForChain && !model.isWorking)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("a poll with no answer when the budget runs out leaves the outcome unknown, never pending (Codex finding 1)")
+    func unansweredPollIsUnknown() async throws {
+        let id = try noteId()
+        let clock = FakeClock()
+        // The upload answers 202; the poll at 2 s would take 25 s, so the budget ends with it unanswered.
+        let stub = StubTransport([pendingReply(id),
+                                  decisionReply(F.confWire(noteId: id, status: 1), id, jsonStatus: "settled").delayed(25)],
+                                 clock: clock)
+        let (model, _, ledger) = try await received(client(stub, clock: clock.clock))
+        await model.settle()
+        #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
+        #expect(clock.now <= ReceiveModel.settleWaitBudget)
+        #expect(model.phase == .received)
+        #expect(model.settlement == nil)
+        #expect(model.settlementOutcomeUnknown, "the poll's lost answer may have carried the decision")
+        #expect(model.issue?.kind == .settlement(.network(.timedOut)))
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("leaving while a held note's receipt is being signed starts no upload; back on screen, Settle works (Codex finding 2)",
+          .timeLimit(.minutes(1)))
+    func leavingDuringHeldNoteSigning() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        // The merchant key behind a gate (ScreenReviewRound3Tests): its signature waits until opened.
+        let gate = GatedSigner()
+        let note = try F.note(payer: payer, payee: gate.keyHash, amount: 1_000_000, serial: 0)
+        let allowanceWire = F.allowanceWire(payer: payer.keyHash)
+        let certificate = try AllowanceCertificate.verify(wire: allowanceWire, deployment: F.deployment,
+                                                          serverPublicKey: F.serverKey)
+        // Held with no stored ACK, so Settle on its row signs a receipt first (Face ID on a phone).
+        try ledger.accept(note: note, certificate: certificate, now: Int64(F.now.timeIntervalSince1970),
+                          allowanceWire: allowanceWire)
+        let stub = StubTransport([decisionReply(F.confWire(noteId: note.noteId, status: 1), note.noteId,
+                                                jsonStatus: "settled")])
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: gate.keyHash), signer: gate, ledger: ledger,
+                                 settlementClient: client(stub, clock: FakeClock().clock), deployment: F.deployment,
+                                 serverPublicKey: F.serverKey, now: { F.now })
+        let row = try #require(model.unsettledPayments.first)
+        #expect(row.ack == nil && model.canSettle(row))
+        let settling = Task { await model.settleUnsettled(noteId: note.noteId) }
+        try await gate.waitUntilStarted()  // the receipt prompt is open
+        model.stopWaiting()  // the merchant leaves the screen
+        gate.open()
+        await settling.value
+        #expect(stub.requests.isEmpty, "nothing uploaded for a screen nobody sees")
+        #expect(model.phase == .received)
+        #expect(model.payment?.ack != nil)
+        #expect(!model.isWorking && !model.isWaitingForChain)
+        // Shown again: the Settle tap uploads and ends on Paid.
+        model.screenShown()
+        await model.settle()
+        #expect(stub.requests.count == 1)
+        #expect(model.settlement?.status == .paid)
+    }
+
+    @Test("cancelling the task that called Settle cancels the wait too (Codex finding 3)", .timeLimit(.minutes(1)))
+    func cancelledCallerStopsTheWait() async throws {
+        let id = try noteId()
+        let stub = StubTransport([pendingReply(id)])
+        let held = HeldClock()
+        let (model, _, _) = try await received(client(stub, clock: held.clock))
+        let settling = Task { await model.settle() }
+        var sleeps = held.started.makeAsyncIterator()
+        _ = await sleeps.next()  // the wait sleeps before its first poll
+        settling.cancel()
+        await settling.value
+        #expect(!model.isWorking && !model.isWaitingForChain, "the wait ended with its caller")
+        #expect(stub.requests.count == 1, "no poll after the caller was cancelled")
+        #expect(model.offersCheckAgain)
     }
 }
