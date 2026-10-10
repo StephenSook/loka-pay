@@ -50,6 +50,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// The chain decided the note (a verified CONF), but this phone could not record that
     /// decision in its offline ledger. `paid` is true for a settled CONF.
     case ledgerNotUpdated(paid: Bool)
+    /// Try to cheat (task 2.13): the scanned merchant is the one the original note already pays,
+    /// so signing again would not be a double spend.
+    case cheatSameMerchant
 
     /// A normal next step on the way to a payment, not a failure: the screen shows it in a neutral
     /// banner instead of a red "Stopped" one.
@@ -83,6 +86,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
         case .ledgerNotUpdated: return "ledger_not_updated"
+        case .cheatSameMerchant: return "cheat_same_merchant"
         }
     }
 
@@ -125,6 +129,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
             return (paid ? "Paid on chain" : "Failed on chain")
                 + ", but this phone could not record it in its offline ledger, so the ledger may still count "
                 + "this note as unsettled. The signed receipt above is the record."
+        case .cheatSameMerchant:
+            return "That is the merchant the original note already pays, so signing again would not be a double "
+                + "spend. Scan a different merchant's code (merchant B)."
         }
     }
 
@@ -134,7 +141,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     public var refusedBy: RefusalLayer? {
         switch self {
         case .payment(.storage): return nil
-        case .payment, .overCap, .damagedRecord: return .thisPhone
+        case .payment, .overCap, .damagedRecord, .cheatSameMerchant: return .thisPhone
         case .settlement(let e):
             switch e {
             case .refused, .badJSON, .badBase64url, .badPubkey, .nameLength, .rateLimited, .budgetExhausted:
