@@ -39,7 +39,7 @@ struct CodeEntryField: View {
 #if os(iOS)
 /// Camera QR scanner (task 3.70). Kept thin: it only turns QR codes into strings and reports each
 /// distinct string once; `ScanParser` and the models do every check. Needs a device camera and the
-/// app's NSCameraUsageDescription, so it is not unit-tested.
+/// app's NSCameraUsageDescription, so it is not unit-tested; its camera math is (`ScanGeometry`).
 public struct PaymentScannerView: UIViewControllerRepresentable {
     let onScan: (String) -> Void
 
@@ -94,7 +94,7 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     }
 
     private func configure() {
-        guard let camera = AVCaptureDevice.default(for: .video),
+        guard let camera = Self.codeCamera(),
               let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) else {
             return showUnavailable()
         }
@@ -113,6 +113,8 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         }
         output.metadataObjectTypes = [.qr]
         session.commitConfiguration()
+        // After the commit: the session preset has chosen the format the zoom limits come from.
+        Self.tuneForCodes(camera)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let layer = AVCaptureVideoPreviewLayer(session: self.session)
@@ -124,6 +126,49 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
             self.view.setNeedsLayout()
         }
         session.startRunning()
+    }
+
+    /// The back camera that reads a code on another phone's screen best. A virtual device comes
+    /// first: it switches to its ultra wide camera (the macro lens on phones that have one) when the
+    /// code is nearer than the wide camera can focus. The plain wide camera, then the system
+    /// default, otherwise. The Simulator has none and gets nil. Runs on the session queue.
+    nonisolated static func codeCamera() -> AVCaptureDevice? {
+        let types: [AVCaptureDevice.DeviceType] = [.builtInTripleCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
+        let found = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .back).devices
+        for type in types {
+            if let device = found.first(where: { $0.deviceType == type }) { return device }
+        }
+        return AVCaptureDevice.default(for: .video)
+    }
+
+    /// Zoom, focus mode and focus range for a code held a hand's length away. The zoom is Apple's
+    /// recommendation for codes (`ScanGeometry.recommendedZoom`), from the wide camera's minimum
+    /// focus distance, so the code fills the preview from a distance that camera can focus at.
+    /// Every setting is checked before it is set, so a camera without it keeps its default. Runs on
+    /// the session queue.
+    nonisolated static func tuneForCodes(_ camera: AVCaptureDevice) {
+        let constituents = camera.constituentDevices
+        let wideIndex = constituents.firstIndex { $0.deviceType == .builtInWideAngleCamera }
+        let zooms = ScanGeometry.wideCameraZooms(
+            wideIndex: wideIndex, switchOvers: camera.virtualDeviceSwitchOverVideoZoomFactors.map(\.doubleValue))
+        let focusing = wideIndex.map { constituents[$0] } ?? camera
+        let format = camera.activeFormat
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        let lower = Double(camera.minAvailableVideoZoomFactor)
+        var upper = min(Double(camera.maxAvailableVideoZoomFactor), Double(format.videoMaxZoomFactor))
+        // Stay below the telephoto's switch-over: it focuses farther away than the wide camera.
+        if let next = zooms.next { upper = min(upper, next * 0.95) }
+        let zoom = ScanGeometry.recommendedZoom(
+            fieldOfView: Double(format.videoFieldOfView), baseZoom: zooms.base,
+            minimumFocusDistance: Double(focusing.minimumFocusDistance),
+            fill: ScanGeometry.squareShare(width: Double(dimensions.width), height: Double(dimensions.height)),
+            range: lower...max(lower, upper))
+        guard (try? camera.lockForConfiguration()) != nil else { return }
+        defer { camera.unlockForConfiguration() }
+        camera.videoZoomFactor = CGFloat(zoom)
+        // The range applies on the next focus mode set, so it goes first.
+        if camera.isAutoFocusRangeRestrictionSupported { camera.autoFocusRangeRestriction = .near }
+        if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }
     }
 
     private func showUnavailable() {
