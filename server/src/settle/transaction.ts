@@ -84,12 +84,19 @@ export class SolanaGateway implements ChainGateway {
   }
 
   async observe(signature: string): Promise<ChainDecision | null> {
+    return (await this.lookup(signature)).decision;
+  }
+
+  async blockHeight(): Promise<number> { return this.connection.getBlockHeight('confirmed'); }
+
+  async lookup(signature: string): Promise<{ found: boolean; decision: ChainDecision | null }> {
     const { value: [status] } = await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
-    if (!status || !['confirmed', 'finalized'].includes(status.confirmationStatus ?? '')) return null;
+    if (!status) return { found: false, decision: null };
+    if (!['confirmed', 'finalized'].includes(status.confirmationStatus ?? '')) return { found: true, decision: null };
     const result = decodeChainError(status.err);
-    if (!result) return null;
+    if (!result) return { found: true, decision: null };
     const blockTime = await this.connection.getBlockTime(status.slot);
-    if (blockTime === null || !Number.isSafeInteger(blockTime) || !Number.isSafeInteger(status.slot)) return null;
-    return { slot: status.slot, blockTime, ...result };
+    if (blockTime === null || !Number.isSafeInteger(blockTime) || !Number.isSafeInteger(status.slot)) return { found: true, decision: null };
+    return { found: true, decision: { slot: status.slot, blockTime, ...result } };
   }
 }

@@ -29,6 +29,8 @@ afterEach(async () => { while (closers.length) await closers.pop()!(); });
 
 class Chain implements ChainGateway {
   bindPayer = vi.fn(async (_note: P.ValidatedNote) => true);
+  blockHeight = vi.fn(async () => 0);
+  lookup = vi.fn(async (signature: string) => ({ found: this.decision !== null, decision: await this.observe(signature) }));
   prepare = vi.fn(async (validated: P.ValidatedNote): Promise<PreparedAttempt> => ({
     signature: base58.encode(new Uint8Array([...validated.noteId, ...validated.noteId])),
     rawTransaction: 'test-only', blockhash: base58.encode(new Uint8Array(32).fill(1)), lastValidBlockHeight: 100,
@@ -250,5 +252,73 @@ test('unavailable confirmation metadata stays pending without a signed decision'
   expect((await f.post()).statusCode).toBe(202);
   expect((await f.post()).statusCode).toBe(202);
   expect(f.sign).not.toHaveBeenCalled();
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('expired and not found rebuilds exactly once, including concurrent polls', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  const first = await f.service.submit({ note }); const original = first.body.signature;
+  f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
+    blockhash: base58.encode(new Uint8Array(32).fill(8)), lastValidBlockHeight: 200 });
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  await Promise.all([f.service.get(noteId), other.get(noteId), f.service.get(noteId)]);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  const saved = await f.store.get(noteId); expect(saved?.attempt?.signature).toBe(original);
+  expect(saved?.replacement?.signature).not.toBe(original); expect(saved?.rebuildClaimed).toBe(true);
+  f.chain.blockHeight.mockResolvedValue(201);
+  expect((await other.get(noteId)).statusCode).toBe(202);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('expired but found uses the original result without rebuilding', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  const first = await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.decision = { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 };
+  const result = await f.service.get(noteId); expect(result.statusCode).toBe(200); expect(result.body.signature).toBe(first.body.signature);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('not expired, exactly at expiry, or found without final metadata all stay pending', async () => {
+  const f = await fixture(); f.chain.decision = null; await f.service.submit({ note });
+  for (const height of [99, 100]) {
+    f.chain.blockHeight.mockResolvedValue(height); expect((await f.service.get(noteId)).statusCode).toBe(202);
+  }
+  f.chain.blockHeight.mockResolvedValue(101); f.chain.lookup.mockResolvedValue({ found: true, decision: null });
+  expect((await f.service.get(noteId)).statusCode).toBe(202);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('an original found later overrides a replacement result and keeps the original CONF thereafter', async () => {
+  const f = await fixture(); f.chain.decision = null; const first = await f.service.submit({ note });
+  const original = first.body.signature!; const replacement = base58.encode(new Uint8Array(64).fill(8));
+  f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.prepare.mockResolvedValue({ signature: replacement, rawTransaction: 'replacement',
+    blockhash: base58.encode(new Uint8Array(32).fill(8)), lastValidBlockHeight: 200 });
+  f.chain.lookup.mockImplementation(async signature => signature === replacement
+    ? { found: true, decision: { slot: 14, blockTime: 1800000001, error: 'SerialUsed', errorCode: 6011 } }
+    : { found: false, decision: null });
+  expect((await f.service.get(noteId)).body.signature).toBe(replacement);
+  f.chain.lookup.mockImplementation(async signature => ({ found: true, decision: {
+    slot: 12, blockTime: 1800000000, error: signature === original ? null : 'SerialUsed', errorCode: signature === original ? 0 : 6011,
+  } }));
+  const result = await f.service.get(noteId); expect(result.body.signature).toBe(original);
+  expect(result.body.status).toBe('settled'); expect((await f.service.get(noteId)).body).toEqual(result.body);
+  expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('the original is looked up again after height lookup before admitting a rebuild', async () => {
+  const f = await fixture(); f.chain.decision = null; await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.lookup.mockResolvedValueOnce({ found: false, decision: null }).mockResolvedValueOnce({ found: true,
+    decision: { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 } });
+  expect((await f.service.get(noteId)).statusCode).toBe(200); expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+});
+
+test('uncertain rebuild preparation consumes the one rebuild claim across restarts', async () => {
+  const f = await fixture(); f.chain.decision = null; await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.prepare.mockRejectedValue(new Error('timeout'));
+  expect((await f.service.get(noteId)).statusCode).toBe(202);
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  expect((await other.get(noteId)).statusCode).toBe(202); expect(f.chain.prepare).toHaveBeenCalledTimes(2);
   expect(f.chain.send).toHaveBeenCalledTimes(1);
 });

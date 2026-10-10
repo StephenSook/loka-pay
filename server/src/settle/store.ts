@@ -14,6 +14,8 @@ export class SettlementStore {
       attempt jsonb, decision jsonb,
       CHECK (decision IS NULL OR attempt IS NOT NULL)
     )`);
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS replacement jsonb');
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS rebuild_claimed boolean NOT NULL DEFAULT false');
   }
 
   async claim(row: Claim): Promise<boolean> {
@@ -25,11 +27,13 @@ export class SettlementStore {
 
   async get(noteId: string): Promise<AttemptRow | null> {
     const result = await this.db.query(`SELECT note_id AS "noteId", note, ack,
-      uploaded_at::text AS "uploadedAt", attempt, decision FROM settlement_attempts WHERE note_id=$1`, [noteId]);
+      uploaded_at::text AS "uploadedAt", attempt, decision, replacement, rebuild_claimed AS "rebuildClaimed"
+      FROM settlement_attempts WHERE note_id=$1`, [noteId]);
     if (!result.rows[0]) return null;
     const row = result.rows[0];
     return { noteId: row.noteId as string, note: row.note as string, ack: row.ack as string | null,
-      uploadedAt: Number(row.uploadedAt), attempt: row.attempt as PreparedAttempt | null, decision: row.decision as Decision | null };
+      uploadedAt: Number(row.uploadedAt), attempt: row.attempt as PreparedAttempt | null, decision: row.decision as Decision | null,
+      replacement: row.replacement as PreparedAttempt | null, rebuildClaimed: row.rebuildClaimed as boolean };
   }
 
   async attachAck(noteId: string, ack: string): Promise<void> {
@@ -44,9 +48,25 @@ export class SettlementStore {
 
   async finish(noteId: string, decision: Decision): Promise<Decision> {
     await this.db.query(`UPDATE settlement_attempts SET decision=$2::jsonb
-      WHERE note_id=$1 AND attempt IS NOT NULL AND decision IS NULL`, [noteId, JSON.stringify(decision)]);
+      WHERE note_id=$1 AND attempt IS NOT NULL AND (decision IS NULL
+        OR ($2::jsonb->>'signature'=attempt->>'signature' AND decision->>'signature'<>attempt->>'signature'))`,
+    [noteId, JSON.stringify(decision)]);
     const row = await this.get(noteId);
     if (!row?.decision) throw new Error('Decision was not saved');
     return row.decision;
+  }
+
+  async claimRebuild(noteId: string, originalSignature: string): Promise<boolean> {
+    const result = await this.db.query(`UPDATE settlement_attempts SET rebuild_claimed=true
+      WHERE note_id=$1 AND attempt->>'signature'=$2 AND NOT rebuild_claimed AND decision IS NULL RETURNING note_id`,
+    [noteId, originalSignature]);
+    return result.rows.length === 1;
+  }
+
+  async saveReplacement(noteId: string, attempt: PreparedAttempt): Promise<void> {
+    const result = await this.db.query(`UPDATE settlement_attempts SET replacement=$2::jsonb
+      WHERE note_id=$1 AND rebuild_claimed AND replacement IS NULL AND decision IS NULL
+        AND attempt->>'signature'<>$2::jsonb->>'signature' RETURNING note_id`, [noteId, JSON.stringify(attempt)]);
+    if (result.rows.length !== 1) throw new Error('Replacement was not saved');
   }
 }

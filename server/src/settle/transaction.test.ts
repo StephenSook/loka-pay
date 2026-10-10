@@ -87,3 +87,14 @@ test('maps the redeem error namespace without mislabeling other instructions or 
   expect(decodeChainError({ InstructionError: [1, { Custom: 70000 }] })).toBeNull();
   expect(decodeChainError('BlockhashNotFound')).toBeNull();
 });
+
+test('history lookup distinguishes missing signatures from found but unrepresentable results', async () => {
+  const rpc = { getSignatureStatuses: vi.fn(async (): Promise<{ value: unknown[] }> => ({ value: [null] })),
+    getBlockHeight: vi.fn(async () => 101) };
+  const chain = new SolanaGateway(rpc as unknown as Connection, Keypair.generate());
+  expect(await chain.blockHeight()).toBe(101); expect(rpc.getBlockHeight).toHaveBeenCalledExactlyOnceWith('confirmed');
+  expect(await chain.lookup('original')).toEqual({ found: false, decision: null });
+  expect(rpc.getSignatureStatuses).toHaveBeenCalledExactlyOnceWith(['original'], { searchTransactionHistory: true });
+  rpc.getSignatureStatuses.mockResolvedValue({ value: [{ confirmationStatus: 'confirmed', err: 'BlockhashNotFound' }] });
+  expect(await chain.lookup('original')).toEqual({ found: true, decision: null });
+});

@@ -54,7 +54,7 @@ try {
       await new Promise(resolve => setTimeout(resolve, 2000));
       outcome = await service.get(outcome.body.noteId);
     }
-    if (outcome.statusCode !== 200) throw new Error('Still pending. Keep this journal and investigate; no transaction was retried.');
+    if (outcome.statusCode !== 200) throw new Error('Still pending. Keep this journal and investigate; at most one expired, missing attempt can be rebuilt.');
     P.verifyConfWire(P.base64urlDecode(outcome.body.conf), ed25519.getPublicKey(seed));
     return outcome.body;
   };

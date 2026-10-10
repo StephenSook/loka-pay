@@ -14,6 +14,8 @@ export interface ChainDecision {
 }
 export interface ChainGateway {
   bindPayer(note: ValidatedNote): Promise<boolean>;
+  blockHeight(): Promise<number>;
+  lookup(signature: string): Promise<{ found: boolean; decision: ChainDecision | null }>;
   prepare(note: ValidatedNote): Promise<PreparedAttempt>;
   send(attempt: PreparedAttempt): Promise<void>;
   observe(signature: string): Promise<ChainDecision | null>;
@@ -44,5 +46,7 @@ export interface Claim {
 }
 export interface AttemptRow extends Claim {
   attempt: PreparedAttempt | null;
+  replacement: PreparedAttempt | null;
+  rebuildClaimed: boolean;
   decision: Decision | null;
 }
