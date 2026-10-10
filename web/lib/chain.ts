@@ -32,7 +32,7 @@ import {
   type AccountName,
 } from "./vault";
 
-export type { Read } from "./cached-read";
+export type { FailedRead, Read } from "./cached-read";
 
 export const REVALIDATE_SECONDS = 30;
 

@@ -3,6 +3,7 @@
 
 import { OutlineChip, StateChip } from "./chips";
 import { AlertIcon, ArrowUpRightIcon, CheckIcon, CircleIcon, ClockIcon } from "./icons";
+import type { FailedRead } from "@/lib/read-state";
 import { formatEt, isoUtc } from "@/lib/time";
 
 export const CARD = "min-w-0 rounded-card border-3 border-ink bg-surface p-5 shadow-hard";
@@ -63,10 +64,43 @@ export function YesNo({ value, yes = "Yes", no = "No", testId }: { value: boolea
   );
 }
 
-/** Where and when a value was read: the slot and the time. */
-export function ReadStamp({ source, slot, ms, testId }: { source: string; slot?: string; ms: number; testId?: string }) {
+/**
+ * Where and when a value was read: the slot and the time. `stale` is required so every
+ * page that stamps a cached read decides what to show when the latest read failed: then the
+ * stamp becomes a warning that names the last good read and the failed one.
+ */
+export function ReadStamp({
+  source,
+  slot,
+  ms,
+  stale,
+  testId,
+}: {
+  source: string;
+  slot?: string;
+  ms: number;
+  stale: FailedRead | null;
+  testId?: string;
+}) {
+  if (stale) {
+    return (
+      <div
+        role="status"
+        data-testid={testId}
+        data-stale="true"
+        className="flex min-w-0 gap-3 rounded-card border-3 border-warning-line bg-warning p-4 text-sm text-on-state"
+      >
+        <AlertIcon className="mt-0.5 h-5 w-5 shrink-0" />
+        <p className="min-w-0 break-words">
+          <strong>Not current.</strong> Last good read from {source}
+          {slot ? <> at {slot}</> : null}, <When ms={ms} />. The latest read, at <When ms={stale.atMs} />, failed:{" "}
+          {stale.reason}. The values shown are from the last good read.
+        </p>
+      </div>
+    );
+  }
   return (
-    <p className="flex items-start gap-2 text-sm text-muted" data-testid={testId}>
+    <p className="flex items-start gap-2 text-sm text-muted" data-testid={testId} data-stale="false">
       <ClockIcon className="mt-0.5 h-4 w-4 shrink-0" />
       <span className="min-w-0 break-words">
         Read from {source}

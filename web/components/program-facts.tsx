@@ -1,7 +1,7 @@
 // The deployed program, read live from devnet (lib/chain.ts readProgramFacts). Server
 // component. Each fact is either a value read from the chain or a plain "not read".
 
-import type { Part, ProgramFacts, Read } from "@/lib/chain";
+import type { FailedRead, Part, ProgramFacts, Read } from "@/lib/chain";
 import { INIT_TX_SIGNATURE } from "@/lib/facts";
 import { PINS } from "@/lib/pins";
 import { explorerAddress, explorerTx } from "@/lib/solana";
@@ -40,15 +40,22 @@ export function ProgramFactsPanel({ read }: { read: Read<ProgramFacts> }) {
           </span>
         </Fact>
       </dl>
-      {read.ok ? <Facts facts={read.data} readAtMs={read.readAtMs} /> : <ReadFailure what="the program from devnet" reason={read.reason} ms={read.atMs} />}
+      {read.ok ? (
+        <Facts facts={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} />
+      ) : (
+        <ReadFailure what="the program from devnet" reason={read.reason} ms={read.atMs} />
+      )}
     </div>
   );
 }
 
-function Facts({ facts, readAtMs }: { facts: ProgramFacts; readAtMs: number }) {
+function Facts({ facts, readAtMs, stale }: { facts: ProgramFacts; readAtMs: number; stale: FailedRead | null }) {
   const { program, programData, vault, counts, init, config } = facts;
+  const stamp = <ReadStamp source="Solana devnet" slot={slotText(facts.slots)} ms={readAtMs} stale={stale} testId="program-read-stamp" />;
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="program-facts">
+      {/* Values from an older read are introduced as such, before any of them. */}
+      {stale ? stamp : null}
       <dl className="flex flex-col gap-3">
         <Fact label="Executable" testId="fact-executable">
           {program.exists ? (
@@ -158,7 +165,7 @@ function Facts({ facts, readAtMs }: { facts: ProgramFacts; readAtMs: number }) {
           </span>
         </Fact>
       </dl>
-      <ReadStamp source="Solana devnet" slot={slotText(facts.slots)} ms={readAtMs} testId="program-read-stamp" />
+      {stale ? null : stamp}
     </div>
   );
 }

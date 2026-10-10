@@ -29,10 +29,20 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
           Commits on main {HACKING_STARTED} (after the <code className="font-mono text-sm">{KIT_TAG}</code> tag).
         </p>
       </div>
-      {read.ok ? (
-        <Numbers b={read.data} readAtMs={read.readAtMs} />
-      ) : (
+      {!read.ok ? (
         <ReadFailure what="the commit count from GitHub" reason={read.reason} ms={read.atMs} testId="built-unavailable" />
+      ) : read.staleBecause ? (
+        // PLAN.md 3.60: never a stale count. The latest read failed, so its reason is shown
+        // and the older numbers are not, only the time of that older read.
+        <>
+          <ReadFailure what="the commit count from GitHub" reason={read.staleBecause.reason} ms={read.staleBecause.atMs} testId="built-unavailable" />
+          <p className="text-sm text-muted" data-testid="built-last-good">
+            An earlier read, at <When ms={read.readAtMs} />, succeeded. Its numbers are not shown because they may be
+            out of date.
+          </p>
+        </>
+      ) : (
+        <Numbers b={read.data} readAtMs={read.readAtMs} />
       )}
       <OutLink href={COMPARE_PAGE_URL} testId="compare-link">
         Every commit and file on GitHub ({KIT_TAG}...main)
@@ -70,7 +80,8 @@ function Numbers({ b, readAtMs }: { b: BuiltThisWeekend; readAtMs: number }) {
         {b.commitsWithoutLogin > 0 ? `, plus ${b.commitsWithoutLogin} commits with no linked login` : ""}.
         {partial ? ` GitHub listed ${b.listedCommits} of the ${b.totalCommits} commits.` : ""}
       </p>
-      <ReadStamp source="GitHub's API (refreshed at most every 5 minutes)" ms={readAtMs} testId="built-read-stamp" />
+      {/* Numbers is shown only for the latest read (stale reads are handled above). */}
+      <ReadStamp source="GitHub's API (refreshed at most every 5 minutes)" ms={readAtMs} stale={null} testId="built-read-stamp" />
     </div>
   );
 }

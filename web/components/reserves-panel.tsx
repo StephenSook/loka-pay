@@ -2,7 +2,7 @@
 // everything the program says it owes, every balance from one getMultipleAccounts call at
 // one slot (lib/chain.ts readReserves). Server component.
 
-import type { Read, ReservesRead } from "@/lib/chain";
+import type { FailedRead, Read, ReservesRead } from "@/lib/chain";
 import { REPO_URL } from "@/lib/site";
 import { explorerAddress } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
@@ -29,7 +29,11 @@ export function ReservesPanel({ read }: { read: Read<ReservesRead> }) {
       <p className="leading-relaxed">
         The vault&apos;s tokens against everything the program owes, from the program&apos;s own accounts on devnet.
       </p>
-      {read.ok ? <Reserves r={read.data} readAtMs={read.readAtMs} /> : <ReadFailure what="the reserves from devnet" reason={read.reason} ms={read.atMs} />}
+      {read.ok ? (
+        <Reserves r={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} />
+      ) : (
+        <ReadFailure what="the reserves from devnet" reason={read.reason} ms={read.atMs} />
+      )}
       <div className={`${CARD} flex flex-col gap-3`}>
         <h3 className="text-xl">How it is counted</h3>
         <ul className="flex list-disc flex-col gap-2 pl-6 leading-relaxed">
@@ -61,11 +65,22 @@ export function ReservesPanel({ read }: { read: Read<ReservesRead> }) {
   );
 }
 
-function Reserves({ r, readAtMs }: { r: ReservesRead; readAtMs: number }) {
+function Reserves({ r, readAtMs, stale }: { r: ReservesRead; readAtMs: number; stale: FailedRead | null }) {
   const difference = BigInt(r.totals.difference);
   const covered = difference >= BigInt(0);
+  const stamp = (
+    <ReadStamp
+      source="Solana devnet"
+      slot={`slot ${r.slot}, every balance in one call (accounts listed at slot ${r.listedAt.first} and checked again at slot ${r.listedAt.check})`}
+      ms={readAtMs}
+      stale={stale}
+      testId="reserves-read-stamp"
+    />
+  );
   return (
     <div className={`${CARD} flex flex-col gap-4`} data-testid="reserves">
+      {/* Values from an older read are introduced as such, before any of them. */}
+      {stale ? stamp : null}
       <div className="flex flex-wrap items-center gap-3">
         {covered ? (
           <OutlineChip label="Covered" Icon={CheckIcon} size="lg" testId="reserves-verdict" />
@@ -137,12 +152,7 @@ function Reserves({ r, readAtMs }: { r: ReservesRead; readAtMs: number }) {
           </ul>
         </details>
       ) : null}
-      <ReadStamp
-        source="Solana devnet"
-        slot={`slot ${r.slot}, every balance in one call (accounts listed at slot ${r.listedAt.first} and checked again at slot ${r.listedAt.check})`}
-        ms={readAtMs}
-        testId="reserves-read-stamp"
-      />
+      {stale ? null : stamp}
     </div>
   );
 }

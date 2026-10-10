@@ -62,6 +62,17 @@ export default async function TrustPage() {
   const facts = await readProgramFacts();
   const programData = facts.ok ? facts.data.programData : null;
   const vault = facts.ok ? facts.data.vault : null;
+  const readStatus = facts.ok ? (
+    <ReadStamp
+      source="Solana devnet"
+      slot={facts.data.slots.min === facts.data.slots.max ? `slot ${facts.data.slots.min}` : `slots ${facts.data.slots.min} to ${facts.data.slots.max}`}
+      ms={facts.readAtMs}
+      stale={facts.staleBecause}
+      testId="trust-read-stamp"
+    />
+  ) : (
+    <ReadFailure what="the program from devnet" reason={facts.reason} ms={facts.atMs} />
+  );
 
   return (
     <main className={PAGE}>
@@ -92,6 +103,8 @@ export default async function TrustPage() {
         <h2 id="custody" className="text-3xl">
           Who holds what
         </h2>
+        {/* Values from an older read are introduced as such, before any of them. */}
+        {facts.ok && facts.staleBecause ? readStatus : null}
         <dl className={`${CARD} flex flex-col gap-3`}>
           <Fact label="The payer's phone">
             A P-256 key created inside the iPhone&apos;s Secure Enclave, which cannot be exported. Only that phone can
@@ -160,16 +173,7 @@ export default async function TrustPage() {
             </span>
           </Fact>
         </dl>
-        {facts.ok ? (
-          <ReadStamp
-            source="Solana devnet"
-            slot={facts.data.slots.min === facts.data.slots.max ? `slot ${facts.data.slots.min}` : `slots ${facts.data.slots.min} to ${facts.data.slots.max}`}
-            ms={facts.readAtMs}
-            testId="trust-read-stamp"
-          />
-        ) : (
-          <ReadFailure what="the program from devnet" reason={facts.reason} ms={facts.atMs} />
-        )}
+        {facts.ok && facts.staleBecause ? null : readStatus}
       </section>
 
       <section aria-labelledby="checks" className="flex flex-col gap-4">

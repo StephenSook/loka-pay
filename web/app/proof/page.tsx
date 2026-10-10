@@ -12,10 +12,12 @@ import { readBuiltThisWeekend } from "@/lib/github";
 import { PINS } from "@/lib/pins";
 import { REPO_URL } from "@/lib/site";
 import { explorerAddress, explorerTx } from "@/lib/solana";
+import { formatEt } from "@/lib/time";
 
 // /proof (PLAN.md 3.2, 3.24, 3.60). A claim is Live only with evidence a judge can open;
-// a claim the chain decides is computed from this request's reads, so it can never say
-// Live while the chain says otherwise. Everything else says Building and has no link.
+// a claim the chain decides is computed from the latest devnet read (cached 30 seconds), and
+// when that read failed it says Not checked, never Live from an older read. Everything else
+// says Building and has no link.
 
 export const metadata: Metadata = {
   title: "Proof | LOKA Pay",
@@ -38,8 +40,22 @@ interface Claim {
   note?: string;
 }
 
-function claimsFrom(facts: Read<ProgramFacts>, reserves: Read<ReservesRead>): Claim[] {
-  const deployed: Claim = facts.ok
+/**
+ * The data of a read that is current, or why there is none: the read failed, or only an
+ * older read succeeded. A claim the chain decides is never decided from an older read.
+ */
+function current<T>(read: Read<T>): { data: T; problem: null } | { data: null; problem: string } {
+  if (!read.ok) return { data: null, problem: read.reason };
+  if (read.staleBecause) {
+    return { data: null, problem: `The latest devnet read, at ${formatEt(read.staleBecause.atMs)}, failed: ${read.staleBecause.reason}.` };
+  }
+  return { data: read.data, problem: null };
+}
+
+function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRead>): Claim[] {
+  const facts = current(factsRead);
+  const reserves = current(reservesRead);
+  const deployed: Claim = facts.data
     ? facts.data.program.exists && facts.data.program.executable
       ? {
           id: "deployed",
@@ -48,16 +64,16 @@ function claimsFrom(facts: Read<ProgramFacts>, reserves: Read<ReservesRead>): Cl
           evidence: { href: explorerAddress(PINS.programId), label: "Program on Solana Explorer" },
         }
       : { id: "deployed", text: "The loka_vault program is deployed on devnet and executable.", status: "building", note: "The chain does not show an executable program at the pinned id." }
-    : { id: "deployed", text: "The loka_vault program is deployed on devnet and executable.", status: "unchecked", note: facts.reason };
+    : { id: "deployed", text: "The loka_vault program is deployed on devnet and executable.", status: "unchecked", note: facts.problem };
 
-  const configPart = facts.ok ? facts.data.config : null;
+  const configPart = facts.data ? facts.data.config : null;
   const initialized: Claim =
     configPart === null || !configPart.ok
       ? {
           id: "initialized",
           text: "The vault is initialized for devnet USDC.",
           status: "unchecked",
-          note: configPart === null ? (facts.ok ? "" : facts.reason) : configPart.reason,
+          note: configPart === null ? (facts.problem ?? "") : configPart.reason,
         }
       : configPart.value.exists && configPart.value.mintMatchesPins && configPart.value.cluster === 0
         ? {
@@ -68,10 +84,10 @@ function claimsFrom(facts: Read<ProgramFacts>, reserves: Read<ReservesRead>): Cl
           }
         : { id: "initialized", text: "The vault is initialized for devnet USDC.", status: "building", note: "The config account on chain does not match the pins." };
 
-  const redeemedOnChain = reserves.ok ? reserves.data.allowances.some((a) => BigInt(a.redeemedUnits) > BigInt(0)) : null;
+  const redeemedOnChain = reserves.data ? reserves.data.allowances.some((a) => BigInt(a.redeemedUnits) > BigInt(0)) : null;
   const redeemed: Claim =
     redeemedOnChain === null
-      ? { id: "redeemed", text: "A payment note has been redeemed on devnet.", status: "unchecked", note: reserves.ok ? "" : reserves.reason }
+      ? { id: "redeemed", text: "A payment note has been redeemed on devnet.", status: "unchecked", note: reserves.problem ?? "" }
       : redeemedOnChain
         ? {
             id: "redeemed",
@@ -111,9 +127,9 @@ function claimsFrom(facts: Read<ProgramFacts>, reserves: Read<ReservesRead>): Cl
     {
       id: "reserves",
       text: "Proof of reserves from the program's accounts, every balance read at one slot.",
-      status: reserves.ok ? "live" : "unchecked",
-      evidence: reserves.ok ? { href: "#reserves", label: "Proof of reserves below", internal: true } : undefined,
-      note: reserves.ok ? undefined : reserves.reason,
+      status: reserves.data ? "live" : "unchecked",
+      evidence: reserves.data ? { href: "#reserves", label: "Proof of reserves below", internal: true } : undefined,
+      note: reserves.problem ?? undefined,
     },
     redeemed,
     {
