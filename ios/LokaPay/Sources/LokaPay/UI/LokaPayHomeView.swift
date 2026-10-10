@@ -80,11 +80,15 @@ public struct LokaPayHomeView: View {
     private let bluetoothOn: Bool?
     private let meshReturns: PaymentInbox?
     private let meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
+    /// False while the app shows something else over these screens (the Offline corner, another
+    /// tab). The screens are then unmounted, so Receive detaches its Bluetooth inbox and nothing is
+    /// accepted, reserved or signed unseen; codes wait in the inbox. The models keep their state.
+    private let isActive: Bool
     /// Reply keys (`MeshReturns.replyKey`) `meshReply` settled, newest last and bounded, so each reply
     /// goes once per presentation of its payment.
     @State private var repliesSent: [String] = []
 
-    public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay) {
+    public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay, isActive: Bool = true) {
         let d = dependencies
         let monitor = d.connectivity
         _payModel = State(wrappedValue: PayModel(allowanceWire: d.allowanceWire, signer: d.signer, serials: d.serials,
@@ -100,6 +104,7 @@ public struct LokaPayHomeView: View {
         bluetoothOn = d.bluetoothOn
         meshReturns = d.meshReturns
         meshReply = d.meshReply
+        self.isActive = isActive
     }
 
     public var body: some View {
@@ -110,9 +115,13 @@ public struct LokaPayHomeView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            switch tab {
-            case .pay: PayView(model: payModel, connectivity: connectivity)
-            case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn)
+            if isActive {
+                switch tab {
+                case .pay: PayView(model: payModel, connectivity: connectivity)
+                case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn)
+                }
+            } else {
+                Spacer(minLength: 0)
             }
         }
         .background(LokaColor.paper.ignoresSafeArea())

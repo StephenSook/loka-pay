@@ -1178,6 +1178,8 @@ struct LokaPayTab<OfflineCorner: View>: View {
     /// payment texts through ChatStore and names contacts from ContactStore.
     @EnvironmentObject private var chat: ChatStore
     @EnvironmentObject private var contacts: ContactStore
+    /// False while another LOKA tab is selected (LokaRootView sets it per tab).
+    @Environment(\.lokaTabActive) private var tabActive
     @Binding var showOfflineCorner: Bool
     private let offlineCorner: OfflineCorner
 
@@ -1192,7 +1194,8 @@ struct LokaPayTab<OfflineCorner: View>: View {
             VStack(spacing: 0) {
                 payBar
                 LokaPayMeshBanner(notes: store.meshNotes, store: store, contacts: contacts, chat: chat)
-                LokaPayHomeHost(store: store, link: chat.link)
+                // Pay and Receive are live only while shown: not behind the Offline corner, not on another tab.
+                LokaPayHomeHost(store: store, link: chat.link, isActive: tabActive && !showOfflineCorner)
             }
             .background(LokaColor.paper.ignoresSafeArea())
             .opacity(showOfflineCorner ? 0 : 1)
@@ -1261,12 +1264,14 @@ private struct LokaPayHomeHost: View {
     /// Only its radio state is read: observing all of BleLink would rebuild the payment models on
     /// every signal-strength update.
     let link: BleLink
+    /// Pay and Receive are on screen (`LokaPayHomeView`'s `isActive`).
+    let isActive: Bool
     @State private var bluetoothOn: Bool?
 
     var body: some View {
         Group {
             if let dependencies = store.homeDependencies(bluetoothOn: bluetoothOn) {
-                LokaPayHomeView(dependencies: dependencies).id(store.wiresVersion)
+                LokaPayHomeView(dependencies: dependencies, isActive: isActive).id(store.wiresVersion)
             } else {
                 LokaPaySetupView(store: store)
             }
