@@ -150,6 +150,7 @@ const conf = (f) =>
     f.txSignature,
     u64be(f.slot),
     i64be(f.blockTime),
+    i64be(f.uploadedAt),
     u8(CONF_STATUS[f.status]),
     u16be(f.errorCode),
   );
@@ -306,6 +307,15 @@ const invalidNotes = [
   { name: 'trailing_byte', wireHex: hex(concat(n0Wire, u8(0))), error: 'length' },
   { name: 'bad_prefix', wireHex: hex(withByte(n0Wire, 15, 0x32)), error: 'prefix' },
   { name: 'cluster_2', wireHex: hex(withByte(n0Wire, 48, 2)), error: 'cluster' },
+  {
+    // Correctly signed for mainnet: stateless checks must still refuse it on a devnet deployment.
+    name: 'wrong_cluster_signed',
+    wireHex: (() => {
+      const b = note({ clusterId: 1, allowanceId: 1001n, payeeKeyHash: merchantA.keyHash, amount: 1000000n, serial: 0, expiry: EXPIRY });
+      return hex(concat(b, signP256(payer, b), payer.publicKey));
+    })(),
+    error: 'cluster',
+  },
   { name: 'currency_eur', wireHex: hex(concat(n0Wire.slice(0, 129), ascii('EUR', 3), n0Wire.slice(132))), error: 'currency' },
   {
     name: 'amount_zero',
@@ -343,16 +353,16 @@ const ackWire = concat(ackBytes, ackSig, merchantA.publicKey);
 const TX_SIG = label('vector tx signature part 1').slice(0, 32);
 const txSignature = concat(TX_SIG, label('vector tx signature part 2'));
 const confCases = [
-  { name: 'settled', status: 'settled', slot: 412345678n, blockTime: 1791590403n, errorCode: 0, txSignature },
-  { name: 'failed_on_chain_serial_used', status: 'failed_on_chain', slot: 412345999n, blockTime: 1791590500n, errorCode: 6001, txSignature: concat(label('cheat tx 1'), label('cheat tx 2')) },
-  { name: 'refused_off_chain', status: 'refused_off_chain', slot: 0n, blockTime: 0n, errorCode: 0, txSignature: new Uint8Array(64) },
+  { name: 'settled', status: 'settled', slot: 412345678n, blockTime: 1791590403n, uploadedAt: 1791590401n, errorCode: 0, txSignature },
+  { name: 'failed_on_chain_serial_used', status: 'failed_on_chain', slot: 412345999n, blockTime: 1791590500n, uploadedAt: 1791590498n, errorCode: 6001, txSignature: concat(label('cheat tx 1'), label('cheat tx 2')) },
+  { name: 'refused_off_chain', status: 'refused_off_chain', slot: 0n, blockTime: 0n, uploadedAt: 1791590600n, errorCode: 0, txSignature: new Uint8Array(64) },
 ];
 const confs = confCases.map((c) => {
   const bytes = conf({ ...c, noteId: n0Id });
   const sig = signEd(bytes);
   return {
     name: c.name,
-    fields: { noteIdHex: hex(n0Id), txSignatureHex: hex(c.txSignature), txSignatureBase58: base58.encode(c.txSignature), slot: c.slot.toString(), blockTime: c.blockTime.toString(), status: c.status, statusCode: CONF_STATUS[c.status], errorCode: c.errorCode },
+    fields: { noteIdHex: hex(n0Id), txSignatureHex: hex(c.txSignature), txSignatureBase58: base58.encode(c.txSignature), slot: c.slot.toString(), blockTime: c.blockTime.toString(), uploadedAt: c.uploadedAt.toString(), status: c.status, statusCode: CONF_STATUS[c.status], errorCode: c.errorCode },
     confHex: hex(bytes),
     signatureHex: hex(sig),
     wireHex: hex(concat(bytes, sig)),
@@ -445,7 +455,7 @@ const vectors = {
     p256OrderHex: P256_N.toString(16).padStart(64, '0'),
     p256HalfOrderHex: P256_HALF_N.toString(16).padStart(64, '0'),
     prefixes: PREFIX,
-    sizes: { NOTE_V1: 141, noteWire: 238, ACK_V1: 56, ackWire: 153, CONF_V1: 131, confWire: 195, ALLOW_V1: 185, WITHDRAW_V1: 161, REFUND_V1: 137, precompileDataOneNote: 254 },
+    sizes: { NOTE_V1: 141, noteWire: 238, ACK_V1: 56, ackWire: 153, CONF_V1: 139, confWire: 203, ALLOW_V1: 185, WITHDRAW_V1: 161, REFUND_V1: 137, precompileDataOneNote: 254 },
     confStatus: CONF_STATUS,
   },
   keys: {
@@ -467,8 +477,8 @@ const vectors = {
   refunds: [{ name: 'merchant_a_half_refund_of_note_0', fields: { noteIdHex: hex(n0Id), allowanceId: '1001', amount: '500000', counter: '0' }, refundHex: hex(refundBytes), signatureHex: hex(refundSig), merchantPublicKeyHex: hex(merchantA.publicKey) }],
   markers: [{ name: 'note_0_seen_at_merchant_a', wireHex: hex(markerWire), transport: transport('M', markerWire) }],
   receipts: [
-    { name: 'note_0_settled', wireHex: hex(receiptWire), transport: transport('X', receiptWire), verifyUrlFragment: `r=${base64urlnopad.encode(receiptWire)}` },
-    { name: 'note_0_pending', wireHex: hex(receiptNoConf), transport: transport('X', receiptNoConf) },
+    { name: 'note_0_with_confirmation', wireHex: hex(receiptWire), transport: transport('X', receiptWire), verifyUrlFragment: `r=${base64urlnopad.encode(receiptWire)}` },
+    { name: 'note_0_without_confirmation', wireHex: hex(receiptNoConf), transport: transport('X', receiptNoConf) },
   ],
 };
 
