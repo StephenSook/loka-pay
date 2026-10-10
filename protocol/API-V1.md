@@ -186,6 +186,8 @@ Phones use this to recover a confirmation after a dropped connection; the mercha
 
 `slot` is read live from the RPC on each call, so a judge can see the server is talking to devnet. `ok` is false (HTTP 503) when the RPC cannot be reached.
 
+The optional `phase3Routes` object reports `/api/volume`, `/trust`, `/v1/remittances` and `/api/reserves`. Each entry has `registered` and `reason`: null when registered, otherwise `missing_config`, `invalid_config` or `initialization_failed`. Missing optional configuration leaves that route unregistered and does not stop the core server.
+
 ## 7. Tests that hold both sides to this
 
 - Server (task 1.9): an integration test posts a vector note and checks the response shape above; a second post returns `replayed: true` with the same `conf`; a tampered note returns HTTP 422 named by the failed check with no `conf`; posting the same note first with a broken signature and then intact still settles it; two concurrent posts of one note produce exactly one transaction and the same `conf`.
@@ -212,3 +214,7 @@ One pending or unexpired successful funded allowance is permitted per recipient 
 Returns devnet program id, ProgramData address, snapshot slot and UTC observation time. `live` and `recorded` each contain `upgradeAuthority` and `programHash`; the authority comes live from the loader header and recorded from pins. The hash is SHA-256 of all ProgramData payload bytes after its 45-byte header, including allocation padding. `config/pins.json` may publish `programDataSha256` with exactly this definition. Without that recorded pin, the recorded hash and hashMatches are null. This read is not a reproducible-build verdict or a claim that the authority is revoked.
 
 The program and ProgramData are reread together at one slot, constrained at or after pointer discovery. Loader ownership, executable state, discriminator and the loader-derived pointer must match. A bad or unavailable read returns HTTP 503 `trust_unavailable`, with no verdict.
+
+## 11. `GET /api/reserves` (read-only)
+
+Exposes the existing devnet same-slot reserves reader, with string base-unit assets and liabilities, allowance remainders, merchant balances, bonds, snapshot slot and its scope. Missing or invalid live evidence returns HTTP 503 `reserves_unavailable`, without a reserves verdict. No POST or other write method is defined.
