@@ -20,6 +20,11 @@ public enum PaymentError: String, Error, Equatable, Sendable {
     case receiptFlag = "receipt_flag"
     case payeeMismatch = "payee_mismatch"
     case serialsExhausted = "serials_exhausted"
+    case confirmationMismatch = "confirmation_mismatch"
+    case allowanceMismatch = "allowance_mismatch"
+    case payerMismatch = "payer_mismatch"
+    case notEarmarked = "not_earmarked"
+    case expired
     case storage
 }
 

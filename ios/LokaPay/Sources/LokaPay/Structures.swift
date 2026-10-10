@@ -47,10 +47,11 @@ public struct Ack: Equatable, Sendable {
     }
 }
 
-/// CONF_V1 (131 bytes), server-signed with Ed25519; wire 195 bytes (section 4.3).
+/// CONF_V1 (139 bytes), server-signed with Ed25519; wire 203 bytes (section 4.3).
 public struct Confirmation: Equatable, Sendable {
     public static let prefix = "LOKA-PAY-CONF-V1"
-    public static let wireSize = 195
+    public static let wireSize = 203
+    static let bodySize = 139
 
     public enum Status: UInt8, Sendable {
         case settled = 1
@@ -62,12 +63,15 @@ public struct Confirmation: Equatable, Sendable {
     public let txSignature: Data
     public let slot: UInt64
     public let blockTime: Int64
+    /// When the server received the upload (server clock): the closest signed stand-in for
+    /// "signal returned". Copy says "after upload", never "after signal".
+    public let uploadedAt: Int64
     public let status: Status
     public let errorCode: UInt16
 
     public static func verify(wire: Data, serverPublicKey: Data) throws -> Confirmation {
         guard wire.count == wireSize else { throw PaymentError.length }
-        let body = Data(wire.prefix(131))
+        let body = Data(wire.prefix(bodySize))
         try Ed25519Rules.verify(signature: Data(wire.suffix(64)), message: body, publicKey: serverPublicKey)
         var r = ByteReader(body)
         guard try r.read(16) == Data(prefix.utf8) else { throw PaymentError.prefix }
@@ -75,10 +79,11 @@ public struct Confirmation: Equatable, Sendable {
         let tx = try r.read(64)
         let slot = try r.u64()
         let blockTime = try r.i64()
+        let uploadedAt = try r.i64()
         guard let status = Status(rawValue: try r.u8()) else { throw PaymentError.length }
         let errorCode = try r.u16()
         return Confirmation(noteId: noteId, txSignature: tx, slot: slot, blockTime: blockTime,
-                            status: status, errorCode: errorCode)
+                            uploadedAt: uploadedAt, status: status, errorCode: errorCode)
     }
 }
 
