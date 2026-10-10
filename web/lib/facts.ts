@@ -53,6 +53,18 @@ export const IPHONE_REFUSED_TX_SIGNATURE =
   "3XtQtnHRKC3QvhBGye8gTMWimPg3iPXuBskf3LMsQEhJPdzeGiqEEjrmjFLqXFTJMQ9JFAitWoCbuEGFSLKjZc9n";
 export const IPHONE_REFUSED_NOTE_ID = "5ecdc8dc27d8ed9ecaf952efce6f6aedb206fd8c480d3f7b46fcb280d34ac0da";
 
+/**
+ * The demo payer's allowance: the one both iPhone proof pairs spent from. docs/FACTS.json
+ * proof_pair_iphone_settled_tx and proof_pair_iphone_refused_tx name it in their source
+ * ("allowance 10652706154269594633"); unit/watch.test.ts checks that both still do. /judge's
+ * "Watch on your phone" QR opens /watch for it. If the demo payer moves to another allowance
+ * (PLAN.md 3.82), change it here and in those FACTS sources together.
+ */
+export const DEMO_ALLOWANCE_ID = "10652706154269594633";
+
+/** The address /judge's QR code opens on a judge's phone: always the production site. */
+export const WATCH_DEMO_URL = `https://zerobars.us/watch?a=${DEMO_ALLOWANCE_ID}`;
+
 /** iOS status (PLAN.md 1.11): App Store Connect read betaReviewState WAITING_FOR_REVIEW, submitted 12:05:42 AM ET. */
 export const TESTFLIGHT_STATUS =
   "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves";
