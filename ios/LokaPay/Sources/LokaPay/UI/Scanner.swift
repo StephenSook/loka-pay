@@ -39,7 +39,7 @@ struct CodeEntryField: View {
 #if os(iOS)
 /// Camera QR scanner (task 3.70). Kept thin: it only turns QR codes into strings and reports each
 /// distinct string once; `ScanParser` and the models do every check. Needs a device camera and the
-/// app's NSCameraUsageDescription, so it is not unit-tested; its camera math is (`ScanGeometry`).
+/// app's NSCameraUsageDescription, so it is not unit-tested; its camera math, in `ScanGeometry`, is.
 public struct PaymentScannerView: UIViewControllerRepresentable {
     let onScan: (String) -> Void
 
