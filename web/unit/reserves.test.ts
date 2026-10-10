@@ -139,3 +139,58 @@ test.describe("an asset that is not the pinned sandbox USDC in the program's vau
     await expect(read()).rejects.toThrow(/not the program's vault account; no reserves verdict/);
   });
 });
+
+// A consistent snapshot: the list is taken again at or after the balances' slot, and when an
+// account appeared in between, the balances are read again for the new list.
+test.describe("one slot for every balance", () => {
+  const NEW_ALLOWANCE = PINS.feePayers.demo;
+  const allowance = (id: number, cap: number, redeemed: number, bond: number) => ({
+    owner: PINS.programId,
+    data: allowanceBytes({ id: BigInt(id), cap: BigInt(cap), redeemed: BigInt(redeemed), bond: BigInt(bond), funder: PINS.wallets.tableDemo }),
+  });
+
+  test("an allowance opened between the balances and the check: the balances are read again, and it is counted", async () => {
+    node = healthyNode();
+    let getMultiple = 0;
+    node.beforeAnswer = (method) => {
+      if (method === "getMultipleAccounts") getMultiple += 1;
+      // Right after the first balances call, a new allowance (cap 2.00, bond 0.50) opens and
+      // its deposit lands in the vault.
+      if (method === "getProgramAccounts" && getMultiple === 1 && !node.accounts.has(NEW_ALLOWANCE)) {
+        node.accounts.set(NEW_ALLOWANCE, allowance(2, 2_000_000, 0, 500_000));
+        node.accounts.set(PINS.accounts.vaultUsdcAccount, { owner: TOKEN_PROGRAM, data: tokenAccountBytes(PINS.mint, PINS.accounts.vault, BigInt(9_500_000)) });
+      }
+    };
+    const r = await read();
+    expect(node.calls).toEqual(["getProgramAccounts", "getMultipleAccounts", "getProgramAccounts", "getMultipleAccounts", "getProgramAccounts"]);
+    expect(r.allowances.map((a) => a.address).sort()).toEqual([ALLOWANCE, NEW_ALLOWANCE].sort());
+    expect(r.totals).toEqual({
+      assets: "9500000",
+      allowanceRemaining: "4500000",
+      bonds: "1500000",
+      merchantBalances: "2500000",
+      liabilities: "8500000",
+      difference: "1000000",
+    });
+    // The list it reports is the one taken after the first balances call, and the check
+    // after the second.
+    expect(r.listedAt.first).toBeLessThan(r.slot);
+    expect(r.listedAt.check).toBeGreaterThan(r.slot);
+  });
+
+  test("accounts that keep changing during the read: no totals, the reason instead", async () => {
+    node = healthyNode();
+    const extra = [PINS.feePayers.demo, PINS.feePayers.public, PINS.wallets.publicOnboarding];
+    let opened = 0;
+    let getMultiple = 0;
+    node.beforeAnswer = (method) => {
+      if (method === "getMultipleAccounts") getMultiple += 1;
+      // Before every check, one more allowance opens.
+      if (method === "getProgramAccounts" && getMultiple > opened && opened < extra.length) {
+        node.accounts.set(extra[opened], allowance(10 + opened, 1_000_000, 0, 0));
+        opened += 1;
+      }
+    };
+    await expect(read()).rejects.toThrow("program accounts kept changing during the read; reload to try again");
+  });
+});

@@ -225,7 +225,18 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
   expect(foreign).toEqual([]);
 });
 
-test("/proof: Live claims link their evidence, Building claims link nothing; reserves and commits or honest failures", async ({
+// Claims a read decides, with the source it names and the most its read may age for a Live
+// claim (lib/chain.ts CHAIN_READS, lib/github.ts GITHUB_READS: 10 s and 60 s).
+const READ_BACKED: Record<string, { source: string; maxAgeS: number }> = {
+  deployed: { source: "Solana devnet", maxAgeS: 10 },
+  initialized: { source: "Solana devnet", maxAgeS: 10 },
+  precompile: { source: "Solana devnet", maxAgeS: 10 },
+  reserves: { source: "Solana devnet", maxAgeS: 10 },
+  redeemed: { source: "Solana devnet", maxAgeS: 10 },
+  "program-ci": { source: "GitHub", maxAgeS: 60 },
+};
+
+test("/proof: Live claims link their evidence and the current read behind it, others link nothing; reserves and commits or honest failures", async ({
   page,
   baseURL,
   request,
@@ -234,18 +245,39 @@ test("/proof: Live claims link their evidence, Building claims link nothing; res
   await open(page, "/proof");
   const claims = page.locator('[data-testid^="claim-"][data-status]');
   expect(await claims.count()).toBeGreaterThanOrEqual(8);
+  const statusOf: Record<string, string | null> = {};
   for (const claim of await claims.all()) {
+    const id = (await claim.getAttribute("data-testid"))!.replace(/^claim-/, "");
     const status = await claim.getAttribute("data-status");
+    statusOf[id] = status;
     const evidence = claim.getByTestId("claim-evidence");
+    const checked = claim.getByTestId("claim-checked");
     if (status === "live") {
       await expect(evidence).toHaveCount(1);
       await expect(claim.getByTestId("claim-status")).toHaveText("Live");
+      const backing = READ_BACKED[id];
+      if (backing) {
+        // The read that decided it, by source, with an age inside that read's window.
+        const text = await checked.innerText();
+        const m = text.match(/^Checked against (.+) at .+ ET, (\d+) s before this page loaded\.$/);
+        expect(m, `${id}: "${text}"`).not.toBeNull();
+        expect(m![1]).toBe(backing.source);
+        expect(Number(m![2])).toBeLessThanOrEqual(backing.maxAgeS);
+      } else {
+        await expect(checked).toHaveCount(0);
+      }
     } else {
       await expect(evidence).toHaveCount(0);
       await expect(claim.getByTestId("claim-evidence-more")).toHaveCount(0);
+      await expect(checked).toHaveCount(0);
       await expect(claim.getByTestId("claim-status")).toHaveText(status === "building" ? "Building" : "Not checked");
+      // A claim that is not Live says why.
+      await expect(claim.getByTestId("claim-note")).not.toBeEmpty();
     }
   }
+  for (const id of Object.keys(READ_BACKED)) expect(statusOf[id], id).toBeDefined();
+  // This server cannot see a visitor's WebSocket, so the live feed claim is never Live.
+  expect(statusOf.live).toBe("unchecked");
   // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
   // /live's newest rows; /live is the second link.
   const redeemed = page.getByTestId("claim-redeemed");
@@ -262,20 +294,38 @@ test("/proof: Live claims link their evidence, Building claims link nothing; res
     "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves. Status as of 2026-10-10.",
   );
 
-  // Proof of reserves: liabilities plus the difference equal the assets, as printed.
+  // Proof of reserves: liabilities plus the difference equal the assets, as printed, compared
+  // exactly in base units. Every field must show an amount: a blank or garbled one fails.
   const reserves = page.getByTestId("reserves");
   const reservesFailure = page.locator("#reserves").getByTestId("read-failure");
   await expect(reserves.or(reservesFailure)).toBeVisible();
   if (await reserves.isVisible()) {
-    const units = async (id: string) => Number((await page.getByTestId(id).innerText()).replace(/[^0-9.-]/g, ""));
-    const assets = await units("reserves-assets");
-    const liabilities = await units("reserves-liabilities");
-    const difference = await units("reserves-difference");
-    const parts = (await units("reserves-allowances")) + (await units("reserves-bonds")) + (await units("reserves-merchants"));
-    expect(Math.round((liabilities - parts) * 1e6)).toBe(0);
-    expect(Math.round((assets - liabilities - difference) * 1e6)).toBe(0);
-    await expect(page.getByTestId("reserves-verdict")).toHaveText(difference >= 0 ? "Covered" : "Short");
-    await expect(page.getByTestId("reserves-read-stamp")).toContainText(/at slot \d+, every balance in one call/);
+    const baseUnits = async (id: string): Promise<bigint> => {
+      const text = (await page.getByTestId(id).innerText()).trim();
+      const m = text.match(/^(-?)(\d{1,3}(?:,\d{3})*)\.(\d{2,6}) sandbox USDC$/);
+      expect(m, `${id} shows "${text}", not an amount`).not.toBeNull();
+      const units = BigInt(m![2].replace(/,/g, "")) * BigInt(1_000_000) + BigInt(m![3].padEnd(6, "0"));
+      return m![1] === "-" ? -units : units;
+    };
+    const assets = await baseUnits("reserves-assets");
+    const liabilities = await baseUnits("reserves-liabilities");
+    const difference = await baseUnits("reserves-difference");
+    const parts = (await baseUnits("reserves-allowances")) + (await baseUnits("reserves-bonds")) + (await baseUnits("reserves-merchants"));
+    expect(liabilities).toBe(parts);
+    expect(assets - liabilities).toBe(difference);
+    await expect(page.getByTestId("reserves-verdict")).toHaveText(difference >= BigInt(0) ? "Covered" : "Short");
+    // The slots it names are in order: listed, then every balance, then listed again at or after it.
+    const stampText = await page.getByTestId("reserves-read-stamp").innerText();
+    const slots = stampText.match(/slot (\d+), every balance in one call \(accounts listed at slot (\d+) and checked again at slot (\d+)\)/);
+    expect(slots, stampText).not.toBeNull();
+    const [read, listed, check] = [Number(slots![1]), Number(slots![2]), Number(slots![3])];
+    expect(listed).toBeLessThanOrEqual(read);
+    expect(check).toBeGreaterThanOrEqual(read);
+    // The reserves claim is Live exactly when this panel shows a current read.
+    const current = (await page.getByTestId("reserves-read-stamp").getAttribute("data-current")) === "true";
+    expect(statusOf.reserves === "live").toBe(current);
+  } else {
+    expect(statusOf.reserves).toBe("unchecked");
   }
   await expect(page.getByTestId("reserves-not-shown")).toContainText("Bounty and operator credits");
 

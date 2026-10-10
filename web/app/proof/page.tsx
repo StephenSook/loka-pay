@@ -78,7 +78,11 @@ export default async function ProofPage() {
                   loaded.
                 </p>
               ) : null}
-              {c.status !== "live" && c.note ? <p className="break-words text-sm text-muted">{c.note}</p> : null}
+              {c.status !== "live" && c.note ? (
+                <p className="break-words text-sm text-muted" data-testid="claim-note">
+                  {c.note}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
