@@ -32,6 +32,12 @@ export const TEST_TX = encodeBase58(new Uint8Array(64).fill(0x11));
 /** Another signature shape (64 bytes of 0x22), for the failed-transaction answer. */
 export const TEST_FAILED_TX = encodeBase58(new Uint8Array(64).fill(0x22));
 
+/**
+ * A week after this test process started, unless a test names its own expiry: a fixed date would
+ * expire under the tests, and one fixed per process keeps two signatures of the same options equal.
+ */
+export const DEFAULT_EXPIRY = BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 3600);
+
 export interface CertificateOptions {
   allowanceId: bigint;
   cap: bigint;
@@ -50,8 +56,7 @@ export function testAllowanceWire(o: CertificateOptions): Uint8Array {
       payerKeyHash: TEST_PAYER_KEY_HASH,
       cap: o.cap,
       offlineLimit: o.cap,
-      // A week from now unless a test names its own: a fixed date would expire under the tests.
-      expiry: o.expiry ?? BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 3600),
+      expiry: o.expiry ?? DEFAULT_EXPIRY,
       earmarkList: encodeEarmarks((o.earmarks ?? []).map(fromHex)),
       bond: BigInt(0),
     },
