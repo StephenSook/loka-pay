@@ -199,6 +199,14 @@ test("/trust: pilot status from the authority read, custody, the checks and the 
   await expect(page.getByTestId("read-failure")).toHaveCount(0);
   await expect(page.getByTestId("upgrade-authority")).toHaveText(pins.upgradeAuthority);
   await expect(page.getByTestId("custody-authority")).toContainText("A 2-of-3 multisig is planned (task 3.46), not done.");
+  // The custody sentence is in the banner's tense: "today" only from a current read.
+  const sentence = page.getByTestId("authority-sentence");
+  await expect(sentence).toHaveAttribute("data-as-of", pilotAsOf!);
+  await expect(sentence).toHaveText(
+    pilotAsOf === "current"
+      ? "One key, held by one teammate, can upgrade the program today. A 2-of-3 multisig is planned (task 3.46), not done."
+      : /^As of that read, \d+ (s|min) old when this page loaded, one key, held by one teammate, could upgrade the program\. A 2-of-3 multisig is planned \(task 3\.46\), not done\.$/,
+  );
   await expect(page.getByTestId("custody-vault")).toContainText(`${EXPECTED.vault} sandbox USDC`);
   await expect(page.getByRole("main")).toContainText("Double spending is bounded, not prevented.");
   await page.waitForLoadState("networkidle");

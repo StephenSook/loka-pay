@@ -3,7 +3,7 @@ import { connection } from "next/server";
 import { SandboxChip } from "@/components/chips";
 import { CARD, Fact, Mono, OutLink, PAGE, ReadFailure, ReadStamp, YesNo } from "@/components/judge-ui";
 import { readProgramFacts } from "@/lib/chain";
-import { upgradeability } from "@/lib/claims";
+import { authoritySentence, upgradeability } from "@/lib/claims";
 import { shownTogether } from "@/lib/read-state";
 import { MULTISIG_TASK } from "@/lib/facts";
 import { PINS } from "@/lib/pins";
@@ -65,6 +65,7 @@ export default async function TrustPage() {
   const [facts] = shownTogether([await readProgramFacts()]);
   // The heading follows the upgrade authority the custody section shows, never a fixed line.
   const pilot = upgradeability(facts);
+  const authority = authoritySentence(facts, MULTISIG_TASK);
   const programData = facts.ok ? facts.data.programData : null;
   const vault = facts.ok ? facts.data.vault : null;
   const readStatus = facts.ok ? (
@@ -160,14 +161,16 @@ export default async function TrustPage() {
             <span className="flex flex-col gap-2">
               {programData === null ? null : programData.ok ? (
                 programData.value.upgradeAuthority === null ? (
-                  <span className="font-bold">None: the program is frozen and can no longer be changed.</span>
+                  <span className="font-bold" data-testid="authority-sentence" data-as-of={authority?.asOf}>
+                    {authority?.text}
+                  </span>
                 ) : (
                   <>
                     <Mono testId="upgrade-authority">{programData.value.upgradeAuthority}</Mono>
-                    {programData.value.upgradeAuthority === PINS.upgradeAuthority ? (
-                      <span>
-                        One key, held by one teammate, can upgrade the program today. A 2-of-3 multisig is planned (task{" "}
-                        {MULTISIG_TASK}), not done.
+                    {authority ? (
+                      // In the same tense as the banner: present only from a current read.
+                      <span data-testid="authority-sentence" data-as-of={authority.asOf}>
+                        {authority.text}
                       </span>
                     ) : (
                       <YesNo value={false} no="Differs from config/pins.json" />

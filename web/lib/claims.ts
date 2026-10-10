@@ -291,3 +291,45 @@ export function upgradeability(read: Read<ProgramFacts>): Upgradeability {
     body: `${audit} It stays upgradeable so a fix can ship during the event: freezing a Solana program cannot be undone. That also means whoever holds the upgrade authority can change the program, so that key is shown below, read from the chain with its time.`,
   };
 }
+
+/** The /trust custody sentence about the upgrade authority, in the same tense as the banner (upgradeability). */
+export interface AuthoritySentence {
+  /** "current": present tense; "dated": as of an older cached read; "stale": as of the last good read, the newer one failed. */
+  asOf: "current" | "dated" | "stale";
+  text: string;
+}
+
+/**
+ * The sentence under the upgrade authority on /trust: present tense only from a current read,
+ * otherwise as of the read it comes from, with that read's age. Null when the authority was not
+ * read, or when it differs from config/pins.json (the page flags that instead).
+ */
+export function authoritySentence(read: Read<ProgramFacts>, multisigTask: string): AuthoritySentence | null {
+  if (!read.ok || !read.data.programData.ok) return null;
+  const authority = read.data.programData.value.upgradeAuthority;
+  if (authority !== null && authority !== PINS.upgradeAuthority) return null;
+  const multisig = `A 2-of-3 multisig is planned (task ${multisigTask}), not done.`;
+  const age = formatAge(read.shownAtMs - read.readAtMs);
+  if (read.current) {
+    return {
+      asOf: "current",
+      text: authority === null ? "None: the program is frozen and can no longer be changed." : `One key, held by one teammate, can upgrade the program today. ${multisig}`,
+    };
+  }
+  if (read.staleBecause) {
+    return {
+      asOf: "stale",
+      text:
+        authority === null
+          ? `None at the last good read, ${age} old when this page loaded: the program was frozen. The latest read failed, so this page does not say more.`
+          : `At the last good read, ${age} old when this page loaded, one key, held by one teammate, could upgrade the program. The latest read failed, so this page does not say whether it still can. ${multisig}`,
+    };
+  }
+  return {
+    asOf: "dated",
+    text:
+      authority === null
+        ? `None as of that read, ${age} old when this page loaded: the program was frozen and could no longer be changed.`
+        : `As of that read, ${age} old when this page loaded, one key, held by one teammate, could upgrade the program. ${multisig}`,
+  };
+}

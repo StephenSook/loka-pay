@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { ProgramFacts, ReservesRead } from "../lib/chain";
-import { claimsFrom, upgradeability, type Claim } from "../lib/claims";
+import { authoritySentence, claimsFrom, upgradeability, type Claim } from "../lib/claims";
 import { PROGRAM_JOB, type MainChecks } from "../lib/github";
 import { PINS } from "../lib/pins";
 import type { Read } from "../lib/read-state";
@@ -269,5 +269,55 @@ test.describe("the /trust upgradeability heading", () => {
       expect(u.asOf).toBe("none");
       expect(u.heading).not.toMatch(/frozen/i);
     }
+  });
+});
+
+// The custody sentence under the upgrade authority on /trust (lib/claims.ts authoritySentence)
+// is in the same tense as the banner: present only from a current read.
+test.describe("the /trust custody sentence about the upgrade authority", () => {
+  const frozenData: ProgramFacts["programData"] = { ok: true, value: { deploySlot: 1, deployTimeMs: null, upgradeAuthority: null, programBytes: null } };
+  const frozen = (read: (f: ProgramFacts) => Read<ProgramFacts>) => read({ ...facts(), programData: frozenData });
+
+  test("a current read: present tense, as the banner", () => {
+    const read = fresh(facts(), 2_000);
+    expect(authoritySentence(read, "3.46")).toEqual({
+      asOf: "current",
+      text: "One key, held by one teammate, can upgrade the program today. A 2-of-3 multisig is planned (task 3.46), not done.",
+    });
+    expect(upgradeability(read).asOf).toBe("current");
+  });
+
+  test("a cached read 20 s old: as of that read, never \"today\"", () => {
+    const read = cached(facts(), 20_000);
+    const s = authoritySentence(read, "3.46")!;
+    expect(s.asOf).toBe("dated");
+    expect(s.text).toBe("As of that read, 20 s old when this page loaded, one key, held by one teammate, could upgrade the program. A 2-of-3 multisig is planned (task 3.46), not done.");
+    expect(s.text).not.toContain("today");
+    expect(upgradeability(read).asOf).toBe("dated");
+  });
+
+  test("a stale read: as of the last good read, and not known whether it still can, as the banner's unknown", () => {
+    const read = stale(facts(), 90_000, "node is behind");
+    const s = authoritySentence(read, "3.46")!;
+    expect(s.asOf).toBe("stale");
+    expect(s.text).toContain("At the last good read, 90 s old when this page loaded");
+    expect(s.text).toContain("does not say whether it still can");
+    expect(s.text).not.toContain("today");
+    expect(upgradeability(read).kind).toBe("unknown");
+  });
+
+  test("frozen: present only from a current read", () => {
+    expect(authoritySentence(frozen((f) => fresh(f)), "3.46")?.text).toBe("None: the program is frozen and can no longer be changed.");
+    expect(authoritySentence(frozen((f) => cached(f, 30_000)), "3.46")?.text).toBe(
+      "None as of that read, 30 s old when this page loaded: the program was frozen and could no longer be changed.",
+    );
+  });
+
+  test("no sentence when the authority was not read, or differs from the pins (the page flags that instead)", () => {
+    expect(authoritySentence(failed("down"), "3.46")).toBeNull();
+    expect(authoritySentence(fresh<ProgramFacts>({ ...facts(), programData: { ok: false, reason: "x" } }), "3.46")).toBeNull();
+    const otherData: ProgramFacts["programData"] = { ok: true, value: { deploySlot: 1, deployTimeMs: null, upgradeAuthority: PINS.wallets.canary, programBytes: null } };
+    const other = fresh<ProgramFacts>({ ...facts(), programData: otherData });
+    expect(authoritySentence(other, "3.46")).toBeNull();
   });
 });
