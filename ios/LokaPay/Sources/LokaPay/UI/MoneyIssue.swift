@@ -85,7 +85,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .notPaymentCode: return "That code is not a LOKA payment code."
         case .wrongKind(let expected, let got):
             let want = expected.map(Self.kindName).joined(separator: " or ")
-            return "That is a \(Self.kindName(got)) code. This step needs a \(want) code."
+            return "That is \(Self.article(Self.kindName(got))) \(Self.kindName(got)) code. "
+                + "This step needs \(Self.article(want)) \(want) code."
         case .codeTooLong: return "That code is longer than any LOKA payment code."
         case .allowanceNeeded: return "The note checked out. Now scan the payer's allowance code (code 1 of 2)."
         case .noAllowance:
@@ -108,6 +109,12 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 + ", but this phone could not record it in its offline ledger, so the ledger may still count "
                 + "this note as unsettled. The signed receipt above is the record."
         }
+    }
+
+    /// "an" before a vowel sound, "a" otherwise, for the code names in `kindName`.
+    static func article(_ phrase: String) -> String {
+        guard let first = phrase.lowercased().first else { return "a" }
+        return "aeiou".contains(first) ? "an" : "a"
     }
 
     public static func kindName(_ kind: PaymentTransport.Kind) -> String {
