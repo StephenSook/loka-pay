@@ -200,6 +200,17 @@ public final class PayModel {
     /// screen labels as such (PLAN.md miss branch).
     public var signerIsSecureEnclave: Bool { signer is SecureEnclaveP256Signer }
 
+    /// The signing card's title: it names Face ID only when the Secure Enclave key signs.
+    public static func signingTitle(secureEnclave: Bool) -> String {
+        secureEnclave ? "Waiting for Face ID or the passcode" : "Signing with this phone's software key (no Face ID)"
+    }
+
+    /// The line under the amount. PAYMENT-V1 section 4.5: the offline limit is the most unsettled
+    /// value one merchant should accept from this allowance in total, not a per-payment limit.
+    public static func offlineLimitHint(_ certificate: AllowanceCertificate) -> String {
+        "Up to $\(Money.display(baseUnits: certificate.offlineLimit)) sandbox unsettled with any one merchant (offline limit)."
+    }
+
     // MARK: - Hand over
 
     public var canSendOverBluetooth: Bool { meshSend != nil }

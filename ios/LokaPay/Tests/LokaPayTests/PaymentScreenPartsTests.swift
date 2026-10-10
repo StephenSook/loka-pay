@@ -97,6 +97,7 @@ struct ThemeTests {
             .settlement(.refused(check: "bad_ack", message: "")), .settlement(.network(.timedOut)),
             .settlement(.http(status: 503, error: nil, message: nil)), .settlement(.chainUnavailable(message: "")),
             .settlement(.rateLimited(retryAfter: 3, message: "")), .settlement(.verification(.badSignature)),
+            .ledgerNotUpdated(paid: true), .ledgerNotUpdated(paid: false),
         ]
         for kind in kinds {
             #expect(!kind.message.isEmpty && !kind.name.isEmpty)

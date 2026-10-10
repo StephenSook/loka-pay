@@ -40,6 +40,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     case serverNotConnected
     /// The settlement call failed; the note stays held on this phone.
     case settlement(SettlementError)
+    /// The chain decided the note (a verified CONF), but this phone could not record that
+    /// decision in its offline ledger. `paid` is true for a settled CONF.
+    case ledgerNotUpdated(paid: Bool)
 
     public var name: String {
         switch self {
@@ -61,6 +64,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .alreadyReceived: return "already_received"
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
+        case .ledgerNotUpdated: return "ledger_not_updated"
         }
     }
 
@@ -90,6 +94,10 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .alreadyReceived: return "This exact note was already received on this phone. It is held in the ledger; nothing new was accepted."
         case .serverNotConnected: return "No settlement server is connected in this build. The note stays held on this phone."
         case .settlement(let e): return Self.settlementMessage(e)
+        case .ledgerNotUpdated(let paid):
+            return (paid ? "Paid on chain" : "Failed on chain")
+                + ", but this phone could not record it in its offline ledger, so the ledger may still count "
+                + "this note as unsettled. The signed receipt above is the record."
         }
     }
 

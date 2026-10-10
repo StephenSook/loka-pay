@@ -298,6 +298,14 @@ public final class ReceiveModel {
 
     // MARK: - ACK
 
+    /// True for the Secure Enclave key (Face ID or passcode); false for a software key.
+    public var signerIsSecureEnclave: Bool { signer is SecureEnclaveP256Signer }
+
+    /// The line shown while the ACK is being signed: it names Face ID only for the Secure Enclave key.
+    public static func ackSigningText(secureEnclave: Bool) -> String {
+        secureEnclave ? "Signing the receipt (Face ID or passcode)" : "Signing the receipt with this phone's software key"
+    }
+
     /// Signs the ACK with the merchant key (Face ID or passcode on a phone). Called automatically
     /// after a note is accepted; call again if the first attempt was cancelled.
     public func signAck() async {
@@ -376,7 +384,8 @@ public final class ReceiveModel {
             do {
                 try ledger.resolve(noteId: current.note.noteId, as: receipt.status == .settled ? .settled : .refused)
             } catch {
-                report(.payment(.storage))
+                // Not `storage` ("nothing was accepted"): the chain has decided; only the local record failed.
+                report(.ledgerNotUpdated(paid: receipt.status == .settled))
             }
             refreshUnsettled(current.certificate.allowanceId)
         }

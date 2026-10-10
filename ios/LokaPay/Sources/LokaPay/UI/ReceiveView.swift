@@ -140,7 +140,8 @@ public struct ReceiveView: View {
                     PaymentQRView(text: ackText, caption: "Receipt for the payer, signed by this phone")
                 } else if model.isWorking {
                     ProgressView()
-                    Text("Signing the receipt (Face ID or passcode)").font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                    Text(ReceiveModel.ackSigningText(secureEnclave: model.signerIsSecureEnclave))
+                        .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
                 } else {
                     Text("The receipt is not signed yet.").font(LokaStyle.body).foregroundStyle(LokaColor.ink)
                     Button("Sign the receipt again") { Task { await model.signAck() } }.buttonStyle(LokaButtonStyle())

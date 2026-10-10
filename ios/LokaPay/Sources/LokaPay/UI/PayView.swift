@@ -74,7 +74,7 @@ public struct PayView: View {
         case .signing:
             VStack(alignment: .leading, spacing: 12) {
                 ProgressView()
-                Text("Waiting for Face ID or the passcode").font(LokaStyle.title).foregroundStyle(LokaColor.ink)
+                Text(PayModel.signingTitle(secureEnclave: isEnclave)).font(LokaStyle.title).foregroundStyle(LokaColor.ink)
                 Text("Nothing has been sent yet.").font(LokaStyle.body).foregroundStyle(LokaColor.muted)
             }
             .lokaCard()
@@ -124,7 +124,7 @@ public struct PayView: View {
             }
         }
         if let certificate = model.allowance?.certificate {
-            Text("Up to $\(Money.display(baseUnits: certificate.offlineLimit)) per payment offline (allowance offline limit).")
+            Text(PayModel.offlineLimitHint(certificate))
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
         }
     }

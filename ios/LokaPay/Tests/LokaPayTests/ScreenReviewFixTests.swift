@@ -326,3 +326,74 @@ struct MeshInboxTests {
         #expect(inbox.droppedWhileDetached == 1)
     }
 }
+
+@Suite("Pay and Receive copy says what the protocol means (review 1, finding 4)")
+@MainActor
+struct ScreenCopyTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    @Test("the offline limit is described as unsettled value per merchant, not a per-payment limit")
+    func offlineLimitHint() throws {
+        let certificate = try AllowanceCertificate.verify(wire: F.allowanceWire(payer: payer.keyHash), deployment: F.deployment,
+                                                          serverPublicKey: F.serverKey)
+        let hint = PayModel.offlineLimitHint(certificate)
+        #expect(hint == "Up to $3.00 sandbox unsettled with any one merchant (offline limit).")
+        #expect(!hint.contains("per payment"))
+    }
+
+    @Test("signing text names Face ID only for the Secure Enclave key")
+    func signingText() {
+        #expect(PayModel.signingTitle(secureEnclave: true) == "Waiting for Face ID or the passcode")
+        #expect(PayModel.signingTitle(secureEnclave: false) == "Signing with this phone's software key (no Face ID)")
+        #expect(ReceiveModel.ackSigningText(secureEnclave: true) == "Signing the receipt (Face ID or passcode)")
+        #expect(!ReceiveModel.ackSigningText(secureEnclave: false).contains("Face ID"))
+        let pay = PayModel(allowanceWire: F.allowanceWire(payer: payer.keyHash), signer: payer,
+                           serials: SerialReservations(url: F.tempURL("serials.json")), deployment: F.deployment,
+                           serverPublicKey: F.serverKey)
+        #expect(!pay.signerIsSecureEnclave)
+        let receive = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                   ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                   deployment: F.deployment, serverPublicKey: F.serverKey)
+        #expect(!receive.signerIsSecureEnclave)
+    }
+
+    /// A Receive model holding one accepted, acknowledged note, whose ledger file is then damaged
+    /// so the post-settlement write fails.
+    func settledWithBrokenLedger(confStatus: UInt8) async throws -> ReceiveModel {
+        let url = F.tempURL("ledger.json")
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let conf = F.confWire(noteId: note.noteId, status: confStatus, errorCode: confStatus == 2 ? 6001 : 0)
+        let stub = StubTransport([StubReply(status: 200, body: F.decisionBody(conf: conf, noteId: note.noteId,
+                                                                               jsonStatus: "settled"))])
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: OfflineLedger(url: url), settlementClient: APIFixtures.client(stub, retry: .never),
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, now: { F.now })
+        await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.payment?.ack != nil)
+        try Data("damaged".utf8).write(to: url)
+        await model.settle()
+        return model
+    }
+
+    @Test("a ledger write that fails after a Paid CONF says paid on chain, not 'nothing was accepted'")
+    func ledgerFailsAfterPaid() async throws {
+        let model = try await settledWithBrokenLedger(confStatus: 1)
+        #expect(model.phase == .settled)
+        #expect(model.settlement?.status == .paid)
+        #expect(model.issue?.kind == .ledgerNotUpdated(paid: true))
+        #expect(model.issue?.name == "ledger_not_updated")
+        let message = try #require(model.issue?.message)
+        #expect(message.hasPrefix("Paid on chain, but this phone could not record it"))
+        #expect(message != MoneyIssueKind.payment(.storage).message)
+    }
+
+    @Test("a ledger write that fails after a Failed CONF says failed on chain")
+    func ledgerFailsAfterFailed() async throws {
+        let model = try await settledWithBrokenLedger(confStatus: 2)
+        #expect(model.settlement?.status == .failed)
+        #expect(model.issue?.kind == .ledgerNotUpdated(paid: false))
+        #expect(model.issue?.message.hasPrefix("Failed on chain, but this phone could not record it") == true)
+    }
+}
