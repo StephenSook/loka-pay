@@ -120,6 +120,8 @@ A decided-note replay still passes note, ACK and payer-binding validation, then 
 
 Only an outcome on chain is final. Except for the late original-signature rule below, once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and attaching an ack never changes the decision or the CONF.
 
+GET recovery retains an accepted unsigned note when fee admission is denied or uncertain, returning HTTP 202 pending instead of deleting its journal entry. Later GETs can recover after lease expiry and budget reset; the original upload time and ACK remain recorded. An initial unsigned POST budget refusal remains HTTP 429.
+
 **One attempt per note id.** The server holds at most one in-flight attempt for a note id (for example a lock or a unique row keyed by note id):
 
 - A second upload while the first is in flight does not build a second transaction. It answers HTTP 202 with the pending body in section 5, and the client polls `GET /v1/notes/{noteId}`.
