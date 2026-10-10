@@ -201,14 +201,16 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         }
     }
 
-    /// "Nothing was decided" only where API v1 says the chain was not reached; where no answer this
-    /// phone can trust came back (`SettlementError.leavesOutcomeUnknown`), the outcome is unknown.
+    /// An answer API v1 defines as reaching no decision speaks only for the request it answers, so it
+    /// says that request decided nothing, never that the note was never decided (an earlier upload's
+    /// answer may have been lost). Where no answer this phone can trust came back
+    /// (`SettlementError.leavesOutcomeUnknown`), the outcome is unknown.
     static func settlementMessage(_ e: SettlementError) -> String {
-        let held = "Nothing was decided on chain; the note stays held on this phone."
+        let held = "That request decided nothing on chain; the note stays held on this phone."
         let unknown = "The note stays held on this phone; Check again asks the server by note id."
         switch e {
         case .refused(let check, _):
-            return "The server refused this note before it reached the chain (check: \(check)). \(held)"
+            return "The server refused this upload before it reached the chain (check: \(check)). \(held)"
         case .network(let code):
             return "The connection to the settlement server failed (\(networkWords(code))). The server may have "
                 + "settled the note before the answer was lost, so the outcome is unknown. \(unknown)"

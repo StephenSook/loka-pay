@@ -424,7 +424,7 @@ struct SettleScreenTests {
         await model.settle()
         #expect(model.phase == .received)
         #expect(model.issue?.kind == .settlement(.refused(check: "bad_signature", message: "signature does not verify")))
-        #expect(model.issue?.message.contains("refused this note before it reached the chain") == true)
+        #expect(model.issue?.message.contains("refused this upload before it reached the chain") == true)
         #expect(model.settlement == nil)
         #expect(try ledger.entries().first?.state == .pending)
     }

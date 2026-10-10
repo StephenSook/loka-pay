@@ -655,9 +655,10 @@ public final class ReceiveModel {
 
     /// Shows a failed settlement call. The ledger is never touched here, so the note stays reserved
     /// whatever went wrong. A failure with no answer this phone can trust makes the note's outcome
-    /// unknown and offers Check again. Only a note-specific answer that resolves it clears that
-    /// (here `unknown_note` or a 422; a verified CONF or a 202 in `handle`). An error about only
-    /// the latest request (a 429, the 400s, `chain_unavailable`) keeps an earlier unknown outcome.
+    /// unknown and offers Check again. Only an answer about the note id clears that: here
+    /// `unknown_note` from the lookup; in `handle`, a verified CONF or a 202. An error about only the
+    /// latest request (a 422, which is unsigned and binds nothing, a 429, the 400s,
+    /// `chain_unavailable`) keeps an earlier unknown outcome.
     private func reportSettlement(_ error: Error) {
         if error is CancellationError { return }
         let settlement = (error as? SettlementError) ?? .transport(String(describing: error))

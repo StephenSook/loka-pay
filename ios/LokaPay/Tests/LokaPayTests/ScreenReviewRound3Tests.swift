@@ -302,7 +302,7 @@ struct OutcomeUnknownTests {
                                                     jsonStatus: "settled"))
     }
 
-    @Test("a dropped or unverifiable answer says the outcome is unknown; a refusal still says nothing was decided")
+    @Test("a dropped or unverifiable answer says the outcome is unknown; a refusal speaks only for that upload")
     func copy() {
         let unknown: [SettlementError] = [
             .network(.timedOut), .network(.networkConnectionLost), .network(.notConnectedToInternet), .transport("x"),
@@ -324,8 +324,10 @@ struct OutcomeUnknownTests {
             #expect(!error.leavesOutcomeUnknown, "\(error)")
             #expect(!MoneyIssueKind.settlement(error).message.contains("unknown"), "\(error)")
         }
-        #expect(MoneyIssueKind.settlement(.refused(check: "bad_ack", message: "")).message
-                .contains("Nothing was decided on chain"))
+        let refused = MoneyIssueKind.settlement(.refused(check: "bad_ack", message: "")).message
+        #expect(refused.contains("refused this upload before it reached the chain"))
+        #expect(refused.contains("That request decided nothing on chain"))
+        #expect(!refused.contains("Nothing was decided"))
         #expect(!ReceiveModel.outcomeUnknownText.contains("\u{2014}") && !ReceiveModel.outcomeUnknownText.contains("\u{2013}"))
     }
 
@@ -419,19 +421,26 @@ struct OutcomeUnknownTests {
         #expect(!model.settlementOutcomeUnknown)
     }
 
-    @Test("chain_unavailable on Settle again keeps the unknown outcome; a 422 for the same bytes resolves it")
+    @Test("chain_unavailable and a 422 on Settle again keep the unknown outcome; only the note-id lookup resolves it")
     func onlyNoteAnswersResolve() async throws {
         let (model, _, _, _) = try await received([
             StubReply(failure: URLError(.networkConnectionLost)),
             APIFixtures.errorReply(503, "chain_unavailable"),
-            APIFixtures.errorReply(422, "bad_signature"),
+            APIFixtures.errorReply(422, "wrong_program"),
+            APIFixtures.errorReply(404, "unknown_note"),
         ])
         await model.settle()
         await model.settle()
         #expect(model.issue?.kind == .settlement(.chainUnavailable(message: "m")))
         #expect(model.offersCheckAgain)
+        // A 422 is unsigned and binds nothing: it says only that this upload failed a check (for
+        // example after the server's pins changed), not that the earlier one never reached the chain.
         await model.settle()
-        #expect(model.issue?.kind == .settlement(.refused(check: "bad_signature", message: "m")))
+        #expect(model.issue?.kind == .settlement(.refused(check: "wrong_program", message: "m")))
+        #expect(model.settlementOutcomeUnknown)
+        #expect(model.offersCheckAgain)
+        await model.checkAgain()
+        #expect(model.issue?.kind == .settlement(.unknownNote(message: "m")))
         #expect(!model.settlementOutcomeUnknown)
         #expect(!model.offersCheckAgain)
     }
