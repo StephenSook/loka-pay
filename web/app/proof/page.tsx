@@ -10,10 +10,12 @@ import { readProgramFacts, readReserves } from "@/lib/chain";
 import { claimsFrom, type Evidence } from "@/lib/claims";
 import { readBuiltThisWeekend, readMainChecks } from "@/lib/github";
 import { shownTogether } from "@/lib/read-state";
+import { readServerHealth } from "@/lib/settlement";
 import { formatAge } from "@/lib/time";
 
 // /proof (PLAN.md 3.2, 3.24, 3.60). The claims and the rules that decide their status are in
-// lib/claims.ts; this page reads devnet and GitHub and shows them.
+// lib/claims.ts; this page reads devnet, GitHub and the settlement server's health check and
+// shows them.
 
 export const metadata: Metadata = {
   title: "Proof | LOKA Pay",
@@ -40,15 +42,16 @@ export default async function ProofPage() {
   // needCurrent: a claim is Live only from a current read (reused or made now), never from
   // an older cached one.
   // Every read's age is decided at one render time, after the slowest read has arrived.
-  const [facts, reserves, checks, built] = shownTogether(
+  const [facts, reserves, checks, built, health] = shownTogether(
     await Promise.all([
       readProgramFacts({ needCurrent: true }),
       readReserves({ needCurrent: true }),
       readMainChecks({ needCurrent: true }),
       readBuiltThisWeekend(),
+      readServerHealth({ needCurrent: true }),
     ]),
   );
-  const claims = claimsFrom(facts, reserves, checks);
+  const claims = claimsFrom(facts, reserves, checks, health);
 
   return (
     <main className={PAGE}>

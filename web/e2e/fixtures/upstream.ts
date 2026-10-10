@@ -149,6 +149,9 @@ function rpcAnswer(state: { slot: number; accounts: Map<string, Account> }, meth
   }
 }
 
+/** TEST FIXTURE: the settlement API's health answer (API-V1 section 6), as the stand-in sends it. */
+export const HEALTH = { ok: true, commit: MAIN_SHA, cluster: "devnet", programId: pins.programId as string, slot: 600_123_456 };
+
 const JOB_NAMES: Record<string, string> = {
   ios: "ios (package tests, app build, release checks)",
   android: "android (core tests, debug build, lint)",
@@ -226,6 +229,7 @@ export async function startUpstream(port = UPSTREAM_PORT): Promise<Server> {
       const body = githubAnswer(url.pathname);
       return body === null ? send(404, { message: "Not Found" }) : send(200, body);
     }
+    if (req.method === "GET" && url.pathname === "/settlement/api/health") return send(200, HEALTH);
     if (req.method === "POST" && url.pathname === "/rpc") {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));

@@ -67,6 +67,7 @@ export default defineConfig({
         // The explicit test mode that lets the server read a local stand-in (lib/test-upstream.ts).
         LOKA_E2E_UPSTREAM: "1",
         SOLANA_RPC_URL: `${UPSTREAM}/rpc`,
+        SETTLEMENT_API_URL: `${UPSTREAM}/settlement`,
         GITHUB_API_URL: `${UPSTREAM}/github`,
         GITHUB_TOKEN: E2E_GITHUB_TOKEN,
         // /call places its calls through the stand-in's Vonage and ElevenLabs (test mode only).
@@ -95,6 +96,7 @@ export default defineConfig({
         NEXT_TELEMETRY_DISABLED: "1",
         LOKA_E2E_UPSTREAM: "1",
         SOLANA_RPC_URL: closed,
+        SETTLEMENT_API_URL: `${closed}/settlement`,
         GITHUB_API_URL: `${closed}/github`,
         GITHUB_TOKEN: "",
         ...CALLS_OFF,

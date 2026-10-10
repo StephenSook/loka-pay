@@ -367,3 +367,25 @@ test(".env.example lists exactly the variables the code reads", () => {
   expect(read.size).toBeGreaterThanOrEqual(4);
   expect([...listed].sort()).toEqual([...read].sort());
 });
+
+test("the settlement health read (lib/settlement.ts, SETTLEMENT_API_URL) is server only: read there alone, reached by no client module", () => {
+  const readers = ALL.filter((f) => readFileSync(f, "utf8").includes("process.env.SETTLEMENT_API_URL")).map((f) => path.relative(WEB, f));
+  expect(readers).toEqual(["lib/settlement.ts"]);
+  for (const f of ALL) expect(readFileSync(f, "utf8"), f).not.toMatch(/NEXT_PUBLIC_SETTLEMENT/);
+  const clients = ALL.filter((f) => /^\s*["']use client["']/.test(readFileSync(f, "utf8")));
+  expect(clients.length).toBeGreaterThanOrEqual(3);
+  const reached = new Set<string>();
+  const queue = [...clients];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (reached.has(file)) continue;
+    reached.add(file);
+    queue.push(...runtimeImports(file));
+  }
+  const rel = [...reached].map((f) => path.relative(WEB, f));
+  // Not vacuous: the walk reaches what the client modules import.
+  expect(rel).toContain("lib/program-feed.ts");
+  expect(rel).not.toContain("lib/settlement.ts");
+  // /proof does import it, so the walk above would see it if a client module did.
+  expect(runtimeImports(path.join(WEB, "app", "proof", "page.tsx")).map((f) => path.relative(WEB, f))).toContain("lib/settlement.ts");
+});

@@ -5,6 +5,7 @@ import { SandboxChip } from "@/components/chips";
 import { CiStatusList } from "@/components/ci-status";
 import { CARD, OutLink, PAGE } from "@/components/judge-ui";
 import { ProgramFactsPanel } from "@/components/program-facts";
+import { ProofPair } from "@/components/proof-pair";
 import { readProgramFacts } from "@/lib/chain";
 import { TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readMainChecks } from "@/lib/github";
@@ -84,6 +85,8 @@ export default async function JudgePage() {
         </p>
         <p className="text-muted">Sandbox only: test tokens on Solana devnet with no value. No real money moves.</p>
       </header>
+
+      <ProofPair />
 
       <ol className="flex flex-col gap-6" aria-label="Itinerary">
         <Step n={1} title="Check a receipt in your browser" minutes="About 30 seconds">

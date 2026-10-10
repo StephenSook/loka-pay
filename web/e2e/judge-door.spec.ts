@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { E2E_GITHUB_TOKEN, EXPECTED, UPSTREAM } from "./fixtures/upstream";
+import { E2E_GITHUB_TOKEN, EXPECTED, HEALTH, UPSTREAM } from "./fixtures/upstream";
 import { FAILING_URL } from "./fixtures/ports";
 
 // The judge door pages (PLAN.md 3.2, 3.24, 3.60, 3.72). /judge, /proof and /trust read
@@ -216,7 +216,8 @@ test("/trust: pilot status from the authority read, custody, the checks and the 
 });
 
 // Claims a read decides, with the source it names and the most its read may age for a Live
-// claim (lib/chain.ts CHAIN_READS, lib/github.ts GITHUB_READS: 10 s and 60 s).
+// claim (lib/chain.ts CHAIN_READS, lib/github.ts GITHUB_READS, lib/settlement.ts
+// SETTLEMENT_READS: 10 s, 60 s and 10 s).
 const READ_BACKED: Record<string, { source: string; maxAgeS: number }> = {
   deployed: { source: "Solana devnet", maxAgeS: 10 },
   initialized: { source: "Solana devnet", maxAgeS: 10 },
@@ -224,6 +225,7 @@ const READ_BACKED: Record<string, { source: string; maxAgeS: number }> = {
   reserves: { source: "Solana devnet", maxAgeS: 10 },
   redeemed: { source: "Solana devnet", maxAgeS: 10 },
   "program-ci": { source: "GitHub", maxAgeS: 60 },
+  server: { source: "api.zerobars.us", maxAgeS: 10 },
 };
 
 /** Every claim on /proof by id: its status, after checking the rules each status must follow. */
@@ -269,7 +271,6 @@ async function readClaims(page: Page): Promise<Record<string, string | null>> {
   // the verifier runs in the visitor's browser, so it is Available, not Live.
   expect(statusOf.live).toBe("unchecked");
   expect(statusOf.verify).toBe("available");
-  await expect(page.getByTestId("claim-server")).toHaveAttribute("data-status", "building");
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");
   // The same dated status as /judge step 6.
   await expect(page.getByTestId("claim-testflight")).toContainText(
@@ -295,6 +296,12 @@ test("/proof: every read-backed claim Live from its current read, exact reserves
   await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
   await expect(page.getByTestId("claim-precompile").getByTestId("claim-evidence")).toContainText("active since slot 380592000");
   await expect(page.getByTestId("claim-program-ci").getByTestId("claim-evidence")).toContainText(`(${EXPECTED.mainCommit})`);
+  // The server claim: Live from the stand-in's health answer, linking the real health check.
+  const server = page.getByTestId("claim-server");
+  await expect(server.getByTestId("claim-evidence")).toHaveAttribute("href", "https://api.zerobars.us/api/health");
+  await expect(server.getByTestId("claim-evidence")).toContainText(`slot ${HEALTH.slot}, commit ${HEALTH.commit.slice(0, 7)}`);
+  await expect(server.getByTestId("claim-evidence-more")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay/tree/main/server");
+  await expect(server).not.toContainText("not live");
 
   // Proof of reserves: the stand-in's amounts exactly, and liabilities plus the difference
   // equal the assets, as printed, compared in base units. Every field must show an amount.

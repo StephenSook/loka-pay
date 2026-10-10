@@ -1,9 +1,10 @@
 // The claims /proof lists, each with the status its evidence decides (PLAN.md 3.2). Pure:
 // the page hands in its reads, so the rules are unit-tested (unit/claims.test.ts).
 //
-// A claim is Live only with evidence a judge can open; a claim the chain decides is computed
-// from a current devnet read (younger than its window, lib/read-state.ts; the page asks with
-// `needCurrent`), and a Live claim says when that read was made and how old it was. When the
+// A claim is Live only with evidence a judge can open; a claim the chain, GitHub or the
+// settlement server decides is computed from a current read of it (younger than its window,
+// lib/read-state.ts; the page asks with `needCurrent`), and a Live claim says when that read
+// was made and how old it was. When the
 // read failed, was not made, or only an older read is available, it says Not checked, never
 // Live from an older read. Everything else says Building and has no link.
 
@@ -12,6 +13,7 @@ import { PROGRAM_JOB, type MainChecks } from "./github";
 import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
 import { PINS } from "./pins";
 import type { Read } from "./read-state";
+import { SETTLEMENT_HEALTH_URL, type ServerHealth } from "./settlement";
 import { REPO_URL } from "./site";
 import { explorerAddress, explorerTx } from "./solana";
 import { SECP256R1_FEATURE } from "./vault";
@@ -135,10 +137,50 @@ function programCiClaim(checks: Current<MainChecks>): Claim {
   );
 }
 
-export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRead>, checksRead: Read<MainChecks>): Claim[] {
+const SERVER_TEXT =
+  "The settlement server at api.zerobars.us is running and reading devnet: its health check names the pinned program and a slot it read for that request.";
+
+/** A commit as the server reports it: a git sha shortened to 7 characters, anything else as it is. */
+function shortCommit(commit: string): string {
+  return /^[0-9a-f]{40}$/.test(commit) ? commit.slice(0, 7) : commit;
+}
+
+/** Decided by the server's own health check (lib/settlement.ts), read on this server. */
+function serverClaim(health: Current<ServerHealth>): Claim {
+  const base = { id: "server", text: SERVER_TEXT };
+  if (!health.data) return { ...base, status: "unchecked", note: health.problem };
+  const h = health.data;
+  if (!h.ok) {
+    return { ...base, status: "unchecked", note: "The server answered its health check with HTTP 503: it says it cannot reach devnet right now." };
+  }
+  if (h.cluster !== "devnet" || h.programId !== PINS.programId) {
+    return {
+      ...base,
+      status: "unchecked",
+      note: `The server's health check names cluster "${h.cluster}" and program ${h.programId}, not devnet and the program in config/pins.json.`,
+    };
+  }
+  return stamped(
+    {
+      ...base,
+      status: "live",
+      evidence: { href: SETTLEMENT_HEALTH_URL, label: `The server's health check (slot ${h.slot}, commit ${shortCommit(h.commit)})` },
+      more: { href: `${REPO_URL}/tree/main/server`, label: "The server's code (server/)" },
+    },
+    health.checked,
+  );
+}
+
+export function claimsFrom(
+  factsRead: Read<ProgramFacts>,
+  reservesRead: Read<ReservesRead>,
+  checksRead: Read<MainChecks>,
+  healthRead: Read<ServerHealth>,
+): Claim[] {
   const facts = current(factsRead);
   const reserves = current(reservesRead);
   const checks = current(checksRead, "GitHub");
+  const health = current(healthRead, "api.zerobars.us");
   const deployed: Claim = facts.data
     ? facts.data.program.exists && facts.data.program.executable
       ? {
@@ -217,12 +259,7 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
       reserves.checked,
     ),
     stamped(redeemed, reserves.checked),
-    {
-      id: "server",
-      text: "The settlement server takes a note from a phone and settles it on devnet.",
-      status: "building",
-      note: "The server is not live yet.",
-    },
+    serverClaim(health),
     {
       id: "testflight",
       text: "Anyone can install the iPhone app from a public TestFlight link.",
