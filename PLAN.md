@@ -400,7 +400,7 @@ One owner per module; cross-module changes go by PR, reviewed by that owner. If 
 
 ## Open Questions
 
-- [ ] **Q2 (Stephen):** which challenges count toward the 3 side-challenge limit? Asked by email and in the event Q&A channel (0B.6); with no written answer by Sat 7 PM, the entry list keeps at most 3 side challenges in total.
+- [x] **Q2 (Stephen):** which challenges count toward the 3 side-challenge limit? **Answered by the written rule, re-read live Sat 12:30 AM:** the Hacker Guide's one "Side Challenges" list holds all 11 (Mercedes computer vision, Replit Small Business, Photon Agents in iMessage, Shock Tracker Zero Data, and the 7 MLH prizes), and its Submissions section says "Teams may submit to only ONE main track and a MAXIMUM of 3 side challenges." hacklanta.dev shows "sponsor challenges" and "Side Quests" as separate lists but states no cap; Devpost's rules state none and defer to the event; March organizers said "only 1 track, but upto 3 challenges". So: Fintech plus any 3 of the 11, never more. Not yet verified: the opening ceremony's spoken words (no captions; the download was refused). Zero Data's prize is now known: $50 per person plus a t-shirt.
 - [ ] **Q3 (Khadim + Stephen, 0B.3):** the challenges revealed at the opening ceremony (Mercedes, Replit, Equifax and others): keep or swap the third entry.
 - [ ] **Q4 (Stephen, 0.6):** the eligible TLD list on the GoDaddy Registry promo page; register `zerobars.us` if eligible (backups `everyhop.us`, `paybyhop.us`).
 - [ ] **Q5 (Pravin, 0.4):** the devnet USDC faucet amount and cooldown (sources disagree). Measure the first request and keep the figure out of judge copy.
