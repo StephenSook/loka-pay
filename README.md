@@ -1,6 +1,6 @@
 # LOKA Pay
 
-**Phones in airplane mode pay each other. The payment crosses nearby phones that cannot read or change it, and settles on Solana's public test network the moment any one of them finds signal.**
+**A phone in airplane mode pays a shop's phone directly, in one hop over Bluetooth or a QR code. The shop's phone settles the payment on Solana devnet, Solana's public test network, when it finds signal.**
 
 Sandbox tokens only: devnet USDC has no value. Moving real dollars would require a licensed partner. We do not have one yet.
 
@@ -13,13 +13,11 @@ Sandbox tokens only: devnet USDC has no value. Moving real dollars would require
 | Judge guide: a 3-minute itinerary | https://zerobars.us/judge | Live: program facts read from devnet and CI results read from GitHub when the page loads, each with its read time |
 | Live ledger with explorer links | https://zerobars.us/live | Live: your browser streams the program's transactions from devnet; the chip says Live only while the connection carries traffic |
 | Verify a signed receipt | https://zerobars.us/verify | Live: your browser checks every signature; try the labelled test receipt |
-| Web lab: pay with your own passkey | https://zerobars.us/lab | TODO(3.10, 3.23), T2 |
 | Proof page: claims table, reserves, built this weekend | https://zerobars.us/proof | Live: each claim says Live only from a current read and shows its age; proof of reserves reads every balance at one slot; the commit count since hacking started comes from GitHub |
-| Settlement API | https://api.zerobars.us | Live on devnet: `curl -s https://api.zerobars.us/api/health` returns the cluster, the program id and the current slot |
-| iPhone app (TestFlight) | TODO(4.7): public link + QR once Apple approves | Build 1 submitted to Apple beta review Sat Oct 10, 12:05 AM ET |
+| Settlement API health check | https://api.zerobars.us/api/health | Live on devnet: `curl -s https://api.zerobars.us/api/health` returns the server's commit, the cluster, the program id and a slot it reads from devnet on each call. /proof reads it and says Live only from a current read |
+| iPhone app (TestFlight) | No public link yet: it appears here once Apple approves external testing | Build 3 is installed by the team through TestFlight internal testing. Apple's external beta review (build 1 submitted Sat Oct 10, 12:05 AM ET) is still pending |
 | The Solana program (devnet) | https://explorer.solana.com/address/HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG?cluster=devnet | Live: deployed Sat Oct 10, 1:01 AM ET; vault initialized 1:03 AM ([transaction](https://explorer.solana.com/tx/2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R?cluster=devnet)); every public address is in `config/pins.json` |
 | First real payment and refused cheat on devnet | [settled payment](https://explorer.solana.com/tx/5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa?cluster=devnet) and [refused cheat](https://explorer.solana.com/tx/2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv?cluster=devnet) | Sat Oct 10, 2:01 AM ET: a P-256 signed note verified by Solana's secp256r1 precompile on devnet and credited the merchant; the same allowance and serial signed again was refused on chain with `SerialUsed` (error 6011). This run was signed outside the iPhone app; the run signed by an iPhone's Secure Enclave comes next |
-| Android relay APK (relay only, clean catalog) | GitHub Releases | TODO(3.8), T2 |
 | Demo video (2 to 3 minutes, public) | TODO(3.7): YouTube link | TODO |
 
 <!-- TODO(2.10): when GET /api/stats is live, add: "Check the headline numbers yourself; this endpoint recomputes them on every request", the curl, one real response, and each field named. It answers 404 today, so it stays off this page until then. -->
@@ -77,12 +75,12 @@ Toolchain and commands for every part are in `AGENTS.md`.
 | iPhone app (LOKA + payment screens) | `ios/` | `swift test --package-path ios/LokaPay`, then open `ios/LOKA.xcodeproj` |
 | Android relay | `android/loka-mesh-lab/` | `./gradlew :core:test :app:assembleDebug` |
 | Solana program | `programs/` | the commands in `programs/README.md` (toolchain in `programs/TOOLCHAIN.md`; devnet SOL notes in `docs/SOLANA-DEVNET.md`) |
-| Settlement server | `server/` | TODO(1.9): `pnpm test` |
+| Settlement server | `server/` | `pnpm install --frozen-lockfile && pnpm test` |
 | Website | `web/` | `pnpm install --frozen-lockfile && pnpm build` (more in `web/README.md`) |
 
 ## Tests named in the demo
 
-- `server/test/replay.test.ts`: the same note through two gateways redeems once. TODO(2.5)
+- `server/src/settle/settle.test.ts`: the same note uploaded twice returns the first result without a second transaction ("vector upload produces a verified CONF; repeats return the original result"), and two server instances sharing one database prepare and send its transaction only once ("two service instances sharing the database prepare and send only once"). These run against a stand-in for the chain, not devnet.
 - `programs/loka_vault/tests/redeem.ts`: a reused serial, a high-S signature, a wrong message, the wrong program or mint, a different payer's signature and a substituted merchant or allowance account are each refused; these run against the real secp256r1 precompile on a local validator in CI.
 
 ## Team
