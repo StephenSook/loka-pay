@@ -82,7 +82,9 @@ test.each(vectors.invalidNotes.map((v: { name: string; wireHex: string; error: s
     const get = vi.spyOn(f.store, 'get');
     const response = await f.post({ note: P.base64urlEncode(P.fromHex(wireHex)) });
     expect(response.statusCode).toBe(422);
-    expect(response.json()).toEqual({ error, message: error });
+    expect(response.json().error).toBe(error);
+    expect(response.json().message).toMatch(/^[A-Z].+\.$/);
+    expect(response.json().message).not.toBe(error);
     expect(claim).not.toHaveBeenCalled();
     expect(get).not.toHaveBeenCalled();
     expect(f.chain.prepare).not.toHaveBeenCalled();
