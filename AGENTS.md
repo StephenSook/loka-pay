@@ -48,6 +48,10 @@ cd server && pnpm install --frozen-lockfile && pnpm test
 # Web
 cd web && pnpm install --frozen-lockfile && pnpm lint && pnpm build
 
+# Payment test vectors (protocol/PAYMENT-V1.md): regenerate, or check they are fresh as CI does
+cd tools/vectors && pnpm install --frozen-lockfile && pnpm run gen
+cd tools/vectors && pnpm run check
+
 # Hygiene, as CI runs it
 gitleaks detect --source . --no-banner --redact
 python3 tools/scrub/scrub_sweep.py . --git-tree HEAD --allow-team "$APPLE_TEAM_ID" \

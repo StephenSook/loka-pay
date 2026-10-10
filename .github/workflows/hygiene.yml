@@ -61,6 +61,22 @@ jobs:
           base="$(git rev-parse -q --verify 'refs/tags/pre-hacklanta-foundation^{commit}' || git rev-parse --verify 'refs/tags/pre-hacklanta-kit^{commit}')"
           python3 tools/hygiene/prose_gate.py --base "$base"
 
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: tools/vectors/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: tools/vectors/pnpm-lock.yaml
+
+      - name: Payment vectors are fresh (protocol/vectors/payment-v1.json equals the generator)
+        run: |
+          set -euo pipefail
+          pnpm --dir tools/vectors install --frozen-lockfile
+          pnpm --dir tools/vectors run check
+
       - name: FACTS equality (every judge-facing number equals docs/FACTS.json)
         # TODO(3.6, 4.2): write tools/facts/check_facts.py. Until it exists this step warns
         # instead of passing silently; task 4.2 is not done while the warning shows.
