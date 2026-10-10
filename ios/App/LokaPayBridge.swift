@@ -30,7 +30,12 @@ enum LokaPayKeyTrust {
 
     enum MarkerRead: Equatable {
         case absent
-        case unreadable
+        /// The file exists but could not be read just now (data protection before the first
+        /// unlock, or another passing error); the text is the system's. Says nothing about the
+        /// key, so it never locks: the decision runs again on retry.
+        case unavailable(String)
+        /// The file was read and its contents are not a marker.
+        case malformed
         case present(Marker)
     }
 
@@ -47,8 +52,8 @@ enum LokaPayKeyTrust {
         case keyMissing
         /// The marker's key loaded, but its hash is not the marker's.
         case keyMismatch
-        /// The marker file exists but does not decode.
-        case markerUnreadable
+        /// The marker file was read, and its contents are not a marker.
+        case markerMalformed
     }
 
     enum Decision: Equatable {
@@ -57,8 +62,10 @@ enum LokaPayKeyTrust {
         /// Load the marker's key, then require `confirms` before trusting it.
         case load(Marker)
         case locked(LockReason)
-        /// The Keychain could not be listed, so a surviving key cannot be ruled out.
+        /// The Keychain could not be listed, so a surviving key cannot be ruled out. Retry.
         case cannotCheck(Int32)
+        /// The marker exists but could not be read just now. Nothing is decided or deleted. Retry.
+        case markerUnavailable(String)
     }
 
     static func decide(marker: MarkerRead, keychain: KeychainRead) -> Decision {
@@ -68,7 +75,8 @@ enum LokaPayKeyTrust {
         case .accounts(let list): accounts = list
         }
         switch marker {
-        case .unreadable: return .locked(.markerUnreadable)
+        case .unavailable(let detail): return .markerUnavailable(detail)
+        case .malformed: return .locked(.markerMalformed)
         case .absent: return accounts.isEmpty ? .createFresh : .locked(.keySurvivedReinstall)
         case .present(let marker): return accounts.contains(marker.account) ? .load(marker) : .locked(.keyMissing)
         }
@@ -85,10 +93,24 @@ enum LokaPayKeyTrust {
         "payment-key-" + id.uuidString.lowercased()
     }
 
-    static func readMarker(_ data: Data?) -> MarkerRead {
-        guard let data else { return .absent }
-        guard let marker = try? JSONDecoder().decode(Marker.self, from: data),
-              !marker.account.isEmpty, marker.keyHash.count == 64 else { return .unreadable }
+    /// Reads the marker file. A read that throws is `unavailable` (retry), never `malformed`:
+    /// only contents that were actually read and do not decode can lock.
+    static func readMarker(exists: Bool, read: () throws -> Data) -> MarkerRead {
+        guard exists else { return .absent }
+        let data: Data
+        do {
+            data = try read()
+        } catch {
+            var text = (error as NSError).localizedDescription
+            while text.hasSuffix(".") { text.removeLast() }
+            return .unavailable(text)
+        }
+        return parseMarker(data)
+    }
+
+    static func parseMarker(_ data: Data) -> MarkerRead {
+        guard let marker = try? JSONDecoder().decode(Marker.self, from: data), !marker.account.isEmpty,
+              marker.keyHash.count == 64, marker.keyHash.allSatisfy(\.isHexDigit) else { return .malformed }
         return .present(marker)
     }
 }
@@ -183,6 +205,9 @@ final class LokaPayStore: ObservableObject {
         /// A key exists that this install cannot trust (see `LokaPayKeyTrust`). It is never used;
         /// `startFresh()` replaces it.
         case locked(LokaPayKeyTrust.LockReason)
+        /// The marker exists but could not be read just now; the text is the system's error.
+        /// Nothing signs and nothing is deleted; `prepareKey()` runs the whole check again.
+        case paused(String)
         /// The enclave or the Keychain refused; the text is the system's error.
         case failed(String)
     }
@@ -191,6 +216,7 @@ final class LokaPayStore: ObservableObject {
     enum KeyOutcome {
         case ready(SecureEnclaveP256Signer)
         case locked(LokaPayKeyTrust.LockReason)
+        case paused(String)
         case failed(String)
     }
 
@@ -299,10 +325,10 @@ final class LokaPayStore: ObservableObject {
     /// Opens this phone's enclave key: the one the payment folder's marker names, or a new one
     /// when neither a marker nor any payment key exists. Any other combination locks (see
     /// `LokaPayKeyTrust`). Loading or creating the key shows no prompt; each signature asks for
-    /// Face ID or the passcode.
+    /// Face ID or the passcode. From `paused` or `failed` this is the non-destructive retry.
     func prepareKey() {
         switch keyState {
-        case .notLoaded, .failed: break
+        case .notLoaded, .failed, .paused: break
         case .loading, .ready, .noSecureEnclave, .locked: return
         }
         guard SecureEnclaveP256Signer.isAvailable else {
@@ -352,6 +378,11 @@ final class LokaPayStore: ObservableObject {
             serials = nil
             ledger = nil
             keyState = .locked(reason)
+        case .paused(let text):
+            signer = nil
+            serials = nil
+            ledger = nil
+            keyState = .paused(text)
         case .failed(let text):
             signer = nil
             serials = nil
@@ -363,17 +394,17 @@ final class LokaPayStore: ObservableObject {
 
     nonisolated private static func openKey(directory: URL) -> KeyOutcome {
         let markerURL = directory.appendingPathComponent(markerFile)
-        let marker: LokaPayKeyTrust.MarkerRead
-        if FileManager.default.fileExists(atPath: markerURL.path) {
-            // A marker that exists but cannot be read is never treated as absent.
-            marker = (try? Data(contentsOf: markerURL)).map { LokaPayKeyTrust.readMarker($0) } ?? .unreadable
-        } else {
-            marker = .absent
+        // A marker that exists is never treated as absent: a failed read pauses, and only
+        // contents that were read and do not decode lock.
+        let marker = LokaPayKeyTrust.readMarker(exists: FileManager.default.fileExists(atPath: markerURL.path)) {
+            try Data(contentsOf: markerURL)
         }
         switch LokaPayKeyTrust.decide(marker: marker, keychain: LokaPayKeyItems.list()) {
         case .cannotCheck(let status):
             return .failed("the Keychain could not be listed (OSStatus \(status)), so this phone cannot rule out "
                            + "a payment key left by an earlier install")
+        case .markerUnavailable(let detail):
+            return .paused(detail)
         case .locked(let reason):
             return .locked(reason)
         case .createFresh:
@@ -745,6 +776,10 @@ struct LokaPaySetupView: View {
                     Button("Load the payment key again") { store.prepareKey() }
                         .buttonStyle(LokaPaySetupButtonStyle(primary: false))
                 }
+                if case .paused = store.keyState {
+                    Button("Try again") { store.prepareKey() }
+                        .buttonStyle(LokaPaySetupButtonStyle(primary: true))
+                }
                 if case .locked = store.keyState {
                     VStack(alignment: .leading, spacing: 6) {
                         Button("Start fresh with a new key") { store.startFresh() }
@@ -804,6 +839,11 @@ struct LokaPaySetupView: View {
                     + "unlock it and load the key again. A build without code signing may have no Keychain access at all."))
         case .locked(let reason):
             list.append(Blocker(id: "locked", title: "Payments are locked on this phone", detail: Self.lockText(reason)))
+        case .paused(let text):
+            list.append(Blocker(
+                id: "paused", title: "Payments are paused on this phone",
+                detail: "This phone could not read its payment key record just now (\(text)). Nothing was deleted, and "
+                    + "nothing is signed until it can. Unlock the phone, then tap Try again."))
         case .notLoaded, .loading, .ready:
             break
         }
@@ -822,9 +862,9 @@ struct LokaPaySetupView: View {
         case .keyMismatch:
             return "The payment key in the Keychain is not the key this phone's payment records belong to. To stay "
                 + "safe it will not sign with it."
-        case .markerUnreadable:
-            return "This phone could not read the record that ties its payment key to its serial counters. To stay "
-                + "safe it will not sign until it starts fresh with a new key."
+        case .markerMalformed:
+            return "The record that ties this phone's payment key to its serial counters is damaged. To stay safe it "
+                + "will not sign until it starts fresh with a new key."
         }
     }
 
