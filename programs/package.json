@@ -1,0 +1,20 @@
+{
+  "name": "loka-vault-tests",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@anchor-lang/core": "1.1.2",
+    "@lokapay/protocol": "file:../protocol/lib",
+    "@noble/curves": "2.4.0",
+    "@solana/spl-token": "0.4.15",
+    "@solana/web3.js": "1.99.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  }
+}

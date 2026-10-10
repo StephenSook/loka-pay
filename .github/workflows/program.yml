@@ -1,8 +1,6 @@
 # program.yml: the loka_vault Anchor program, tested on a local validator after
 # asserting that the secp256r1 precompile feature is active there.
-# Draft from the pre-event kit. Each TODO names the task that fills it in.
-# Gates run bare: no pipe on any exit path. This job refuses to run with unpinned
-# versions, so it stays red until task 0.4 records them in programs/TOOLCHAIN.md.
+# All payments use a fresh local ledger. No deploy credentials or faucet calls.
 name: program
 
 on:
@@ -23,9 +21,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      # TODO(0.4): copy the pinned versions from programs/TOOLCHAIN.md.
-      SOLANA_VERSION: TODO-0.4
-      ANCHOR_VERSION: TODO-0.4
+      SOLANA_VERSION: 3.1.10
+      ANCHOR_VERSION: 1.1.2
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +32,9 @@ jobs:
             *TODO*) echo "::error::pin SOLANA_VERSION and ANCHOR_VERSION from programs/TOOLCHAIN.md (task 0.4)"; exit 1 ;;
           esac
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: rustfmt
 
       - uses: actions/cache@v4
         with:
@@ -57,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v avm > /dev/null; then
-            cargo install --git https://github.com/coral-xyz/anchor avm --locked
+            cargo install --git https://github.com/solana-foundation/anchor --tag "v${ANCHOR_VERSION}" avm --locked
           fi
           avm install "$ANCHOR_VERSION"
           avm use "$ANCHOR_VERSION"
@@ -67,20 +66,32 @@ jobs:
           solana --version
           anchor --version
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.3
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+
+      - name: Install locked dependencies and prepare a local test wallet
+        working-directory: programs
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          bash scripts/prepare-local-wallet.sh
+
+      - name: Build, typecheck and test the Rust vectors
+        working-directory: programs
+        run: |
+          cargo fmt --all --check
+          pnpm typecheck
+          anchor build --ignore-keys
+          cargo test --locked -p loka_vault
+          diff -u idl/loka_vault.json target/idl/loka_vault.json
 
       - name: Assert the secp256r1 precompile feature is active on the local validator
-        # TODO(1.4): write this script; it starts solana-test-validator, reads the feature
-        # account id recorded in programs/TOOLCHAIN.md, and exits non-zero unless it is active.
         run: bash programs/scripts/assert-secp256r1-active.sh
 
       - name: anchor test
-        # TODO(1.4): the Anchor workspace root; T1 needs redeem.ts, withdraw.ts and the units vector.
         working-directory: programs
-        run: anchor test
+        run: anchor test --skip-build --validator legacy

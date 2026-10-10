@@ -1,0 +1,31 @@
+[toolchain]
+anchor_version = "1.1.2"
+solana_version = "3.1.10"
+package_manager = "pnpm"
+
+[features]
+# Merchant seeds hash an instruction argument; clients derive all PDAs explicitly.
+resolution = false
+skip-lint = false
+
+[programs.localnet]
+loka_vault = "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG"
+
+[provider]
+cluster = "localnet"
+wallet = "target/local-test-keypair.json"
+
+[scripts]
+test = "pnpm test"
+
+[hooks]
+
+[workspace]
+members = ["loka_vault"]
+
+[test]
+upgradeable = true
+startup_wait = 10000
+
+[test.validator]
+bind_address = "127.0.0.1"

@@ -1,0 +1,716 @@
+{
+  "address": "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG",
+  "metadata": {
+    "name": "loka_vault",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Sandbox payment vault for LOKA Pay"
+  },
+  "instructions": [
+    {
+      "name": "initialize_vault",
+      "discriminator": [
+        48,
+        191,
+        163,
+        44,
+        71,
+        129,
+        63,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "config",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "vault_tokens",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "cluster",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "open_allowance",
+      "discriminator": [
+        233,
+        56,
+        143,
+        54,
+        62,
+        247,
+        107,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "funder",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "allowance",
+          "writable": true
+        },
+        {
+          "name": "vault"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "source",
+          "writable": true
+        },
+        {
+          "name": "vault_tokens",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "OpenAllowanceArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "redeem_note",
+      "discriminator": [
+        214,
+        26,
+        188,
+        228,
+        39,
+        240,
+        25,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "allowance",
+          "writable": true
+        },
+        {
+          "name": "merchant",
+          "writable": true
+        },
+        {
+          "name": "instructions"
+        }
+      ],
+      "args": [
+        {
+          "name": "note",
+          "type": {
+            "array": [
+              "u8",
+              141
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "register_merchant",
+      "discriminator": [
+        238,
+        245,
+        77,
+        132,
+        161,
+        88,
+        216,
+        248
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "merchant",
+          "writable": true
+        },
+        {
+          "name": "system_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "public_key",
+          "type": {
+            "array": [
+              "u8",
+              33
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw",
+      "discriminator": [
+        183,
+        18,
+        70,
+        156,
+        148,
+        109,
+        161,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "merchant",
+          "writable": true
+        },
+        {
+          "name": "vault"
+        },
+        {
+          "name": "vault_tokens",
+          "writable": true
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "destination"
+        },
+        {
+          "name": "destination_tokens",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "instructions"
+        }
+      ],
+      "args": [
+        {
+          "name": "message",
+          "type": {
+            "array": [
+              "u8",
+              161
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Allowance",
+      "discriminator": [
+        144,
+        8,
+        184,
+        213,
+        49,
+        248,
+        73,
+        131
+      ]
+    },
+    {
+      "name": "Merchant",
+      "discriminator": [
+        71,
+        235,
+        30,
+        40,
+        231,
+        21,
+        32,
+        64
+      ]
+    },
+    {
+      "name": "VaultAuthority",
+      "discriminator": [
+        132,
+        34,
+        187,
+        202,
+        202,
+        195,
+        211,
+        53
+      ]
+    },
+    {
+      "name": "VaultConfig",
+      "discriminator": [
+        99,
+        86,
+        43,
+        216,
+        184,
+        102,
+        119,
+        77
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "NoteRedeemed",
+      "discriminator": [
+        57,
+        237,
+        250,
+        78,
+        46,
+        209,
+        221,
+        34
+      ]
+    },
+    {
+      "name": "Withdrawn",
+      "discriminator": [
+        20,
+        89,
+        223,
+        198,
+        194,
+        124,
+        219,
+        13
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidAuthority",
+      "msg": "Only this program's current upgrade authority may initialize configuration"
+    },
+    {
+      "code": 6001,
+      "name": "BadSysvar",
+      "msg": "The instructions sysvar must be canonical"
+    },
+    {
+      "code": 6002,
+      "name": "BadPrecompile",
+      "msg": "Expected the canonical adjacent single-signature P-256 precompile"
+    },
+    {
+      "code": 6003,
+      "name": "WrongMessage",
+      "msg": "The verified message differs from the canonical instruction message"
+    },
+    {
+      "code": 6004,
+      "name": "PayerMismatch",
+      "msg": "The verified public key differs from the registered key"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidNote",
+      "msg": "Invalid signed prefix, currency or amount"
+    },
+    {
+      "code": 6006,
+      "name": "WrongProgram",
+      "msg": "The signed program id does not match this program"
+    },
+    {
+      "code": 6007,
+      "name": "WrongCluster",
+      "msg": "The signed cluster does not match the deployment"
+    },
+    {
+      "code": 6008,
+      "name": "WrongMint",
+      "msg": "The signed mint does not match the deployment"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidAllowance",
+      "msg": "The allowance does not match the signed allowance id"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidMerchant",
+      "msg": "The merchant does not match the signed payee"
+    },
+    {
+      "code": 6011,
+      "name": "SerialUsed",
+      "msg": "This allowance serial was already redeemed"
+    },
+    {
+      "code": 6012,
+      "name": "CapExceeded",
+      "msg": "The cumulative redeemed amount would exceed the funded cap"
+    },
+    {
+      "code": 6013,
+      "name": "Expired",
+      "msg": "Expired allowance or note, or note expiry exceeds allowance expiry"
+    },
+    {
+      "code": 6014,
+      "name": "EarmarkDenied",
+      "msg": "The allowance does not permit this merchant"
+    },
+    {
+      "code": 6015,
+      "name": "Overflow",
+      "msg": "Integer arithmetic overflow"
+    },
+    {
+      "code": 6016,
+      "name": "WithdrawalReplay",
+      "msg": "The withdrawal counter is not the current merchant counter"
+    },
+    {
+      "code": 6017,
+      "name": "InsufficientBalance",
+      "msg": "The withdrawal exceeds the merchant's credited balance"
+    },
+    {
+      "code": 6018,
+      "name": "BadDestination",
+      "msg": "The destination is not the signed wallet"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidPayerKey",
+      "msg": "Expected a compressed P-256 key prefix"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidEarmarks",
+      "msg": "Earmarks must be sorted, unique and at most sixteen"
+    },
+    {
+      "code": 6021,
+      "name": "InvalidLimits",
+      "msg": "The cap must be positive and offline limit at most the cap"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidMintDecimals",
+      "msg": "The configured token mint must have six decimals"
+    }
+  ],
+  "types": [
+    {
+      "name": "Allowance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "funder",
+            "type": "pubkey"
+          },
+          {
+            "name": "payer_key",
+            "type": {
+              "array": [
+                "u8",
+                33
+              ]
+            }
+          },
+          {
+            "name": "cap",
+            "type": "u64"
+          },
+          {
+            "name": "redeemed",
+            "type": "u64"
+          },
+          {
+            "name": "offline_limit",
+            "type": "u64"
+          },
+          {
+            "name": "expiry",
+            "type": "i64"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          },
+          {
+            "name": "earmarks",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "used_serials",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Merchant",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "public_key",
+            "type": {
+              "array": [
+                "u8",
+                33
+              ]
+            }
+          },
+          {
+            "name": "key_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "balance",
+            "type": "u64"
+          },
+          {
+            "name": "withdraw_counter",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NoteRedeemed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "note_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "allowance_id",
+            "type": "u64"
+          },
+          {
+            "name": "serial",
+            "type": "u8"
+          },
+          {
+            "name": "merchant_key_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OpenAllowanceArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "allowance_id",
+            "type": "u64"
+          },
+          {
+            "name": "payer_key",
+            "type": {
+              "array": [
+                "u8",
+                33
+              ]
+            }
+          },
+          {
+            "name": "cap",
+            "type": "u64"
+          },
+          {
+            "name": "offline_limit",
+            "type": "u64"
+          },
+          {
+            "name": "expiry",
+            "type": "i64"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          },
+          {
+            "name": "earmarks",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultAuthority",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "cluster",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Withdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "merchant_key_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "counter",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}
