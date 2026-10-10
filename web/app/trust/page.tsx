@@ -147,7 +147,7 @@ export default async function TrustPage() {
               </span>
               {PINS.serverEd25519PublicKey === null ? (
                 <span data-testid="server-status" className="font-bold">
-                  The settlement server is not live yet: its key is not published in config/pins.json.
+                  Its Ed25519 key is not published in config/pins.json yet, so no phone can check a confirmation it signs.
                 </span>
               ) : (
                 <span data-testid="server-status" className="flex flex-col gap-1">
