@@ -78,8 +78,10 @@ test("privacy: loads with no login and says what is true today", async ({
   await expect(main).toContainText("Updated 2026-10-10");
   await expect(main).toContainText("One page makes your browser contact another website");
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
-  await expect(main).toContainText("The settlement server is not live yet.");
+  await expect(main).toContainText("The settlement server at api.zerobars.us is running on Solana devnet.");
+  await expect(main).not.toContainText("not live");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();
+  await expect(main.getByRole("table")).toContainText("A merchant's display name, typed by the merchant");
   await expect(page.getByRole("link", { name: "team@zerobars.us" })).toHaveAttribute(
     "href",
     "mailto:team@zerobars.us",
