@@ -82,10 +82,11 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
   };
 }
 
-async function readCompareUncached(): Promise<BuiltThisWeekend> {
+/** The compare read. The URL and limit are parameters only so tests can point it at a local server. */
+export async function readCompareUncached(url: string = COMPARE_API_URL, timeoutMs = 10_000): Promise<BuiltThisWeekend> {
   let response: Response;
   try {
-    response = await fetch(COMPARE_API_URL, {
+    response = await fetch(url, {
       headers: {
         accept: "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
@@ -93,10 +94,15 @@ async function readCompareUncached(): Promise<BuiltThisWeekend> {
       },
       // The answer is large and grows with every commit; lib/cached-read.ts caches the summary.
       cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new GitHubError("GitHub did not answer within 10 s");
+  } catch (e) {
+    // Only a timeout is a timeout; a refused connection or a DNS failure says so.
+    const name = e instanceof Error ? e.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new GitHubError(`GitHub did not answer within ${timeoutMs / 1000} s`);
+    }
+    throw new GitHubError(`could not reach ${new URL(url).host}`);
   }
   if (response.status === 403 || response.status === 429) {
     const remaining = response.headers.get("x-ratelimit-remaining");
@@ -110,12 +116,17 @@ async function readCompareUncached(): Promise<BuiltThisWeekend> {
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (e) {
+    // The answer is over 1 MB: a limit that passes mid-body is a timeout, not bad JSON.
+    const name = e instanceof Error ? e.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new GitHubError(`GitHub did not finish answering within ${timeoutMs / 1000} s`);
+    }
     throw new GitHubError("GitHub's answer was not JSON");
   }
   return summarizeCompare(body);
 }
 
 export function readBuiltThisWeekend(): Promise<Read<BuiltThisWeekend>> {
-  return cachedRead(`github-compare:${REPO}:${KIT_TAG}`, REVALIDATE_SECONDS, readCompareUncached);
+  return cachedRead(`github-compare:${REPO}:${KIT_TAG}`, REVALIDATE_SECONDS, () => readCompareUncached());
 }

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { FILES_CAP, summarizeCompare } from "../lib/github";
+import { FILES_CAP, GitHubError, readCompareUncached, summarizeCompare } from "../lib/github";
 import { PINS, PinsError, parsePins } from "../lib/pins";
 import { wsUrlFor } from "../lib/solana";
 import { formatEt, isoUtc } from "../lib/time";
@@ -93,6 +95,36 @@ test.describe("Built this weekend: GitHub compare summary", () => {
   test("an unexpected shape throws instead of showing a number", () => {
     expect(() => summarizeCompare({ message: "API rate limit exceeded" })).toThrow(/unexpected shape/);
     expect(() => summarizeCompare(null)).toThrow();
+  });
+});
+
+// Local servers on 127.0.0.1 (TEST FIXTURES) stand in for api.github.com.
+test.describe("Built this weekend: a failed GitHub read names what failed", () => {
+  test("no answer within the limit is a timeout", async () => {
+    const server = createServer(() => {
+      // Accepts the request and never answers.
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/compare`;
+    try {
+      const error = await readCompareUncached(url, 300).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(GitHubError);
+      expect((error as GitHubError).message).toBe("GitHub did not answer within 0.3 s");
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test("a refused connection is not called a timeout", async () => {
+    // Listen, note the port, close: nothing listens there any more.
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    await new Promise((resolve) => server.close(resolve));
+    const error = await readCompareUncached(`http://127.0.0.1:${port}/compare`, 5000).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GitHubError);
+    expect((error as GitHubError).message).toBe(`could not reach 127.0.0.1:${port}`);
   });
 });
 
