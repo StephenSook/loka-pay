@@ -1,6 +1,6 @@
 # hygiene.yml: secret scan over the full history, the scrub guard (patterns only,
 # never literal values), the prose gate on every line added since the foundation,
-# and the FACTS equality check.
+# the no-tracking guard and the FACTS equality check.
 # Draft from the pre-event kit. Each TODO names the task that fills it in.
 # Gates run bare: no pipe on any exit path.
 name: hygiene
@@ -60,6 +60,12 @@ jobs:
           set -euo pipefail
           base="$(git rev-parse -q --verify 'refs/tags/pre-hacklanta-foundation^{commit}' || git rev-parse --verify 'refs/tags/pre-hacklanta-kit^{commit}')"
           python3 tools/hygiene/prose_gate.py --base "$base"
+
+      - name: No analytics or tracking (task 3.55; /privacy says there is none)
+        run: |
+          set -euo pipefail
+          python3 tools/hygiene/no_tracking.py
+          python3 -m unittest tools/hygiene/test_no_tracking.py -v
 
       - uses: pnpm/action-setup@v4
         with:
