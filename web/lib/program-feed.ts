@@ -158,7 +158,11 @@ function isSignatureInfo(value: unknown): value is SignatureInfo {
 
 /** The latest signatures, as rows whose details are still to be read. */
 export async function loadSignatures(programId: string): Promise<Row[]> {
-  const result = await rpc("getSignaturesForAddress", [programId, { limit: HISTORY_LIMIT, commitment: "confirmed" }]);
+  return rowsFromSignatures(await rpc("getSignaturesForAddress", [programId, { limit: HISTORY_LIMIT, commitment: "confirmed" }]));
+}
+
+/** getSignaturesForAddress's answer as rows whose details are still to be read. Throws on the wrong shape. */
+export function rowsFromSignatures(result: unknown): Row[] {
   if (!Array.isArray(result) || !result.every(isSignatureInfo)) {
     throw new Error("getSignaturesForAddress answered an unexpected shape");
   }

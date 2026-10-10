@@ -5,6 +5,9 @@
 // component only shows its state. No server of ours is involved, so the feed works before
 // the settlement server exists and keeps working if it goes down. Nothing here is invented
 // while a read is pending or failed.
+//
+// At the judge desk (PLAN.md 3.84): a failed row is named from its error code before its details
+// arrive (lib/live-desk.ts), never shown as raw JSON.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -17,6 +20,7 @@ import {
   type History,
   type Row,
 } from "@/lib/program-feed";
+import { refusalOf, refusalWords } from "@/lib/live-desk";
 import { RPC_URL, WS_URL, explorerTx } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
 import { OutlineChip, StateChip } from "./chips";
@@ -159,6 +163,7 @@ function HistoryLine({ history }: { history: History }) {
 
 function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
   const title = row.actions.length > 0 ? row.actions.join(", ") : null;
+  const refusal = refusalOf(row);
   return (
     <li
       className="flex min-w-0 flex-col gap-2 rounded-card border-3 border-ink bg-surface p-5 shadow-hard"
@@ -182,7 +187,7 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
         </h3>
         <span className="flex flex-wrap items-center gap-2">
           {row.arrivedLive ? <OutlineChip label="New" Icon={CircleIcon} testId="tx-new" /> : null}
-          <TxStatusChip result={row.result} errorName={row.error?.name} />
+          <TxStatusChip result={row.result} errorName={refusal?.kind === "program" ? refusal.error.name : null} />
         </span>
       </div>
       {/* Amounts only for a transaction known to have succeeded (lib/logs.ts). */}
@@ -195,9 +200,9 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
           ))}
         </ul>
       ) : null}
-      {row.result === "failed" ? (
+      {refusal ? (
         <p className="break-words text-sm" data-testid="tx-error">
-          {row.error ? `${row.error.name} (${row.error.number}): ${row.error.message}.` : `Transaction error: ${row.errText ?? "unknown"}.`}
+          {refusalWords(refusal)}
         </p>
       ) : null}
       {row.result === "unknown" ? (
