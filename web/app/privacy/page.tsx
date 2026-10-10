@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { SERVER_RPC_URL } from "@/lib/server-rpc";
 import { CONTACT_EMAIL } from "@/lib/site";
+import { DEFAULT_RPC_URL, RPC_URL, WS_URL, hostsOf, wsUrlFor } from "@/lib/solana";
 
 // Also the App Store Connect privacy policy URL for the TestFlight build
 // (https://zerobars.us/privacy). Every sentence here must be true today; when the
@@ -11,6 +13,15 @@ export const metadata: Metadata = {
 };
 
 const UPDATED = "2026-10-10";
+
+// The hosts named below come from the endpoints this build actually uses (lib/solana.ts and
+// lib/server-rpc.ts), host names only, so an override can never leave this page untrue.
+const BROWSER_HOSTS = hostsOf(RPC_URL, WS_URL);
+const browserRpc =
+  RPC_URL === DEFAULT_RPC_URL && WS_URL === wsUrlFor(DEFAULT_RPC_URL)
+    ? `Solana's public devnet server (${BROWSER_HOSTS.join(" and ")})`
+    : `the Solana devnet RPC server at ${BROWSER_HOSTS.join(" and ")}`;
+const serverHosts = hostsOf(SERVER_RPC_URL).join(" and ");
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -66,14 +77,15 @@ export default function PrivacyPage() {
         </p>
         <p>
           Two pages make your browser contact another website, and only to show public data: /live
-          connects to Solana&apos;s public devnet server (api.devnet.solana.com) to read the
-          program&apos;s transactions, and /judge shows workflow status badges loaded from
-          github.com. Those sites see your browser&apos;s request, as any website does; this site
-          sends them nothing about you. Every other page makes no request to any other website.
+          connects to {browserRpc} to read the program&apos;s transactions, and /judge shows workflow
+          status badges loaded from github.com. Those sites see your browser&apos;s request, as any
+          website does; this site sends them nothing about you. Every other page makes no request to
+          any other website.
         </p>
         <p>
-          The /judge, /proof and /trust pages read public data from Solana devnet and GitHub on our
-          server, not from your browser, and those reads carry nothing about you.
+          The /judge, /proof and /trust pages read public data from Solana devnet ({serverHosts}) and
+          GitHub (api.github.com) on our server, not from your browser, and those reads carry
+          nothing about you.
         </p>
         <p>
           It is hosted on Vercel. We have not turned on Vercel Web Analytics or Speed Insights.

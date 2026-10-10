@@ -3,19 +3,47 @@
 // read methods, and every response is checked by the decoders in lib/vault.ts.
 //
 // NEXT_PUBLIC_SOLANA_RPC_URL and NEXT_PUBLIC_SOLANA_WS_URL override the public devnet
-// endpoints (listed in web/.env.example). Both are inlined at build time, so the browser
-// and the server read the same endpoint.
+// endpoints the BROWSER uses (/live; listed in web/.env.example). Next inlines them into
+// every visitor's page, so they are public: a keyed endpoint (a provider URL with
+// ?api-key=...) is refused at build time and belongs in SOLANA_RPC_URL, which only the
+// server reads (lib/server-rpc.ts).
 
 export const DEFAULT_RPC_URL = "https://api.devnet.solana.com";
 
-export const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || DEFAULT_RPC_URL;
+/**
+ * A NEXT_PUBLIC endpoint, or the fallback when unset. Throws (failing `next build`) when the
+ * URL carries a query string or a user name or password, where providers put API keys. The
+ * error names the variable, never its value, so a build log does not print the key.
+ */
+export function publicEndpoint(name: string, value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} is not a URL`);
+  }
+  if (url.search !== "" || url.username !== "" || url.password !== "") {
+    throw new Error(
+      `${name} is inlined into every visitor's browser, so it must not carry a query string or credentials; put a keyed endpoint in SOLANA_RPC_URL, which only the server reads`,
+    );
+  }
+  return value;
+}
+
+export const RPC_URL = publicEndpoint("NEXT_PUBLIC_SOLANA_RPC_URL", process.env.NEXT_PUBLIC_SOLANA_RPC_URL, DEFAULT_RPC_URL);
 
 /** The WebSocket endpoint: the override, or the RPC URL with http(s) swapped for ws(s). */
 export function wsUrlFor(httpUrl: string): string {
   return httpUrl.replace(/^http(s?):\/\//, (_m, s: string) => `ws${s}://`);
 }
 
-export const WS_URL = process.env.NEXT_PUBLIC_SOLANA_WS_URL || wsUrlFor(RPC_URL);
+export const WS_URL = publicEndpoint("NEXT_PUBLIC_SOLANA_WS_URL", process.env.NEXT_PUBLIC_SOLANA_WS_URL, wsUrlFor(RPC_URL));
+
+/** The distinct host names of some endpoints, in order: what a page names (never a path or query). */
+export function hostsOf(...urls: string[]): string[] {
+  return [...new Set(urls.map((u) => new URL(u).host))];
+}
 
 export const EXPLORER_BASE = "https://explorer.solana.com";
 

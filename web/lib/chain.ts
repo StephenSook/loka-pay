@@ -1,6 +1,7 @@
 // Devnet reads for /judge, /proof and /trust, cached for 30 seconds (lib/cached-read.ts).
 // Server only. Every value here comes from the chain; config/pins.json only names the
-// addresses to read and the values to compare against.
+// addresses to read and the values to compare against. Every call goes to the server's
+// endpoint with the options from lib/server-rpc.ts (SOLANA_RPC_URL, never inlined into a page).
 //
 // Public devnet limits each method per IP (getProgramAccounts and getTransaction to 10
 // calls per 10 seconds), refuses getProgramAccounts inside a JSON-RPC batch, and refuses a
@@ -14,7 +15,8 @@ import { cachedRead, type Read } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
 import { summarizeTransaction } from "./logs";
 import { PINS } from "./pins";
-import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOutcome } from "./solana";
+import { serverReadOptions } from "./server-rpc";
+import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOptions, type RpcOutcome } from "./solana";
 import {
   ACCOUNT_DISCRIMINATORS,
   ACCOUNT_NAMES,
@@ -72,16 +74,20 @@ export interface ProgramAccountList {
 }
 
 /** Every account the program owns, grouped by Anchor discriminator, from one call. */
-export async function listProgramAccounts(minContextSlot?: number): Promise<ProgramAccountList> {
-  const result = await rpc("getProgramAccounts", [
-    PINS.programId,
-    {
-      encoding: "base64",
-      dataSlice: { offset: 0, length: 8 },
-      withContext: true,
-      ...(minContextSlot === undefined ? {} : { minContextSlot }),
-    },
-  ]);
+export async function listProgramAccounts(options: RpcOptions, minContextSlot?: number): Promise<ProgramAccountList> {
+  const result = await rpc(
+    "getProgramAccounts",
+    [
+      PINS.programId,
+      {
+        encoding: "base64",
+        dataSlice: { offset: 0, length: 8 },
+        withContext: true,
+        ...(minContextSlot === undefined ? {} : { minContextSlot }),
+      },
+    ],
+    options,
+  );
   const { slot, value } = withContext(result);
   if (!Array.isArray(value)) throw new RpcError("shape", "getProgramAccounts did not answer a list");
   const byType = Object.fromEntries(ACCOUNT_NAMES.map((n) => [n, [] as string[]])) as Record<AccountName, string[]>;
@@ -125,21 +131,24 @@ export interface ProgramFacts {
   init: Part<{ found: boolean; slot: number | null; blockTimeMs: number | null; failed: boolean; actions: string[] }>;
 }
 
-async function readProgramFactsUncached(): Promise<ProgramFacts> {
+export async function readProgramFactsUncached(options: RpcOptions = serverReadOptions()): Promise<ProgramFacts> {
   const slots: number[] = [];
   const [batch, listed] = await Promise.all([
-    rpcBatch([
-      {
-        method: "getMultipleAccounts",
-        params: [[PINS.programId, PINS.accounts.config, PINS.accounts.vaultUsdcAccount], { encoding: "base64" }],
-      },
-      { method: "getTokenAccountBalance", params: [PINS.accounts.vaultUsdcAccount] },
-      {
-        method: "getTransaction",
-        params: [INIT_TX_SIGNATURE, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
-      },
-    ]),
-    listProgramAccounts().then(
+    rpcBatch(
+      [
+        {
+          method: "getMultipleAccounts",
+          params: [[PINS.programId, PINS.accounts.config, PINS.accounts.vaultUsdcAccount], { encoding: "base64" }],
+        },
+        { method: "getTokenAccountBalance", params: [PINS.accounts.vaultUsdcAccount] },
+        {
+          method: "getTransaction",
+          params: [INIT_TX_SIGNATURE, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
+        },
+      ],
+      options,
+    ),
+    listProgramAccounts(options).then(
       (value): Part<ProgramAccountList> => ({ ok: true, value }),
       (e): Part<ProgramAccountList> => ({ ok: false, reason: describeFailure(e) }),
     ),
@@ -217,7 +226,7 @@ async function readProgramFactsUncached(): Promise<ProgramFacts> {
   if (programData) {
     try {
       const read = withContext(
-        await rpc("getAccountInfo", [programData, { encoding: "base64", dataSlice: { offset: 0, length: PROGRAM_DATA_HEADER_LEN } }]),
+        await rpc("getAccountInfo", [programData, { encoding: "base64", dataSlice: { offset: 0, length: PROGRAM_DATA_HEADER_LEN } }], options),
       );
       slots.push(read.slot);
       const info = accountInfo(read.value);
@@ -226,7 +235,7 @@ async function readProgramFactsUncached(): Promise<ProgramFacts> {
       const deploySlot = Number(decoded.slot);
       let deployTimeMs: number | null = null;
       try {
-        const blockTime = await rpc("getBlockTime", [deploySlot]);
+        const blockTime = await rpc("getBlockTime", [deploySlot], options);
         if (typeof blockTime === "number") deployTimeMs = blockTime * 1000;
       } catch {
         // Shown as "block time not read".
@@ -262,7 +271,7 @@ async function readProgramFactsUncached(): Promise<ProgramFacts> {
 }
 
 export function readProgramFacts(): Promise<Read<ProgramFacts>> {
-  return cachedRead(`program-facts:${PINS.programId}`, REVALIDATE_SECONDS, readProgramFactsUncached);
+  return cachedRead(`program-facts:${PINS.programId}`, REVALIDATE_SECONDS, () => readProgramFactsUncached());
 }
 
 // ---------- proof of reserves (/proof, PLAN.md 3.24) ----------
@@ -291,8 +300,8 @@ const MAX_ONE_SLOT = 99;
 
 const sameList = (x: string[], y: string[]) => x.length === y.length && x.every((v, i) => v === y[i]);
 
-async function readReservesUncached(): Promise<ReservesRead> {
-  let listed = await listProgramAccounts();
+export async function readReservesUncached(options: RpcOptions = serverReadOptions()): Promise<ReservesRead> {
+  let listed = await listProgramAccounts(options);
   // Program accounts are never closed (the program has no close instruction), so if the
   // list taken again at or after the balances' slot is unchanged, the balances cover
   // every account that existed at that slot. One retry if an account appeared in between.
@@ -305,18 +314,18 @@ async function readReservesUncached(): Promise<ReservesRead> {
         `the program has ${addresses.length - 1} allowance and merchant accounts; this page reads at most ${MAX_ONE_SLOT} at one slot`,
       );
     }
-    const { slot, value } = withContext(await rpc("getMultipleAccounts", [addresses, { encoding: "base64" }]));
+    const { slot, value } = withContext(await rpc("getMultipleAccounts", [addresses, { encoding: "base64" }], options));
     if (!Array.isArray(value) || value.length !== addresses.length) {
       throw new RpcError("shape", "getMultipleAccounts answered the wrong number of accounts");
     }
     let check: ProgramAccountList;
     try {
-      check = await listProgramAccounts(slot);
+      check = await listProgramAccounts(options, slot);
     } catch (e) {
       // A node still behind the balances' slot refuses minContextSlot; ask once more.
       if (!(e instanceof RpcError && e.kind === "rpc")) throw e;
       await new Promise((resolve) => setTimeout(resolve, 600));
-      check = await listProgramAccounts(slot);
+      check = await listProgramAccounts(options, slot);
     }
     if (!sameList(check.byType.Allowance, allowanceAddresses) || !sameList(check.byType.Merchant, merchantAddresses)) {
       listed = check;
@@ -375,5 +384,5 @@ async function readReservesUncached(): Promise<ReservesRead> {
 }
 
 export function readReserves(): Promise<Read<ReservesRead>> {
-  return cachedRead(`reserves:${PINS.programId}`, REVALIDATE_SECONDS, readReservesUncached);
+  return cachedRead(`reserves:${PINS.programId}`, REVALIDATE_SECONDS, () => readReservesUncached());
 }
