@@ -6,6 +6,8 @@
   "engines": { "node": ">=22 <23" },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
     "test": "vitest run",
     "test:devnet": "tsx src/settle/devnet.ts"
   },
