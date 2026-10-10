@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T17:40:00+00:00"
+    "updated_at": "2026-10-10T17:45:00+00:00"
   },
   "facts": {
     "zero_bar_payments_settled": {
@@ -311,16 +311,57 @@
       ]
     },
     "fee_per_redeem_lamports": {
-      "value": null,
+      "value": 10000,
       "unit": "lamports",
       "kind": "measured",
-      "status": "pending",
-      "source": "meta.fee of the same 20 devnet redeems in measurements/redeem.json, task 3.50; each must equal 5,000 lamports x signatures (the secp256r1 signature counts) + any priority fee; GET /api/volume recomputes it",
-      "as_of": null,
+      "status": "measured",
+      "source": "meta.fee of every redeem_note transaction on devnet so far (2 of 2, read with getTransaction): 5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa (settled) and 2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv (the refused cheat; a failed transaction still pays its fee). Each has 1 transaction signature, so 10,000 = 2 x 5,000: the phone signature checked by the secp256r1 precompile is charged like a transaction signature. Task 3.50 extends this to its 20-redeem run in measurements/redeem.json",
+      "as_of": "2026-10-10T17:45:00+00:00",
       "surfaces": [
         "/proof",
         "slides"
-      ]
+      ],
+      "display": "10,000 lamports"
+    },
+    "solana_base_fee_lamports_per_signature": {
+      "value": 5000,
+      "unit": "lamports",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "Solana docs https://solana.com/docs/core/fees: \"Base fee per signature | 5,000 lamports\", split 50% burned and 50% to the validator",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "/proof",
+        "slides",
+        "Devpost"
+      ],
+      "display": "5,000 lamports"
+    },
+    "sol_usd_price_snapshot": {
+      "value": 110.01,
+      "unit": "USD per SOL",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "CoinGecko https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true, last_updated_at 2026-10-10T17:41:42Z (mainnet SOL; devnet SOL has no value)",
+      "as_of": "2026-10-10T17:41:42+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "$110.01"
+    },
+    "redeem_fee_usd_estimate": {
+      "value": 0.0011001,
+      "unit": "USD",
+      "kind": "computed",
+      "status": "computed",
+      "source": "ESTIMATE: fee_per_redeem_lamports (10,000) / 1,000,000,000 x sol_usd_price_snapshot (110.01) = 0.0011001. Prices the devnet fee at the mainnet SOL price at that time; priority fees not included; our server pays it, not the merchant",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "about $0.0011 (about a tenth of a cent)"
     },
     "p256_verifies_per_second_vps_noble": {
       "value": null,
@@ -731,6 +772,32 @@
         "Devpost"
       ],
       "display": "62%"
+    },
+    "wave_send_fee_pct": {
+      "value": 1,
+      "unit": "% of the amount sent",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "Wave home page https://www.wave.com/en/: \"Send for only 1%.\" and \"Deposit & withdraw money for FREE\"; no merchant fee is published there",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "1%"
+    },
+    "senegal_remittance_cost_pct_2023": {
+      "value": 0.72,
+      "unit": "% of the amount sent",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank API https://api.worldbank.org/v2/country/SEN/indicator/SI.RMT.COST.IB.ZS?format=json (Average transaction cost of sending remittances to a specific country (%), Senegal 2023; 2021 was 3.61; dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "0.72%"
     },
     "senegal_adults_15plus_2025": {
       "value": 11786511,
