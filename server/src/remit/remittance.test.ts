@@ -93,3 +93,90 @@ test('empty or unsorted earmarks fail before any funding', async () => {
   expect(() => new RemittanceService({ ...options, policy: { ...policy, earmarks: ['ff'.repeat(32), '00'.repeat(32)] } })).toThrow();
   expect(f.chain.sign).not.toHaveBeenCalled();
 });
+
+test('unsigned recovery refreshes an expired plan durably and fences the old worker', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  const old = (await f.store.claim('1', plan))!;
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  f.chain.quote.mockImplementation(async recovered => {
+    expect(recovered.expiry).toBe(1800003600);
+    expect((await f.store.get('1')).plan).toEqual(recovered);
+    expect(recovered.allowanceId).toBe('123'); expect(recovered.policy.capUnits).toBe('7');
+    expect(await f.store.save(await f.store.get('1'), old, { signature: 'old', rawTransaction: 'test', blockhash: 'fixture', lastValidBlockHeight: 100 })).toBe(false);
+    return { message: 'unsigned', blockhash: 'fixture', lastValidBlockHeight: 100,
+      cost: { units: recovered.policy.capUnits, funderLamports: '1', feeLamports: '1' } };
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue');
+  expect(result.statusCode).toBe(201); expect(result.body.allowanceId).toBe('123');
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.claim('1', plan)).toBeNull();
+});
+
+test('finish returns its own update result even if renewal wins before the query returns', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy };
+  const token = (await f.store.claim('1', plan))!, row = await f.store.get('1');
+  row.attempt = await f.chain.sign(); expect(await f.store.save(row, token, row.attempt)).toBe(true);
+  const result = { statusCode: 201 as const, body: { allowanceId: '123', signature: row.attempt.signature } };
+  const query = f.db.query.bind(f.db);
+  vi.spyOn(f.db, 'query').mockImplementation(async (sql, params) => {
+    const written = await query(sql, params);
+    if (sql.startsWith('UPDATE remittance_jobs SET result=') && written.rows.length) {
+      expect(await f.store.claim('1', { ...plan, allowanceId: '456', expiry: 1800003600 })).not.toBeNull();
+    }
+    return written;
+  });
+  expect(await f.store.finish(row, result)).toEqual(result);
+  expect((await f.store.get('1')).plan.allowanceId).toBe('456');
+  expect((await f.store.get('1')).result).toBeNull();
+  expect(await f.store.finish(row, result)).toBeNull();
+});
+
+test('a completion that loses its signature guard returns pending for its own attempt', async () => {
+  const f = await fixture();
+  f.chain.observe.mockImplementation(async () => {
+    await f.db.query(`UPDATE remittance_jobs SET attempt=jsonb_set(attempt,'{signature}','"next-signature"'::jsonb),
+      result='{"statusCode":201,"body":{"allowanceId":"next"}}'::jsonb`);
+    return 'ok';
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '1' }, 'venue');
+  expect(result).toEqual({ statusCode: 202, body: { status: 'pending', recipientAllowanceId: '1', signature: 'fixture-signature', retryAfter: 2 } });
+});
+
+test('saved success and pending polls skip recipient and candidate-id RPC calls', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  const first = await f.service.submit(input, 'venue');
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect(await f.service.submit(input, 'venue')).toEqual({ ...first, statusCode: 200 });
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  await f.db.query('UPDATE remittance_jobs SET result=NULL'); f.chain.observe.mockResolvedValue(null);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(202);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('unsigned polling avoids RPC allocation and expired recovery keeps its first id and terms', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1800003600, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  await f.store.claim('1', plan);
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(202);
+  expect(f.chain.quote).not.toHaveBeenCalled();
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(201);
+  expect(f.chain.quote.mock.calls[0][0]).toEqual(plan);
+  expect(f.chain.recipient).not.toHaveBeenCalled(); expect(f.chain.taken).not.toHaveBeenCalled();
+});
+
+test('only a successful expired job allocates a renewal id', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  await f.service.submit(input, 'venue');
+  await f.db.query(`UPDATE remittance_jobs SET plan=jsonb_set(plan,'{expiry}','1799999999'::jsonb)`);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(201);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(2); expect(f.chain.taken).toHaveBeenCalledTimes(2);
+  expect(f.chain.quote.mock.calls[1][0].allowanceId).not.toBe(f.chain.quote.mock.calls[0][0].allowanceId);
+});
