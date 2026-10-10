@@ -1,6 +1,16 @@
 import Foundation
 import Observation
 
+/// One received transport text, with when it first arrived (for the age limit) and its place in
+/// arrival order (a sequence number given once, on delivery). Both stay with the text through every
+/// hand-over, so going round a payment, a release or a takeover never moves it in line, even when
+/// two texts share a timestamp or the phone's clock moves backwards.
+struct InboxText: Equatable, Sendable {
+    let text: String
+    let arrivedAt: Date
+    let sequence: UInt64
+}
+
 /// The Bluetooth inbound hook for the Receive screen (task 3.71; the 2.2 mesh glue feeds it).
 /// The LokaMesh glue calls `deliver(_:)` with each received `L1|P|1|...` transport text, and the
 /// Receive model checks it exactly like a scanned code. Pass one inbox as
@@ -22,21 +32,18 @@ public final class PaymentInbox {
     /// or checked: a payer who sent it has likely left the till.
     public nonisolated static let defaultMaxAge: TimeInterval = 300
 
-    private struct Held {
-        let text: String
-        let at: Date
-    }
-
     /// Held texts, in arrival order: no screen can take them now (none is attached, or the attached
     /// one is on a payment and gave them back until `release()`).
-    private var waiting: [Held] = []
+    private var waiting: [InboxText] = []
     /// Texts handed to the attached screen that its consumer has not started, in arrival order. One
     /// FIFO for whichever screen is attached: a newer screen takes it over as it is, and texts go
     /// back to `waiting` when no screen is attached.
-    @ObservationIgnored private var queued: [Held] = []
+    @ObservationIgnored private var queued: [InboxText] = []
     /// Counts attachments: each `attach` and each detach begins a new one. A consumer takes texts
     /// only with the attachment it got from `attach`.
     @ObservationIgnored private var generation: UInt64 = 0
+    /// The next arrival sequence number. It only grows, whatever the phone's clock does.
+    @ObservationIgnored private var nextSequence: UInt64 = 0
     /// Held texts, oldest first.
     public var held: [String] { waiting.map(\.text) }
     /// Queued texts, oldest first (for tests).
@@ -49,10 +56,9 @@ public final class PaymentInbox {
     public let maxAge: TimeInterval
     private let now: @MainActor () -> Date
     @ObservationIgnored private var listener: ObjectIdentifier?
-    /// Takes a text and the time it first arrived: the screen counts what it can never accept and
-    /// calls `enqueue` for the rest. Returns false when its model is gone; the inbox then detaches
-    /// and holds the text.
-    @ObservationIgnored private var handler: (@MainActor (String, Date) -> Bool)?
+    /// Takes one text: the screen counts what it can never accept and calls `enqueue` for the rest.
+    /// Returns false when its model is gone; the inbox then detaches and holds the text.
+    @ObservationIgnored private var handler: (@MainActor (InboxText) -> Bool)?
 
     public init(maxAge: TimeInterval = PaymentInbox.defaultMaxAge, now: @escaping @MainActor () -> Date = { Date() }) {
         self.maxAge = maxAge
@@ -62,21 +68,27 @@ public final class PaymentInbox {
     /// True while a Receive screen is taking texts.
     public var isAttached: Bool { handler != nil }
 
-    /// Hands one received transport text to the attached Receive model, or holds it.
+    /// Hands one received transport text to the attached Receive model, or holds it. Its arrival
+    /// time and its place in line are fixed here, once.
     public func deliver(_ text: String) {
-        let arrived = now()
+        let item = stamp(text, arrivedAt: now())
         if let handler {
-            if handler(text, arrived) { return }
+            if handler(item) { return }
             unhook()
         }
-        hold(text, arrivedAt: arrived)
+        hold(item)
+    }
+
+    private func stamp(_ text: String, arrivedAt: Date) -> InboxText {
+        nextSequence &+= 1
+        return InboxText(text: text, arrivedAt: arrivedAt, sequence: nextSequence)
     }
 
     /// Queues a text for the attached screen's consumer (its handler calls this for each text it
-    /// may accept). Held and queued texts together stay within `capacity`; past it, the text that
-    /// arrived first is dropped and counted.
-    func enqueue(_ text: String, arrivedAt: Date) {
-        Self.insert(Held(text: text, at: arrivedAt), into: &queued)
+    /// may accept), in its place in arrival order. Held and queued texts together stay within
+    /// `capacity`; past it, the text that arrived first is dropped and counted.
+    func enqueue(_ item: InboxText) {
+        Self.insert(item, into: &queued)
         enforceCapacity()
     }
 
@@ -84,23 +96,22 @@ public final class PaymentInbox {
     /// `attachment` no longer owns the inbox (the screen went away, or a newer one took over), so a
     /// text is never checked by a screen that is not shown. A text that waited past `maxAge` behind
     /// a busy consumer is dropped and counted first, never handed over.
-    func takeNext(for owner: AnyObject, attachment: UInt64) -> (text: String, arrivedAt: Date)? {
+    func takeNext(for owner: AnyObject, attachment: UInt64) -> InboxText? {
         guard listener == ObjectIdentifier(owner), generation == attachment else { return nil }
         dropExpired()
         guard !queued.isEmpty else { return nil }
-        let item = queued.removeFirst()
-        return (item.text, item.at)
+        return queued.removeFirst()
     }
 
     /// True when texts wait in the queue for the attached screen's consumer.
     var hasQueued: Bool { !queued.isEmpty }
 
-    /// Keeps `text` until a Receive screen can take it: none is attached, or the attached one is
-    /// on a payment and calls `release()` when it is ready for the next payer. `arrivedAt` is when
-    /// the text first reached this inbox: a text handed over and given back keeps its first time,
-    /// so going round a payment never restarts its `maxAge`.
-    func hold(_ text: String, arrivedAt: Date) {
-        Self.insert(Held(text: text, at: arrivedAt), into: &waiting)
+    /// Keeps `item` until a Receive screen can take it: none is attached, or the attached one is on
+    /// a payment and calls `release()` when it is ready for the next payer. The text keeps its first
+    /// arrival time and place in line, so going round a payment never restarts its `maxAge` and
+    /// never moves it behind a later text.
+    func hold(_ item: InboxText) {
+        Self.insert(item, into: &waiting)
         dropExpired()
         enforceCapacity()
     }
@@ -112,10 +123,10 @@ public final class PaymentInbox {
         waiting = []
         for item in texts {
             if let handler {
-                if handler(item.text, item.at) { continue }
+                if handler(item) { continue }
                 unhook()
             }
-            // Re-held with its first arrival time.
+            // Re-held, in its place.
             Self.insert(item, into: &waiting)
         }
     }
@@ -124,7 +135,7 @@ public final class PaymentInbox {
     /// attachment its consumer takes queued texts with. Texts a replaced screen had queued stay
     /// queued, in arrival order and inside `capacity`, for the new listener.
     @discardableResult
-    func attach(_ owner: AnyObject, handler: @escaping @MainActor (String, Date) -> Bool) -> UInt64 {
+    func attach(_ owner: AnyObject, handler: @escaping @MainActor (InboxText) -> Bool) -> UInt64 {
         generation &+= 1
         listener = ObjectIdentifier(owner)
         self.handler = handler
@@ -138,8 +149,8 @@ public final class PaymentInbox {
         unhook()
     }
 
-    /// No screen takes texts now: queued ones go back to the held list with their first arrival
-    /// times, so nothing is checked for a screen that is not shown and nothing is lost.
+    /// No screen takes texts now: queued ones go back to the held list in their places, so nothing
+    /// is checked for a screen that is not shown and nothing is lost.
     private func unhook() {
         generation &+= 1
         listener = nil
@@ -151,10 +162,11 @@ public final class PaymentInbox {
         enforceCapacity()
     }
 
-    /// Drops the text that arrived first, held or queued, until both fit `capacity` together.
+    /// Drops the text that arrived first (lowest sequence), held or queued, until both fit
+    /// `capacity` together.
     private func enforceCapacity() {
         while waiting.count + queued.count > Self.capacity {
-            if let oldestHeld = waiting.first, queued.first.map({ oldestHeld.at <= $0.at }) ?? true {
+            if let oldestHeld = waiting.first, queued.first.map({ oldestHeld.sequence < $0.sequence }) ?? true {
                 waiting.removeFirst()
             } else {
                 queued.removeFirst()
@@ -163,10 +175,9 @@ public final class PaymentInbox {
         }
     }
 
-    /// Inserts after every text that arrived at the same time or earlier, so a list stays in
-    /// arrival order.
-    private static func insert(_ item: Held, into list: inout [Held]) {
-        let index = list.lastIndex(where: { $0.at <= item.at }).map { $0 + 1 } ?? 0
+    /// Inserts by arrival sequence, so a list stays in arrival order whatever the timestamps say.
+    private static func insert(_ item: InboxText, into list: inout [InboxText]) {
+        let index = list.firstIndex(where: { $0.sequence > item.sequence }) ?? list.endIndex
         list.insert(item, at: index)
     }
 
@@ -175,10 +186,22 @@ public final class PaymentInbox {
     private func dropExpired() {
         let cutoff = now().addingTimeInterval(-maxAge)
         let before = waiting.count + queued.count
-        waiting.removeAll { $0.at < cutoff }
-        queued.removeAll { $0.at < cutoff }
+        waiting.removeAll { $0.arrivedAt < cutoff }
+        queued.removeAll { $0.arrivedAt < cutoff }
         let dropped = before - waiting.count - queued.count
         // Assigned only on a real drop: an observed write would refresh the screen for nothing.
         if dropped > 0 { droppedWhileDetached += dropped }
+    }
+
+    // MARK: - For tests
+
+    /// Holds a text that first arrived at `arrivedAt`, as the newest in line.
+    func hold(_ text: String, arrivedAt: Date) {
+        hold(stamp(text, arrivedAt: arrivedAt))
+    }
+
+    /// Queues a text that first arrived at `arrivedAt`, as the newest in line.
+    func enqueue(_ text: String, arrivedAt: Date) {
+        enqueue(stamp(text, arrivedAt: arrivedAt))
     }
 }

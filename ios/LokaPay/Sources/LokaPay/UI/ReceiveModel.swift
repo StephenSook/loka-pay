@@ -283,9 +283,9 @@ public final class ReceiveModel {
     /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
         guard phase != .unavailable, let inbox else { return }
-        inboxAttachment = inbox.attach(self) { [weak self] text, arrivedAt in
+        inboxAttachment = inbox.attach(self) { [weak self] item in
             guard let self else { return false }
-            self.takeFromInbox(text, arrivedAt: arrivedAt)
+            self.takeFromInbox(item)
             return true
         }
         // Texts a screen this one replaced had queued are this screen's now, in arrival order.
@@ -336,15 +336,15 @@ public final class ReceiveModel {
     /// within `PaymentInbox.capacity` (the oldest goes first, counted), whichever screen queued
     /// them. A text arriving while a signature is pending (Face ID) therefore waits in a bounded
     /// queue, never in an open-ended chain of tasks, and a newer screen takes that queue over.
-    private func takeFromInbox(_ text: String, arrivedAt: Date) {
+    private func takeFromInbox(_ item: InboxText) {
         guard let inbox, phase != .unavailable, merchant != nil else { return }
-        switch triage(text) {
+        switch triage(item.text) {
         case .ignored:
             inboxIgnored += 1
         case .unreadable:
             inboxUnreadable += 1
         case .payment:
-            inbox.enqueue(text, arrivedAt: arrivedAt)
+            inbox.enqueue(item)
             startInboxConsumer()
         }
     }
@@ -361,7 +361,7 @@ public final class ReceiveModel {
     private func drainInbox() async {
         while let inbox, let attachment = inboxAttachment,
               let item = inbox.takeNext(for: self, attachment: attachment) {
-            await acceptFromInbox(item.text, arrivedAt: item.arrivedAt)
+            await acceptFromInbox(item)
         }
         inboxConsumer = nil
     }
@@ -372,17 +372,18 @@ public final class ReceiveModel {
     /// never be accepted here are counted, not reported or held: protocol texts for other steps, and
     /// texts that are not valid payment codes. Only an allowance or note that passes its own checks
     /// goes back to the inbox, so junk takes no inbox place and never shows as Stopped later.
-    private func acceptFromInbox(_ text: String, arrivedAt: Date) async {
+    private func acceptFromInbox(_ item: InboxText) async {
         guard phase != .unavailable, merchant != nil else { return }
-        switch triage(text) {
+        switch triage(item.text) {
         case .ignored:
             inboxIgnored += 1
         case .unreadable:
             inboxUnreadable += 1
         case .payment(let decoded):
             guard phase == .ready else {
-                // Back with its first arrival time, so the inbox age limit still counts from then.
-                inbox?.hold(text, arrivedAt: arrivedAt)
+                // Back with its first arrival time and place in line, so the age limit still counts
+                // from then and no later text gets ahead of it.
+                inbox?.hold(item)
                 return
             }
             await accept(decoded)

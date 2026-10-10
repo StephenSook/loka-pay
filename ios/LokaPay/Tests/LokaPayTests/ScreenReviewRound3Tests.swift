@@ -256,8 +256,8 @@ struct InboxSharedQueueTests {
         let at = { (offset: Int) in clock.now.addingTimeInterval(TimeInterval(offset)) }
         inbox.hold("h0", arrivedAt: at(-20))
         inbox.hold("h1", arrivedAt: at(-10))
-        let first = inbox.attach(a) { text, arrived in
-            inbox.enqueue(text, arrivedAt: arrived)
+        let first = inbox.attach(a) { item in
+            inbox.enqueue(item)
             return true
         }
         #expect(inbox.queuedTexts == ["h0", "h1"])
@@ -266,7 +266,7 @@ struct InboxSharedQueueTests {
         #expect(inbox.queuedTexts == (0..<16).map { "q\($0)" })
         #expect(inbox.droppedWhileDetached == 2)
 
-        let second = inbox.attach(b) { _, _ in true }
+        let second = inbox.attach(b) { _ in true }
         #expect(inbox.queuedTexts.count == 16, "a takeover keeps the queue as it is")
         #expect(inbox.takeNext(for: a, attachment: first) == nil, "the replaced screen takes nothing")
         #expect(inbox.takeNext(for: b, attachment: second)?.text == "q0")

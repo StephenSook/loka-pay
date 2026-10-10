@@ -140,3 +140,66 @@ struct InboxQueuedExpiryTests {
         #expect(inbox.droppedWhileDetached == 1, "counted once")
     }
 }
+
+@Suite("inbox order is arrival order, not timestamp order (review 3 round 3, finding 4)")
+@MainActor
+struct InboxArrivalOrderTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func allowanceText(_ id: UInt64) -> String {
+        PaymentTransport.encode(.allowance, F.allowanceWire(payer: SoftwareP256Signer().keyHash, id: id))
+    }
+
+    @Test("an older held text and a newer queued one with the same timestamp keep their order through a takeover")
+    func equalTimestampsThroughTakeover() async throws {
+        let clock = TestClock()  // never moves: every text has the same timestamp
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        let merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        func makeModel() -> ReceiveModel {
+            ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: OfflineLedger(url: F.tempURL("ledger.json")),
+                         settlementClient: nil, deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox,
+                         now: { F.now })
+        }
+        let first = makeModel()
+        first.startInbox()
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        inbox.deliver(PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        inbox.deliver(PaymentTransport.encode(.note, note.wire))
+        await first.inboxDrained()
+        #expect(first.phase == .received)
+
+        // A arrives during the payment and is held; B arrives next and is still queued when a
+        // rebuilt screen takes over.
+        let a = allowanceText(501)
+        let b = allowanceText(502)
+        inbox.deliver(a)
+        await first.inboxDrained()
+        #expect(inbox.held == [a])
+        inbox.deliver(b)
+        let fresh = makeModel()
+        fresh.startInbox()
+        #expect(inbox.queuedTexts == [a, b], "the takeover put the newer text first")
+
+        await fresh.inboxDrained()
+        await first.inboxDrained()
+        #expect(fresh.lastAllowance?.allowanceId == 502, "the older text was checked after the newer one")
+        #expect(fresh.allowances[501] != nil)
+    }
+
+    @Test("when the phone's clock moves backwards, held order and capacity eviction still follow arrival")
+    func clockMovesBackwards() {
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        inbox.deliver("A")
+        clock.now -= 10
+        inbox.deliver("B")
+        #expect(inbox.held == ["A", "B"], "a later text went ahead of an earlier one")
+
+        // Full: the first arrival goes first, whatever its timestamp.
+        let more = (0..<15).map { "C\($0)" }
+        for text in more { inbox.deliver(text) }
+        #expect(inbox.droppedWhileDetached == 1)
+        #expect(inbox.held == ["B"] + more, "eviction dropped a text other than the first arrival")
+    }
+}
