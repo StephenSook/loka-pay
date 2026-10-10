@@ -52,11 +52,11 @@ services:
       PUBLIC_DAILY_FEE_LAMPORTS: ${PUBLIC_DAILY_FEE_LAMPORTS:-100000000}
       NOTE_DAILY_FEE_LAMPORTS: ${NOTE_DAILY_FEE_LAMPORTS:-200000000}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://zerobars.us,https://www.zerobars.us}
-      TRUST_PROXY: ${TRUST_PROXY:-}
       # Phase 3 routes (server/src/app/phase3.ts) stay off until their values are set in /etc/loka-pay/api.env.
       # Paths are inside the container: REMIT_SEND_KEYPAIR_PATH=/run/keys/funding-send.json (the wallets.send pin),
       # VOLUME_MEASUREMENT_PATH=/run/measurements/redeem.json, VOLUME_BENCHMARK_PATH=/run/measurements/p256-verify.json.
-      # TRUST_PROXY can stay unset: the default trusts the Docker bridge (172.16.0.0/12) that Caddy arrives on.
+      # TRUST_PROXY is deliberately not passed: an empty value would trust no proxy and merge every visitor into one
+      # client. The app default trusts the Docker bridge (172.16.0.0/12) that Caddy arrives on.
       TRUST_ENABLED: ${TRUST_ENABLED:-}
       RESERVES_ENABLED: ${RESERVES_ENABLED:-}
       VOLUME_MEASUREMENT_PATH: ${VOLUME_MEASUREMENT_PATH:-}
