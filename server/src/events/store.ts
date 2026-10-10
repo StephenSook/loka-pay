@@ -14,6 +14,12 @@ export interface PaymentEvent {
   uploadedAt: number; receivedAt: number | null;
 }
 
+/** Postgres data exceptions (22xxx) and integrity violations (23xxx): retrying the same values cannot succeed. */
+export function isDataError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^2[23][0-9A-Z]{3}$/.test(code);
+}
+
 /** ACK received-at outside this window (2020-01-01 to one day past upload) is a wrong or hostile clock: stored as null. */
 const RECEIVED_AT_MIN = 1_577_836_800;
 const RECEIVED_AT_MAX_AHEAD = 86_400;
@@ -27,8 +33,14 @@ const columns = `seq, note_id AS "noteId", source, status, error, amount_units::
 const toEvent = (row: Record<string, unknown>): PaymentEvent => ({ ...row, seq: Number(row.seq) } as unknown as PaymentEvent);
 
 export class EventStore {
-  /** Note ids whose rows cannot be projected; kept out of later selections so one bad row never blocks the rest. */
-  private readonly skipped = new Set<string>();
+  /**
+   * Note ids whose rows can never be projected (the stored note does not parse, or Postgres refuses the values as
+   * data: SQLSTATE class 22 or 23), kept out of later selections so one bad row never blocks the rest. Any other
+   * error (connection, timeout, out of memory) is rethrown so the next tick retries. Uploads and events keep
+   * separate sets, so a row skipped for one is still projected for the other.
+   */
+  private readonly skippedUploads = new Set<string>();
+  private readonly skippedEvents = new Set<string>();
 
   constructor(private readonly db: Database, private readonly deployment: P.Deployment,
     private readonly sourceOf: (payerKeyHash: string) => Source = () => 'phone_ble',
@@ -55,9 +67,9 @@ export class EventStore {
     )`);
   }
 
-  private skip(noteId: string, reason: string): void {
-    if (this.skipped.has(noteId)) return;
-    this.skipped.add(noteId);
+  private skip(set: Set<string>, noteId: string, reason: string): void {
+    if (set.has(noteId)) return;
+    set.add(noteId);
     this.onSkip(noteId, reason);
   }
 
@@ -67,17 +79,20 @@ export class EventStore {
         s.note, s.uploaded_at::text AS "uploadedAt"
       FROM settlement_attempts s LEFT JOIN payment_uploads u ON u.note_id = s.note_id
       WHERE u.note_id IS NULL AND NOT (s.note_id = ANY($2::text[])) ORDER BY s.uploaded_at, s.note_id LIMIT $1`,
-    [limit, [...this.skipped]]);
+    [limit, [...this.skippedUploads]]);
     let added = 0;
     for (const row of rows) {
-      const validated = this.validate(row.noteId, row.note);
+      const validated = this.validate(this.skippedUploads, row.noteId, row.note);
       if (!validated) continue;
       try {
         const result = await this.db.query(`INSERT INTO payment_uploads (note_id, source, uploaded_at) VALUES ($1, $2, $3)
           ON CONFLICT (note_id) DO NOTHING RETURNING note_id`,
         [row.noteId, this.sourceOf(P.toHex(validated.payerKeyHash)), row.uploadedAt]);
         added += result.rows.length;
-      } catch { this.skip(row.noteId, 'upload_write_failed'); }
+      } catch (error) {
+        if (!isDataError(error)) throw error;
+        this.skip(this.skippedUploads, row.noteId, 'upload_write_failed');
+      }
     }
     return added;
   }
@@ -93,7 +108,7 @@ export class EventStore {
       FROM settlement_attempts s LEFT JOIN payment_events e ON e.note_id = s.note_id
       WHERE s.decision IS NOT NULL AND (e.note_id IS NULL OR e.signature <> s.decision->>'signature'
         OR (s.ack IS NOT NULL AND NOT e.ack_projected)) AND NOT (s.note_id = ANY($2::text[]))
-      ORDER BY (s.decision->>'blockTime')::bigint, s.note_id LIMIT $1`, [limit, [...this.skipped]]);
+      ORDER BY (s.decision->>'blockTime')::bigint, s.note_id LIMIT $1`, [limit, [...this.skippedEvents]]);
     let written = 0;
     for (const row of rows as unknown as JournalRow[]) {
       const fields = this.fields(row);
@@ -111,7 +126,11 @@ export class EventStore {
         WHERE payment_events.signature <> EXCLUDED.signature
           OR (EXCLUDED.ack_projected AND NOT payment_events.ack_projected)
         RETURNING note_id`, fields);
-      } catch { this.skip(row.noteId, 'event_write_failed'); continue; }
+      } catch (error) {
+        if (!isDataError(error)) throw error;
+        this.skip(this.skippedEvents, row.noteId, 'event_write_failed');
+        continue;
+      }
       written += result.rows.length;
     }
     return written;
@@ -136,13 +155,13 @@ export class EventStore {
     return Number(rows[0]?.seq ?? 0);
   }
 
-  private validate(noteId: string, note: string): P.ValidatedNote | null {
-    try { return P.validateNoteWire(P.base64urlDecode(note), this.deployment); } catch { this.skip(noteId, 'note_unreadable'); return null; }
+  private validate(set: Set<string>, noteId: string, note: string): P.ValidatedNote | null {
+    try { return P.validateNoteWire(P.base64urlDecode(note), this.deployment); } catch { this.skip(set, noteId, 'note_unreadable'); return null; }
   }
 
   private fields(row: JournalRow): unknown[] | null {
     const d = row.decision;
-    const validated = this.validate(row.noteId, row.note);
+    const validated = this.validate(this.skippedEvents, row.noteId, row.note);
     if (!validated) return null;
     // The ACK time is the merchant phone's signed clock, so any signer can put any i64 there. Keep it only when
     // it is a plausible time, or one hostile ACK would overflow bigint and make the row unwritable.
