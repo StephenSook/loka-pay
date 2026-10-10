@@ -9,6 +9,7 @@ import { registerEventRoutes } from './routes.js';
 export { EventStore, SOURCES, EXCLUDED_BY_DEFAULT, type PaymentEvent, type Source } from './store.js';
 export { EventFeed } from './feed.js';
 export { computeStats, sandboxUsd, type Stats, type Figures } from './stats.js';
+export { computeWiring, type Wiring, type WiringRow } from './wiring.js';
 
 /**
  * Task 2.10: events store, GET /api/stats and SSE GET /live. Install after installSettlement, whose
@@ -21,6 +22,7 @@ export async function installEvents(options: {
   /** Keys a client for the per-client /live cap; the app passes the burst guard's HMAC so both agree. */
   clientKey?: (request: FastifyRequest) => string;
   maxStreamsPerClient?: number;
+  commit?: string;
 }): Promise<{ store: EventStore; feed: EventFeed }> {
   const canary = new Set(options.canaryKeyHashes ?? []);
   for (const hash of canary) if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('Invalid canary key hash');
@@ -36,6 +38,6 @@ export async function installEvents(options: {
   const secret = randomBytes(32);
   const clientKey = options.clientKey ?? (request => createHmac('sha256', secret).update(request.ip).digest('hex'));
   registerEventRoutes(options.app, { database: options.database, store, feed, maxClients: options.maxClients,
-    maxBufferedBytes: options.maxBufferedBytes, clientKey, maxStreamsPerClient: options.maxStreamsPerClient });
+    maxBufferedBytes: options.maxBufferedBytes, clientKey, maxStreamsPerClient: options.maxStreamsPerClient, commit: options.commit });
   return { store, feed };
 }

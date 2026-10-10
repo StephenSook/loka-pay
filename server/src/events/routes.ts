@@ -5,6 +5,7 @@ import type { EventFeed } from './feed.js';
 import type { EventStore, PaymentEvent } from './store.js';
 import { computeStats } from './stats.js';
 import { RUNS } from './runs.js';
+import { computeWiring } from './wiring.js';
 
 const BACKLOG = 20;
 const RESUME_PAGE = 200;
@@ -19,6 +20,8 @@ const DRAIN_TIMEOUT_MS = 10_000;
 export interface EventRouteOptions {
   database: Database; store: EventStore; feed: EventFeed; maxClients?: number; maxBufferedBytes?: number;
   clientKey: (request: FastifyRequest) => string; maxStreamsPerClient?: number;
+  /** The deployed commit, reported by /api/wiring next to the rows. */
+  commit?: string;
 }
 
 /**
@@ -60,6 +63,12 @@ export function registerEventRoutes(app: FastifyInstance, options: EventRouteOpt
     }
     reply.header('cache-control', 'no-store');
     return computeStats(options.database, { includeAll: include === 'all', run: window });
+  });
+
+  // Task 3.58: last real success per integration, recomputed from stored rows on every call.
+  app.get('/api/wiring', async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return computeWiring(options.database, { commit: options.commit ?? 'uncommitted' });
   });
 
   // Server-sent events: one `payment` event per settled or failed note, with `id` = seq for Last-Event-ID resume.

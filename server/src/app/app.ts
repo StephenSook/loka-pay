@@ -105,6 +105,6 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
     feePayer: options.wallets.team.feePayer, feeBudget: { dailyLamports: options.noteFeeDailyLamports }, pins: options.pins, confirmationSeed: seed });
   // Task 2.10: reads the settlement journal written above.
   await installEvents({ app, database: options.database, deployment, canaryKeyHashes: options.canaryKeyHashes,
-    intervalMs: options.eventIntervalMs, clientKey });
+    intervalMs: options.eventIntervalMs, clientKey, commit: options.commit });
   return app;
 }

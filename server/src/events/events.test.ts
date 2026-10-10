@@ -15,6 +15,9 @@ import { installEvents } from './index.js';
 import { computeStats, sandboxUsd } from './stats.js';
 import { EventStore } from './store.js';
 import { writeCapped } from './routes.js';
+import { computeWiring } from './wiring.js';
+import { RegistrationStore } from '../remit/store.js';
+import { RemittanceStore } from '../remit/remittance.js';
 
 // The real settlement service writes decisions against a stand-in chain; this module projects them.
 // That ties these tests to settle/store.ts's journal, so a change to its columns fails here first.
@@ -426,4 +429,64 @@ test('one client gets at most 3 /live streams; closing one frees its slot', asyn
   }
   expect(again.status).toBe(200);
   await again.body?.cancel();
+});
+
+/** Inserts a finished registration or remittance job shaped the way remit/service.ts and remittance.ts store them. */
+async function seedJob(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: 'registration_jobs' | 'remittance_jobs',
+  createdAt: number, signature: string) {
+  const plan = JSON.stringify({ expiry: createdAt + 86400, policy: { lifetimeSeconds: 86400 }, keyHash: 'ab'.repeat(32) });
+  if (table === 'registration_jobs') {
+    await db.query(`INSERT INTO registration_jobs (namespace, kind, key_hash, id, plan, result) VALUES ('ns', 'payer', $1, $1, $2::jsonb, $3::jsonb)`,
+      [signature, plan, JSON.stringify({ statusCode: 200, body: { openSignature: signature, payerKeyHash: 'ab'.repeat(32) } })]);
+  } else {
+    await db.query(`INSERT INTO remittance_jobs (namespace, recipient, plan, result, claim_token, lease_expires_at)
+      VALUES ('ns', $1, $2::jsonb, $3::jsonb, 't', 0)`, [signature, plan, JSON.stringify({ statusCode: 201, body: { signature, recipientAllowanceId: '7' } })]);
+  }
+}
+
+test('/api/wiring reports no success and stale rows when nothing is stored: no row has constant evidence', async () => {
+  const f = await fixture();
+  const wiring = (await f.app.inject({ url: '/api/wiring' })).json();
+  expect(wiring.rows.map((r: { id: string }) => r.id)).toEqual(['solana_settlement', 'solana_registration', 'remittance']);
+  for (const row of wiring.rows) expect(row).toMatchObject({ lastSuccessAt: null, ageSeconds: null, stale: true, evidence: null });
+});
+
+test('a fresh redeem updates the Solana row with the stored slot and signature within 5 s', async () => {
+  const f = await fixture();
+  const started = Date.now();
+  await f.post({ note: wire(0) });
+  await f.events.feed.tick();
+  const row = (await f.app.inject({ url: '/api/wiring' })).json().rows[0];
+  expect(Date.now() - started).toBeLessThan(5000);
+  const stored = (await f.db.query<Record<string, unknown>>('SELECT slot::float8 AS slot, signature, block_time::float8 AS at FROM payment_events')).rows[0];
+  expect(row).toMatchObject({ id: 'solana_settlement', lastSuccessAt: stored.at, evidence: { slot: stored.slot, signature: stored.signature,
+    status: 'settled', explorer: `https://explorer.solana.com/tx/${stored.signature}?cluster=devnet` } });
+});
+
+test('registration and remittance rows come from their stored jobs, and each row goes stale after its window', async () => {
+  const db = await testDatabase();
+  closers.push(() => db.close());
+  await new SettlementStore(db).migrate();
+  await new EventStore(db, deployment).migrate();
+  await new RegistrationStore(db, 'ns').migrate();
+  await new RemittanceStore(db, 'ns').migrate();
+  await seedJob(db, 'registration_jobs', 1000, 'regOld');
+  await seedJob(db, 'registration_jobs', 2000, 'regNew');
+  await seedJob(db, 'remittance_jobs', 1500, 'remitSig');
+  const at = (now: number) => computeWiring(db, { commit: 'abc', now: () => now });
+  const fresh = await at(2060);
+  const [, registration, remittance] = fresh.rows;
+  expect(fresh.commit).toBe('abc');
+  expect(registration).toMatchObject({ lastSuccessAt: 2000, ageSeconds: 60, stale: false,
+    evidence: { kind: 'payer', signature: 'regNew', explorer: 'https://explorer.solana.com/tx/regNew?cluster=devnet' } });
+  expect(remittance).toMatchObject({ lastSuccessAt: 1500, ageSeconds: 560, stale: false, evidence: { signature: 'remitSig' } });
+  const later = await at(2000 + 3601);
+  expect(later.rows[1]).toMatchObject({ stale: true, ageSeconds: 3601 });
+  expect(later.rows[2].stale).toBe(false);
+  // No row carries a key hash, recipient or anything else personal: only public chain evidence.
+  for (const row of fresh.rows) {
+    const text = JSON.stringify(row.evidence ?? {});
+    expect(text).not.toContain('ab'.repeat(32));
+    expect(Object.keys(row.evidence ?? {}).every(key => ['slot', 'signature', 'explorer', 'status', 'source', 'kind'].includes(key))).toBe(true);
+  }
 });
