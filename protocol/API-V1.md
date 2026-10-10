@@ -42,7 +42,7 @@ Request:
 { "publicKey": "<base64url, 33-byte compressed P-256 key>" }
 ```
 
-The server opens an on-chain allowance for that key (`open_allowance`) and signs its certificate. It picks the allowance id. Team devices draw from the table-demo wallet and the demo fee payer; every other key draws from the public-onboarding wallet and the public fee payer, with a smaller cap. The server decides the pool from a list of team key hashes in its own configuration, never from anything in the request.
+The server opens an on-chain allowance for that key (`open_allowance`) and signs its certificate. It picks the allowance id uniformly at random from the full `u64` range, never sequentially: the allowance account's address comes from the id alone, so anyone can reserve an id by funding their own allowance first (`programs/README.md`). If `open_allowance` fails because that account already exists, the server picks a new id and retries, and it signs the certificate only after the open transaction confirms. Team devices draw from the table-demo wallet and the demo fee payer; every other key draws from the public-onboarding wallet and the public fee payer, with a smaller cap. The server decides the pool from a list of team key hashes in its own configuration, never from anything in the request.
 
 Idempotent by key: calling again with the same key while its allowance is open returns the same allowance (HTTP 200) instead of opening a second one. A new allowance returns HTTP 201.
 
