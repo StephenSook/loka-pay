@@ -85,3 +85,12 @@ export function ArrowUpRightIcon(props: IconProps) {
     </Svg>
   );
 }
+
+/** An empty circle: a check that did not run. */
+export function CircleIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="8" />
+    </Svg>
+  );
+}
