@@ -287,7 +287,14 @@ function toView(r: VerifiedReceipt): ReceiptView {
 export type Evaluation =
   | { kind: "input"; problem: InputProblem }
   | { kind: "no_deployment"; tooShort: boolean }
-  | { kind: "verified"; context: ContextKind; view: ReceiptView; checks: Checks }
+  | {
+      kind: "verified";
+      context: ContextKind;
+      view: ReceiptView;
+      checks: Checks;
+      /** The receipt bytes that verified, for "Play the attacker" (lib/attacker.ts). */
+      bytes: Uint8Array;
+    }
   | {
       kind: "failed";
       context: ContextKind;
@@ -304,8 +311,19 @@ export function evaluate(
 ): Evaluation {
   const parsed = parseReceiptText(text);
   if (!parsed.ok) return { kind: "input", problem: parsed.problem };
-  const { bytes } = parsed;
+  return evaluateBytes(parsed.bytes, pinned, testVector);
+}
 
+/**
+ * Every check on receipt bytes. The receipt box and "Play the attacker" (lib/attacker.ts)
+ * both call this, so an edited note goes through exactly the check that verified the
+ * original.
+ */
+export function evaluateBytes(
+  bytes: Uint8Array,
+  pinned: SerializedDeployment | null,
+  testVector: SerializedDeployment,
+): Evaluation {
   const context = chooseContext(bytes, pinned, testVector);
   // Nothing to check against. The length rule needs no deployment, so a too-short
   // input is still named as one.
@@ -321,7 +339,7 @@ export function evaluate(
       conf: receipt.conf ? "passed" : "not_attached",
       ids: "passed",
     };
-    return { kind: "verified", context: context.kind, view: toView(receipt), checks };
+    return { kind: "verified", context: context.kind, view: toView(receipt), checks, bytes };
   } catch (e) {
     if (!(e instanceof PaymentError)) {
       return { kind: "unexpected", message: e instanceof Error ? e.message : String(e) };
