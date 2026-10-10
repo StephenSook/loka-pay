@@ -46,8 +46,14 @@ public final class SecureEnclaveP256Signer: PaymentSigner, @unchecked Sendable {
 
     public static var isAvailable: Bool { SecureEnclave.isAvailable }
 
+    /// Serializes the whole read, create and store sequence, so two first launches can never
+    /// end up with two different keys for one account.
+    private static let creationLock = NSLock()
+
     /// Restores the key stored under `account`, or creates and stores a new one.
     public static func loadOrCreate(account: String, context: LAContext? = nil) throws -> SecureEnclaveP256Signer {
+        creationLock.lock()
+        defer { creationLock.unlock() }
         if let stored = try Keychain.read(account: account) {
             let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: stored, authenticationContext: context)
             return SecureEnclaveP256Signer(key: key, context: context)
@@ -58,7 +64,12 @@ public final class SecureEnclaveP256Signer: PaymentSigner, @unchecked Sendable {
         else { throw error!.takeRetainedValue() as Error }
         let key = try SecureEnclave.P256.Signing.PrivateKey(
             compactRepresentable: false, accessControl: access, authenticationContext: context)
-        try Keychain.write(account: account, data: key.dataRepresentation)
+        // Insert-only: if another writer stored a key first, use theirs, never overwrite it.
+        if try Keychain.insert(account: account, data: key.dataRepresentation) == false {
+            guard let stored = try Keychain.read(account: account) else { throw PaymentError.storage }
+            let existing = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: stored, authenticationContext: context)
+            return SecureEnclaveP256Signer(key: existing, context: context)
+        }
         return SecureEnclaveP256Signer(key: key, context: context)
     }
 
@@ -90,16 +101,20 @@ enum Keychain {
         return data
     }
 
-    static func write(account: String, data: Data) throws {
-        let query: [String: Any] = [
+    /// Adds the item only if none exists. Returns false when one already exists (nothing is
+    /// deleted or replaced), true when this call stored it.
+    static func insert(account: String, data: Data) throws -> Bool {
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { throw PaymentError.storage }
+        switch SecItemAdd(add as CFDictionary, nil) {
+        case errSecSuccess: return true
+        case errSecDuplicateItem: return false
+        default: throw PaymentError.storage
+        }
     }
 }
