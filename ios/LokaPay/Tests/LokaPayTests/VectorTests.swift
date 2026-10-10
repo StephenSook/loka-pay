@@ -151,6 +151,7 @@ struct StructureTests {
             #expect(conf.status.rawValue == UInt8(f["statusCode"] as! Int))
             #expect(conf.slot == Vectors.u64(f["slot"]))
             #expect(conf.blockTime == Vectors.i64(f["blockTime"]))
+            #expect(conf.uploadedAt == Vectors.i64(f["uploadedAt"]))
             #expect(conf.errorCode == UInt16(f["errorCode"] as! Int))
             #expect(conf.noteId == note0.noteId)
         }
@@ -232,7 +233,7 @@ struct StructureTests {
         let settled = Vectors.hex(receipts[0]["wireHex"])
         let conf = Vectors.hex(Vectors.list("confs")[0]["wireHex"])
         #expect(Bundles.receipt(note: note0, ack: ack, confirmationWire: conf) == settled)
-        #expect(settled.count == 587)
+        #expect(settled.count == 595)
         let parts = try Bundles.splitReceipt(settled)
         #expect(parts.confirmation == conf)
         #expect(Bundles.receipt(note: note0, ack: ack, confirmationWire: nil) == Vectors.hex(receipts[1]["wireHex"]))
@@ -240,6 +241,90 @@ struct StructureTests {
         var badFlag = settled
         badFlag[238 + 153] = 7
         #expect(throws: PaymentError.receiptFlag) { try Bundles.splitReceipt(badFlag) }
+    }
+}
+
+@Suite("bindings: receipts, conflicts, acceptance")
+struct BindingTests {
+    let note0 = try! SignedNote.validate(wire: Vectors.hex(Vectors.list("notes")[0]["wireHex"]), deployment: Vectors.deployment)
+    let ackWire = Vectors.hex(Vectors.list("acks")[0]["wireHex"])
+    var cert: AllowanceCertificate {
+        try! AllowanceCertificate.verify(wire: Vectors.hex(Vectors.list("allowances")[0]["wireHex"]),
+                                         deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+    }
+
+    /// The vectors' server key, derived the same way as tools/vectors/gen.mjs (seed = sha256(label)).
+    static let server = try! Curve25519.Signing.PrivateKey(
+        rawRepresentation: Data(SHA256.hash(data: Data("LOKA-PAY-V1 test key server-ed25519".utf8))))
+
+    static func confWire(noteId: Data, status: UInt8) throws -> Data {
+        var w = ByteWriter()
+        w.ascii(Confirmation.prefix, count: 16)
+        w.bytes(noteId, count: 32)
+        w.bytes(Data(repeating: 7, count: 64), count: 64)
+        w.u64(1)
+        w.i64(2)
+        w.i64(1)
+        w.u8(status)
+        w.u16(0)
+        return w.data + (try server.signature(for: w.data))
+    }
+
+    @Test("the derived test server key matches the vectors")
+    func serverKey() { #expect(Self.server.publicKey.rawRepresentation == Vectors.serverKey) }
+
+    @Test("receipt status comes from the matching signed CONF, never from the flag")
+    func receipts() throws {
+        let r = Vectors.list("receipts")
+        let settled = try Receipts.verify(Vectors.hex(r[0]["wireHex"]), deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+        #expect(settled.status == .settled)
+        let pending = try Receipts.verify(Vectors.hex(r[1]["wireHex"]), deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+        #expect(pending.status == .pending)
+        let failedConf = Vectors.hex(Vectors.list("confs")[1]["wireHex"])
+        let ack = try Ack.verify(wire: ackWire, for: note0)
+        let failed = try Receipts.verify(Bundles.receipt(note: note0, ack: ack, confirmationWire: failedConf),
+                                         deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+        #expect(failed.status == .failedOnChain)
+        // A genuinely signed "settled" CONF for a different note must not settle this one.
+        let other = try Self.confWire(noteId: Data(repeating: 9, count: 32), status: 1)
+        #expect(throws: PaymentError.confirmationMismatch) {
+            try Receipts.verify(Bundles.receipt(note: note0, ack: ack, confirmationWire: other),
+                                deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+        }
+    }
+
+    @Test("only a second note by the certificate's payer is an equivocation")
+    func equivocation() throws {
+        let e = Vectors.root["equivocation"] as! [String: Any]
+        let first = try SignedNote.validate(wire: Vectors.hex(e["firstNoteWireHex"]), deployment: Vectors.deployment)
+        let second = try SignedNote.validate(wire: Vectors.hex(e["secondNoteWireHex"]), deployment: Vectors.deployment)
+        let impostor = try SignedNote.validate(wire: Vectors.hex(e["impostorNoteWireHex"]), deployment: Vectors.deployment)
+        #expect(Conflicts.isEquivocation(first, second, certificate: cert))
+        #expect(!Conflicts.isEquivocation(first, impostor, certificate: cert))
+        #expect(!Conflicts.isEquivocation(first, first, certificate: cert))
+    }
+
+    @Test("merchant acceptance checks bind the note to the certificate")
+    func acceptance() throws {
+        let a = Vectors.keys.merchantAHash
+        let merchantA = Vectors.hex(a)
+        try Acceptance.check(note: note0, certificate: cert, merchantKeyHash: merchantA, now: 1_791_590_400)
+        #expect(throws: PaymentError.payeeMismatch) {
+            try Acceptance.check(note: note0, certificate: cert, merchantKeyHash: Vectors.hex(Vectors.keys.merchantBHash), now: 0)
+        }
+        #expect(throws: PaymentError.expired) {
+            try Acceptance.check(note: note0, certificate: cert, merchantKeyHash: merchantA, now: 1_893_456_001)
+        }
+        let earmarked = try AllowanceCertificate.verify(wire: Vectors.hex(Vectors.list("allowances")[1]["wireHex"]),
+                                                        deployment: Vectors.deployment, serverPublicKey: Vectors.serverKey)
+        #expect(throws: PaymentError.allowanceMismatch) {
+            try Acceptance.check(note: note0, certificate: earmarked, merchantKeyHash: merchantA, now: 0)
+        }
+        let e = Vectors.root["equivocation"] as! [String: Any]
+        let impostor = try SignedNote.validate(wire: Vectors.hex(e["impostorNoteWireHex"]), deployment: Vectors.deployment)
+        #expect(throws: PaymentError.payerMismatch) {
+            try Acceptance.check(note: impostor, certificate: cert, merchantKeyHash: Vectors.hex(Vectors.keys.merchantBHash), now: 0)
+        }
     }
 }
 
