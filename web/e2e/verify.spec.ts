@@ -8,7 +8,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const vectors = JSON.parse(readFileSync(path.join(repoRoot, "protocol", "vectors", "payment-v1.json"), "utf8"));
-const pinsPresent = existsSync(path.join(repoRoot, "config", "pins.json"));
+// The page treats a pins file whose server key is still null like a missing file
+// (web/lib/deployment.ts), so "present" here means present with a server key.
+const pinsFile = path.join(repoRoot, "config", "pins.json");
+const pinsPresent =
+  existsSync(pinsFile) && JSON.parse(readFileSync(pinsFile, "utf8")).serverEd25519PublicKey !== null;
 
 // Only some vector receipts carry `verifyUrlFragment`; `fragment` is built from the
 // transport payload for every one (PAYMENT-V1 section 4.9: "#r=<base64url>").

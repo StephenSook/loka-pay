@@ -1,9 +1,9 @@
 // The pinned devnet deployment for /verify, read from config/pins.json at build time.
 // Server only (it reads the file system); the page passes the result to the browser.
 //
-// config/pins.json does not exist yet: task 1.0 creates it. Until then this exports null
-// and /verify says the settlement server's key is not published. Nothing here invents a
-// key or a program id.
+// Until config/pins.json exists, or while its "serverEd25519PublicKey" is still null (the
+// server key comes with task 1.0), this exports null and /verify says the settlement
+// server's key is not published. Nothing here invents a key or a program id.
 //
 // Fields this page reads (other fields in the file are ignored):
 //   "cluster":                "devnet"
@@ -73,6 +73,9 @@ function readPins(): SerializedDeployment | null {
   if (fields.cluster !== "devnet") unreadable('"cluster" must be "devnet"');
   const programId = base58Key(fields, "programId");
   const mint = base58Key(fields, "mint");
+  // The server key arrives with task 1.0, after the program and wallets are pinned. Until
+  // then the file carries null, and confirmations cannot be checked: say so, as with no file.
+  if (fields.serverEd25519PublicKey === null) return null;
   return {
     clusterId: 0,
     programIdHex: programId.hex,
@@ -83,5 +86,5 @@ function readPins(): SerializedDeployment | null {
   };
 }
 
-/** The pinned devnet deployment, or null when config/pins.json is not there at build time. */
+/** The pinned devnet deployment, or null when config/pins.json is absent or its server key is still null. */
 export const pinnedDeployment: SerializedDeployment | null = readPins();
