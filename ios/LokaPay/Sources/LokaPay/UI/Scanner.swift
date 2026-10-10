@@ -60,7 +60,9 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "us.zerobars.lokapay.scanner")
     private let onScan: (String) -> Void
+    private let output = AVCaptureMetadataOutput()
     private var preview: AVCaptureVideoPreviewLayer?
+    private var formatObserver: NSObjectProtocol?
     private var lastValue: String?
     private let label = UILabel()
 
@@ -71,6 +73,10 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
 
     required init?(coder: NSCoder) { nil }
 
+    deinit {
+        if let formatObserver { NotificationCenter.default.removeObserver(formatObserver) }
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0x1F / 255, green: 0x1A / 255, blue: 0x15 / 255, alpha: 1)
@@ -80,6 +86,8 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         label.font = .preferredFont(forTextStyle: .headline)
         label.adjustsFontForContentSizeCategory = true
         label.text = "Point the camera at a LOKA payment code"
+        label.layer.cornerRadius = 12
+        label.layer.masksToBounds = true
         view.addSubview(label)
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
@@ -100,7 +108,6 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         }
         session.beginConfiguration()
         session.addInput(input)
-        let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
             session.commitConfiguration()
             return showUnavailable()
@@ -123,6 +130,10 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
             layer.masksToBounds = true
             self.view.layer.insertSublayer(layer, at: 0)
             self.preview = layer
+            // The layer converts the preview to a rect of interest only once the camera has a format.
+            self.formatObserver = NotificationCenter.default.addObserver(
+                forName: AVCaptureInput.Port.formatDescriptionDidChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.updateRectOfInterest() }
             self.view.setNeedsLayout()
         }
         session.startRunning()
@@ -175,13 +186,32 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         DispatchQueue.main.async { self.label.text = "Camera unavailable. Paste the code instead." }
     }
 
+    /// The preview fills the whole view (ScanSheet makes it a square across the sheet). Over the
+    /// camera the hint sits in a dark band at the bottom; with no camera the message is centered.
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let area = view.safeAreaLayoutGuide.layoutFrame
-        let side = min(area.width - 32, area.height * 0.7)
-        let frame = CGRect(x: area.midX - side / 2, y: area.minY + 16, width: side, height: side)
-        preview?.frame = frame
-        label.frame = CGRect(x: 16, y: frame.maxY + 12, width: area.width - 32, height: 72)
+        let bounds = view.bounds
+        if let preview {
+            preview.frame = bounds
+            label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            let width = bounds.width - 24
+            let height = label.sizeThatFits(CGSize(width: width - 16, height: .greatestFiniteMagnitude)).height + 16
+            label.frame = CGRect(x: 12, y: bounds.maxY - 12 - height, width: width, height: height)
+            updateRectOfInterest()
+        } else {
+            label.backgroundColor = .clear
+            label.frame = bounds.insetBy(dx: 16, dy: 16)
+        }
+    }
+
+    /// Reads codes only inside what the preview shows, the area the person aims with. Kept at the
+    /// whole frame until the layer gives a usable rect (`ScanGeometry.rectOfInterest`).
+    private func updateRectOfInterest() {
+        guard let preview, !preview.bounds.isEmpty,
+              let rect = ScanGeometry.rectOfInterest(preview.metadataOutputRectConverted(fromLayerRect: preview.bounds))
+        else { return }
+        let output = self.output
+        queue.async { output.rectOfInterest = rect }
     }
 
     public func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject],
@@ -219,8 +249,11 @@ struct ScanSheet: View {
                         .foregroundStyle(.tint)
                 }
                 #if os(iOS)
-                PaymentScannerView(onScan: onText)
-                    .frame(minHeight: 360)
+                // A square as wide as the sheet. The camera's framing is the zoom's job; a bigger
+                // preview shows the code larger, so it is easier to aim and to see when it is sharp.
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay { PaymentScannerView(onScan: onText) }
                     .clipShape(RoundedRectangle(cornerRadius: LokaStyle.cornerRadius, style: .continuous))
                 #endif
                 CodeEntryField(prompt: "Or paste a code (L1|P|1|...)", onSubmit: onText)
