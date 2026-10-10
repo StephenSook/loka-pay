@@ -25,6 +25,8 @@ public enum PaymentError: String, Error, Equatable, Sendable {
     case payerMismatch = "payer_mismatch"
     case notEarmarked = "not_earmarked"
     case expired
+    case serialSeen = "serial_seen"
+    case offlineLimit = "offline_limit"
     case storage
 }
 
