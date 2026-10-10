@@ -342,6 +342,8 @@ One owner per module; cross-module changes go by PR, reviewed by that owner. If 
 > Drift is integration bugs. Announce a contract change here BEFORE committing it, and prefix the commit with `⚠️ CONTRACT`.
 > Definitions below come from the plan. Once code exists, re-read each one from the code and `protocol/PAYMENT-V1.md` and fix this table.
 
+⚠️ CONTRACT: Pravin's 1.9 settlement module never automatically rebuilds or resends an attempt, including after blockhash expiry. A durable claim with an uncertain preparation or send remains pending; recovery only queries the recorded signature. This is stricter than API-V1 section 4's permission to rebuild after expiry. All accepted notes skip preflight so state failures can land on chain, matching API-V1 section 4; PLAN task 3.50's normal-preflight policy requires a later contract decision. A failed transaction without a representable program error code remains pending for operator review rather than receiving an invented signed error code.
+
 | Contract | Owner | Consumers | Definition |
 |---|---|---|---|
 | Payment content family | Claude (1.2), Khadim reviews | iOS, Android, server | `L1\|P\|1\|<kind>\|<base64url payload>` inside the existing encrypted LOKA packet; the text wrapper is never signed. Kinds: `N` note, `Y` merchant ack, `S` settlement confirmation, `M` spend marker, `X` countersigned receipt, `A` allowance certificate, `C` merchant certificate |
