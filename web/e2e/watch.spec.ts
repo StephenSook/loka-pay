@@ -183,12 +183,21 @@ test("/watch without an id, or with a malformed one, asks for it and reads nothi
   await expect(page.getByTestId("meter-id")).toHaveText(ID);
 });
 
-for (const url of [`/watch?a=${ID}`]) {
+test("/judge: the Watch on your phone QR opens /watch for the demo allowance on zerobars.us", async ({ page }) => {
+  await page.goto("/judge");
+  const block = page.getByTestId("watch-on-phone");
+  await expect(block.getByRole("heading", { name: "Watch on your phone" })).toBeVisible();
+  await expect(block.getByTestId("watch-qr")).toHaveAttribute("data-text", `https://zerobars.us/watch?a=${ID}`);
+  await expect(block.getByTestId("watch-link")).toHaveAttribute("href", `/watch?a=${ID}`);
+});
+
+for (const url of [`/watch?a=${ID}`, "/judge"]) {
   test(`${url} at 390 px: no horizontal scroll`, async ({ page }) => {
     await routeDevnet(page, ALL);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(url);
-    await expect(row(page, REFUSED_IPHONE)).toHaveAttribute("data-kind", "refused");
+    if (url.startsWith("/watch")) await expect(row(page, REFUSED_IPHONE)).toHaveAttribute("data-kind", "refused");
+    else await expect(page.getByTestId("watch-qr")).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBe(0);
   });
