@@ -114,6 +114,13 @@ export default async function JudgePage() {
             devnet directly, so the feed keeps working even if our server is down.
           </p>
           <GoLink href="/live">Open /live</GoLink>
+          <p className="text-sm">
+            Or have your own phone ring when a payment settles:{" "}
+            <Link prefetch={false} href="/call" className="font-bold underline">
+              /call
+            </Link>
+            .
+          </p>
         </Step>
 
         <Step n={4} title="Proof" minutes="About 30 seconds">

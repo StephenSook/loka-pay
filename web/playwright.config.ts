@@ -1,11 +1,38 @@
 import { defineConfig, devices } from "@playwright/test";
-import { CLOSED_PORT, E2E_GITHUB_TOKEN, FAILING_PORT, UPSTREAM } from "./e2e/fixtures/ports";
+import {
+  CLOSED_PORT,
+  E2E_CALL_CODE,
+  E2E_ELEVENLABS_KEY,
+  E2E_FROM_NUMBER,
+  E2E_GITHUB_TOKEN,
+  E2E_VONAGE_APP_ID,
+  FAILING_PORT,
+  UPSTREAM,
+  callTestKeys,
+} from "./e2e/fixtures/ports";
 import { unitProject } from "./playwright.unit.config";
 
 const PORT = 3100;
 const baseURL = `http://127.0.0.1:${PORT}`;
 const isCI = Boolean(process.env.CI);
 const closed = `http://127.0.0.1:${CLOSED_PORT}`;
+// /call (PLAN.md 3.9): a key and secret made for this run only (e2e/fixtures/ports.ts).
+const callKeys = callTestKeys();
+/** Every variable /call reads, empty: the failing server has calls off, whatever the shell has set. */
+const CALLS_OFF = {
+  LOKA_VONAGE_APPLICATION_ID: "",
+  LOKA_VONAGE_PRIVATE_KEY_B64: "",
+  LOKA_VONAGE_FROM_NUMBER: "",
+  ELEVENLABS_API_KEY: "",
+  LOKA_CALL_SECRET: "",
+  LOKA_CALLS_OFF: "",
+  LOKA_CALL_CODE: "",
+  LOKA_CALL_TEST_MODE: "",
+  LOKA_ELEVENLABS_VOICE_ID: "",
+  LOKA_PUBLIC_ORIGIN: "",
+  LOKA_VONAGE_API_URL: "",
+  LOKA_ELEVENLABS_API_URL: "",
+};
 
 export default defineConfig({
   testDir: "./e2e",
@@ -43,6 +70,19 @@ export default defineConfig({
         SETTLEMENT_API_URL: `${UPSTREAM}/settlement`,
         GITHUB_API_URL: `${UPSTREAM}/github`,
         GITHUB_TOKEN: E2E_GITHUB_TOKEN,
+        // /call places its calls through the stand-in's Vonage and ElevenLabs (test mode only).
+        ...CALLS_OFF,
+        LOKA_VONAGE_APPLICATION_ID: E2E_VONAGE_APP_ID,
+        LOKA_VONAGE_PRIVATE_KEY_B64: callKeys.keyB64,
+        LOKA_VONAGE_FROM_NUMBER: E2E_FROM_NUMBER,
+        ELEVENLABS_API_KEY: E2E_ELEVENLABS_KEY,
+        LOKA_CALL_SECRET: callKeys.secret,
+        LOKA_CALL_CODE: E2E_CALL_CODE,
+        // An explicit local test run: Playwright's requests carry no Vercel address header.
+        LOKA_CALL_TEST_MODE: "1",
+        LOKA_PUBLIC_ORIGIN: baseURL,
+        LOKA_VONAGE_API_URL: `${UPSTREAM}/vonage`,
+        LOKA_ELEVENLABS_API_URL: `${UPSTREAM}/elevenlabs`,
       },
     },
     {
@@ -59,6 +99,7 @@ export default defineConfig({
         SETTLEMENT_API_URL: `${closed}/settlement`,
         GITHUB_API_URL: `${closed}/github`,
         GITHUB_TOKEN: "",
+        ...CALLS_OFF,
       },
     },
   ],

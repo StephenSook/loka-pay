@@ -317,9 +317,37 @@ test("no client module reaches a module that reads server-only configuration", (
   const rel = [...reached].map((f) => path.relative(WEB, f)).sort();
   // The walk follows imports: live-feed reaches lib/program-feed.ts, so it is not vacuous.
   expect(rel).toContain("lib/program-feed.ts");
-  for (const serverOnly of ["lib/github.ts", "lib/server-rpc.ts", "lib/test-upstream.ts", "lib/cached-read.ts", "lib/chain.ts", "lib/claims.ts"]) {
+  // /call's panel reaches the shared checks, so the walk sees the call files too.
+  expect(rel).toContain("lib/call-shared.ts");
+  for (const serverOnly of [
+    "lib/github.ts",
+    "lib/server-rpc.ts",
+    "lib/test-upstream.ts",
+    "lib/cached-read.ts",
+    "lib/chain.ts",
+    "lib/claims.ts",
+    "lib/call-server.ts",
+    "lib/call-crypto.ts",
+    "lib/call-limits.ts",
+    "lib/call-payment.ts",
+  ]) {
     expect(rel, `${serverOnly} is reachable from a client module`).not.toContain(serverOnly);
   }
+});
+
+test("every variable /call reads (its keys and secret among them) is read in lib/call-server.ts only, never under a NEXT_PUBLIC name", () => {
+  // The names come from the file itself, so a new variable is covered without listing it here.
+  const names = [...readFileSync(path.join(WEB, "lib", "call-server.ts"), "utf8").matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1]);
+  const distinct = [...new Set(names)];
+  // Floor: the five required variables, the off switch, the voice, the origin and two test seams.
+  expect(distinct.length).toBeGreaterThanOrEqual(10);
+  // The platform's own variables (VERCEL, VERCEL_ENV) are read elsewhere too.
+  for (const name of distinct.filter((n) => !PLATFORM_VARIABLES.has(n))) {
+    expect(name, name).not.toMatch(/^NEXT_PUBLIC_/);
+    const readers = ALL.filter((f) => readFileSync(f, "utf8").includes(`process.env.${name}`)).map((f) => path.relative(WEB, f));
+    expect(readers, name).toEqual(["lib/call-server.ts"]);
+  }
+  for (const f of ALL) expect(readFileSync(f, "utf8"), f).not.toMatch(/NEXT_PUBLIC_(VONAGE|ELEVENLABS|LOKA_CALL)/);
 });
 
 test("GITHUB_TOKEN is read in lib/github.ts only, and never under a NEXT_PUBLIC name", () => {
@@ -329,7 +357,7 @@ test("GITHUB_TOKEN is read in lib/github.ts only, and never under a NEXT_PUBLIC 
 });
 
 // Set by the platform, not by us: never listed in .env.example.
-const PLATFORM_VARIABLES = new Set(["NODE_ENV", "VERCEL"]);
+const PLATFORM_VARIABLES = new Set(["NODE_ENV", "VERCEL", "VERCEL_ENV"]);
 
 test(".env.example lists exactly the variables the code reads", () => {
   const read = new Set(

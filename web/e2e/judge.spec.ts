@@ -76,18 +76,28 @@ test("privacy: loads with no login and says what is true today", async ({
   const main = page.getByRole("main");
   await expect(main).toContainText("No sign-up");
   await expect(main).toContainText("Updated 2026-10-10");
-  await expect(main).toContainText("One page makes your browser contact another website");
+  await expect(main).toContainText("Two pages make your browser contact another website");
+  await expect(main).toContainText("/call connects to the same server to watch for the next settled payment, only after you press");
+  await expect(main).toContainText("keeps a keyed hash of the number (not the number) for up to 24 hours");
+  await expect(main).toContainText("Your number is never sent to ElevenLabs.");
+  await expect(main).toContainText("keeps a keyed hash of your network address (not the address, and made with a random key");
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
   await expect(main).toContainText("The settlement server at api.zerobars.us is running on Solana devnet.");
   await expect(main).not.toContainText("not live");
   // The server is merged: the table follows its code, and nothing says it is still under review.
   await expect(main).not.toContainText(/in\s+review/i);
-  await expect(main).toContainText("The table below lists what it stores, read from its code (server/ in the repository).");
+  await expect(main).toContainText(
+    "All but the last two rows of the table below are what it stores, read from its code (server/ in the repository); the last two are what the /call page handles.",
+  );
   await expect(main).toContainText("The /proof page reads its public health check (api.zerobars.us/api/health) from our web server");
   const addressRow = main.getByRole("row", { name: /A keyed hash of your network address/ });
   await expect(addressRow).toContainText("never written to its database or logs");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();
   await expect(main.getByRole("table")).toContainText("A merchant's display name, typed by the merchant");
+  const numberRow = main.getByRole("row", { name: /Your phone number, if you ask for a call on \/call/ });
+  await expect(numberRow).toContainText("Stored nowhere. Our server passes it once to Vonage to place one call");
+  const wordsRow = main.getByRole("row", { name: /The words the call says/ });
+  await expect(wordsRow).toContainText("Sent to ElevenLabs to make the voice: public payment details only");
   await expect(page.getByRole("link", { name: "team@zerobars.us" })).toHaveAttribute(
     "href",
     "mailto:team@zerobars.us",

@@ -86,6 +86,15 @@ export function ArrowUpRightIcon(props: IconProps) {
   );
 }
 
+/** A phone handset: a call placed (/call). */
+export function PhoneIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" />
+    </Svg>
+  );
+}
+
 /** An empty circle: a check that did not run. */
 export function CircleIcon(props: IconProps) {
   return (
