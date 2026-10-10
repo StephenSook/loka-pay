@@ -7,8 +7,9 @@
 // while a read is pending or failed.
 //
 // At the judge desk (PLAN.md 3.84): a failed row is named from its error code before its details
-// arrive (lib/live-desk.ts), never shown as raw JSON; and rows docs/FACTS.json records carry
-// their label (lib/row-labels.ts, built on the server).
+// arrive (lib/live-desk.ts), never shown as raw JSON; rows docs/FACTS.json records carry their
+// label (lib/row-labels.ts, built on the server); and the kiosk (/live?kiosk=1) leads with a large
+// "Last payment" line, the newest redeem_note this page has read.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -21,7 +22,7 @@ import {
   type History,
   type Row,
 } from "@/lib/program-feed";
-import { refusalOf, refusalWords } from "@/lib/live-desk";
+import { lastPayment, refusalOf, refusalWords, shortSignature, type LastPayment } from "@/lib/live-desk";
 import type { RowLabel } from "@/lib/row-labels";
 import { RPC_URL, WS_URL, explorerTx } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
@@ -59,6 +60,7 @@ export function LiveFeed({
 
   return (
     <div className={`flex min-w-0 flex-col gap-6 ${text}`}>
+      {kiosk ? <LastPaymentLine last={lastPayment(sorted)} history={history} labels={labels} /> : null}
       <section aria-label="Connection" className="flex min-w-0 flex-col gap-2 rounded-card border-3 border-ink bg-surface p-5 shadow-hard">
         <div className="flex flex-wrap items-center gap-3" role="status" data-testid="connection" data-state={connection.kind}>
           <ConnectionChip connection={connection} kiosk={kiosk} />
@@ -109,9 +111,7 @@ export function LiveFeed({
           </h2>
           <HistoryLine history={history} />
         </div>
-        {sorted.length === 0 && history.kind === "ok" ? (
-          <p className="rounded-card border-2 border-dashed border-ink p-5">No transactions for this program yet.</p>
-        ) : null}
+        {sorted.length === 0 ? <EmptyFeed history={history} /> : null}
         <ul className="flex flex-col gap-4" data-testid="tx-list">
           {sorted.map((row) => (
             <TxRow key={row.signature} row={row} kiosk={kiosk} label={labels[row.signature]} />
@@ -169,6 +169,94 @@ function HistoryLine({ history }: { history: History }) {
         Latest {history.count} read from devnet at <When ms={history.atMs} />.
       </span>
     </p>
+  );
+}
+
+/** What an empty list is waiting for, said plainly on the first paint and after. */
+function EmptyFeed({ history }: { history: History }) {
+  return (
+    <p className="rounded-card border-2 border-dashed border-ink p-5" data-testid="tx-empty" data-state={history.kind}>
+      {history.kind === "loading" && (
+        <>
+          Waiting for devnet: this browser is reading the program&apos;s latest {HISTORY_LIMIT} transactions from{" "}
+          {new URL(RPC_URL).host}. They appear here, newest first, as soon as devnet answers, and each new one is added as
+          it lands.
+        </>
+      )}
+      {history.kind === "failed" && (
+        <>Nothing to show yet: the latest transactions could not be read (see above). A new one still appears here while the connection is live.</>
+      )}
+      {history.kind === "ok" && <>No transactions for this program yet. A new one appears here as it lands.</>}
+    </p>
+  );
+}
+
+/** The kiosk's headline: the newest payment this page has read, in type a judge reads from across a table. */
+function LastPaymentLine({ last, history, labels }: { last: LastPayment; history: History; labels: Record<string, RowLabel> }) {
+  const state = last.kind === "none" ? (history.kind === "loading" || last.reading > 0 ? "waiting" : "none") : last.kind;
+  return (
+    <section
+      aria-labelledby="last-payment-title"
+      className="flex min-w-0 flex-col gap-3 rounded-card border-3 border-ink bg-surface p-6 shadow-hard-lg"
+      data-testid="last-payment"
+      data-state={state}
+      data-signature={last.kind === "none" ? undefined : last.row.signature}
+    >
+      <h2 id="last-payment-title" className="text-3xl">
+        Last payment
+      </h2>
+      {last.kind === "none" ? (
+        <p className="text-3xl leading-snug" data-testid="last-payment-headline">
+          {history.kind === "loading"
+            ? `Waiting for devnet: reading the program's latest ${HISTORY_LIMIT} transactions to find the last payment.`
+            : history.kind === "failed"
+              ? "Could not read the latest transactions yet. A new payment still appears here while the connection is live."
+              : last.reading > 0
+                ? `Reading ${last.reading} transaction${last.reading === 1 ? "" : "s"} from devnet to find the last payment.`
+                : `No payment among the latest ${HISTORY_LIMIT} transactions. The next one appears here as soon as it lands.`}
+        </p>
+      ) : (
+        <LastPaymentBody last={last} label={labels[last.row.signature]} />
+      )}
+    </section>
+  );
+}
+
+function LastPaymentBody({ last, label }: { last: Exclude<LastPayment, { kind: "none" }>; label: RowLabel | undefined }) {
+  const { row } = last;
+  return (
+    <>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        {last.kind === "paid" ? <StateChip state="paid" label="Paid" size="lg" testId="last-payment-status" /> : null}
+        {last.kind === "refused" ? <StateChip state="failed" label="Refused" size="lg" testId="last-payment-status" /> : null}
+        {last.kind === "unknown" ? <StateChip state="warning" label="Result unknown" size="lg" testId="last-payment-status" /> : null}
+        {row.arrivedLive ? <OutlineChip label="New" Icon={CircleIcon} size="lg" testId="last-payment-new" /> : null}
+        {label ? <OutlineChip label={label.chip} Icon={CheckIcon} size="lg" testId="last-payment-label" /> : null}
+      </div>
+      <p className="font-display text-5xl font-extrabold leading-tight tracking-tight break-words sm:text-6xl" data-testid="last-payment-headline">
+        {last.kind === "paid" && (last.amountUnits ? `Paid ${formatUnits(last.amountUnits)} sandbox USDC` : "Paid")}
+        {last.kind === "refused" &&
+          (last.refusal.kind === "program" ? `Refused: ${last.refusal.error.name} (${last.refusal.error.number})` : "Refused on chain")}
+        {last.kind === "unknown" && "Result unknown: devnet did not say whether it settled"}
+      </p>
+      {last.kind === "refused" ? (
+        <p className="text-2xl break-words" data-testid="last-payment-reason">
+          {last.refusal.kind === "program" ? `${last.refusal.error.message}. No money moved.` : `${last.refusal.words} No money moved.`}
+        </p>
+      ) : null}
+      <p className="text-2xl" data-testid="last-payment-when">
+        {row.blockTime !== null ? <When ms={row.blockTime * 1000} /> : row.seenAtMs !== null ? <When ms={row.seenAtMs} /> : "Time not read yet"}
+        <span className="text-muted">
+          {" "}
+          · tx <span className="font-mono">{shortSignature(row.signature)}</span>
+        </span>
+      </p>
+      {last.newerReading > 0 ? (
+        <p className="text-base text-muted" data-testid="last-payment-newer">
+          {last.newerReading} newer transaction{last.newerReading === 1 ? " is" : "s are"} still being read from devnet.
+        </p>
+      ) : null}
+    </>
   );
 }
 

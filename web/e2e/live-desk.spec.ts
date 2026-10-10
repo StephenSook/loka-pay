@@ -158,3 +158,85 @@ test("/live: the test-key pair is labelled Test key from FACTS", async ({ page }
     await expect(row(page, signature).getByTestId("tx-label-detail")).toHaveText("Signed outside the iPhone app with a test key, Sat Oct 10 2:01 AM ET.");
   }
 });
+
+test("/live?kiosk=1: no site header, footer or intro; a large Last payment line shows the newest payment, then each new one", async ({ page }) => {
+  // Devnet's list as it stood before the 5:05 PM payment: the recorded entries older than it.
+  const cut = LIST.findIndex((s) => s.signature === SETTLED_RUN2);
+  await routeDevnet(page, LIST.slice(cut + 1));
+  const socket = await routeSocket(page);
+  await page.goto("/live?kiosk=1");
+
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeHidden();
+  await expect(page.getByRole("navigation", { name: "Footer" })).toBeHidden();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Live from devnet: the judge desk screen");
+  await expect(page.getByText("Want your phone to ring")).toHaveCount(0);
+  await expect(page.getByTestId("sandbox-chip")).toBeVisible();
+
+  const last = page.getByTestId("last-payment");
+  await expect(last).toHaveAttribute("data-state", "refused");
+  await expect(last).toHaveAttribute("data-signature", REFUSED_IPHONE);
+  await expect(last.getByTestId("last-payment-headline")).toHaveText("Refused: SerialUsed (6011)");
+  await expect(last.getByTestId("last-payment-reason")).toHaveText("This allowance serial was already redeemed. No money moved.");
+  await expect(last.getByTestId("last-payment-label")).toHaveText("iPhone cheat");
+  // The block time devnet recorded (WebKit and Chromium word the date differently; the instant is the check).
+  await expect(last.getByTestId("last-payment-when").locator("time")).toHaveAttribute("datetime", isoOf(REFUSED_IPHONE));
+  await expect(last.getByTestId("last-payment-when")).toContainText("4:31:16 PM ET");
+  await expect(last.getByTestId("last-payment-when")).toContainText("3XtQtnHR…");
+  await expect(last.getByTestId("last-payment-new")).toHaveCount(0);
+  const box = await last.boundingBox();
+  expect(box!.y).toBeLessThan(200);
+  const headlineSize = await last.getByTestId("last-payment-headline").evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
+  expect(headlineSize).toBeGreaterThanOrEqual(48);
+
+  // The recorded 5:05 PM payment arrives over the socket.
+  socket.notify(SETTLED_RUN2);
+  await expect(last).toHaveAttribute("data-signature", SETTLED_RUN2);
+  await expect(last).toHaveAttribute("data-state", "paid");
+  await expect(last.getByTestId("last-payment-headline")).toHaveText("Paid 0.25 sandbox USDC");
+  await expect(last.getByTestId("last-payment-new")).toHaveText("New");
+  // Its block time comes with its details, queued behind the first batch under the same pacing.
+  await expect(last.getByTestId("last-payment-when").locator("time")).toHaveAttribute("datetime", isoOf(SETTLED_RUN2), { timeout: 20_000 });
+  await expect(last.getByTestId("last-payment-when")).toContainText("5:05:58 PM ET");
+
+  // Then its cheat.
+  socket.notify(REFUSED_RUN2);
+  await expect(last).toHaveAttribute("data-signature", REFUSED_RUN2);
+  await expect(last.getByTestId("last-payment-headline")).toHaveText("Refused: SerialUsed (6011)");
+  await expect(last.getByTestId("last-payment-label")).toHaveCount(0);
+});
+
+test("/live first paint, before devnet answers: the list and the kiosk say what they are waiting for", async ({ page }) => {
+  const devnet = await routeDevnet(page, LIST, { holdHistory: true });
+  await routeSocket(page);
+  await page.goto("/live?kiosk=1");
+  await expect(page.getByTestId("last-payment")).toHaveAttribute("data-state", "waiting");
+  await expect(page.getByTestId("last-payment-headline")).toHaveText("Waiting for devnet: reading the program's latest 20 transactions to find the last payment.");
+  await expect(page.getByTestId("tx-empty")).toHaveAttribute("data-state", "loading");
+  await expect(page.getByTestId("tx-empty")).toContainText("Waiting for devnet: this browser is reading the program's latest 20 transactions from api.devnet.solana.com.");
+  devnet.releaseHistory!();
+  await expect(page.getByTestId("tx-row")).toHaveCount(20);
+  await expect(page.getByTestId("tx-empty")).toHaveCount(0);
+  await expect(page.getByTestId("last-payment")).toHaveAttribute("data-state", "refused");
+});
+
+test("/live with no transactions at all says so, and that a new one appears as it lands", async ({ page }) => {
+  await routeDevnet(page, []);
+  await routeSocket(page);
+  await page.goto("/live?kiosk=1");
+  await expect(page.getByTestId("tx-empty")).toHaveAttribute("data-state", "ok");
+  await expect(page.getByTestId("tx-empty")).toHaveText("No transactions for this program yet. A new one appears here as it lands.");
+  await expect(page.getByTestId("last-payment")).toHaveAttribute("data-state", "none");
+  await expect(page.getByTestId("last-payment-headline")).toHaveText("No payment among the latest 20 transactions. The next one appears here as soon as it lands.");
+});
+
+for (const url of ["/live", "/live?kiosk=1"]) {
+  test(`${url} at 390 px: no horizontal scroll with the recorded rows`, async ({ page }) => {
+    await routeDevnet(page, LIST);
+    await routeSocket(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(url);
+    await expect(row(page, REFUSED_IPHONE)).toHaveAttribute("data-details", "read");
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBe(0);
+  });
+}

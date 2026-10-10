@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { refusalOf, refusalWords } from "../lib/live-desk";
+import { lastPayment, refusalOf, refusalWords, shortSignature } from "../lib/live-desk";
 import { summarizeTransaction } from "../lib/logs";
 import { PINS } from "../lib/pins";
 import { rowsFromSignatures, type Row } from "../lib/program-feed";
@@ -64,6 +64,42 @@ test.describe("naming a refusal before its details arrive", () => {
     expect(words("not json")).toEqual({ kind: "words", words: "Failed, with an error this page cannot read." });
     expect(words(null)).toEqual({ kind: "words", words: "Failed, with an error this page cannot read." });
     expect(refusalOf({ ...base, result: "succeeded", error: null, errText: null })).toBeNull();
+  });
+});
+
+test.describe("the kiosk's last payment", () => {
+  test("is the newest redeem_note read: the recorded 5:09 PM refusal, SerialUsed (6011)", () => {
+    const last = lastPayment(read());
+    expect(last.kind).toBe("refused");
+    if (last.kind !== "refused") return;
+    expect(last.row.signature).toBe(REFUSED_RUN2);
+    expect(last.row.blockTime).toBe(1791666579);
+    expect(refusalWords(last.refusal)).toBe("SerialUsed (6011): This allowance serial was already redeemed.");
+    expect(last.newerReading).toBe(0);
+  });
+
+  test("a settled payment carries its NoteRedeemed amount", () => {
+    const rows = read().filter((r) => r.signature !== REFUSED_RUN2);
+    const last = lastPayment(rows);
+    expect(last).toMatchObject({ kind: "paid", amountUnits: "250000" });
+  });
+
+  test("before details nothing can be told apart: no payment yet, with the rows still being read counted", () => {
+    expect(lastPayment(listed())).toEqual({ kind: "none", reading: 20 });
+    expect(lastPayment([])).toEqual({ kind: "none", reading: 0 });
+  });
+
+  test("rows above the payment that are still being read are counted", () => {
+    const rows = read();
+    // TEST FIXTURE: the newest two rows not read yet.
+    rows[0] = { ...rows[0], actions: [], details: "reading" };
+    rows[1] = { ...rows[1], actions: [], details: "reading" };
+    const last = lastPayment(rows);
+    expect(last).toMatchObject({ kind: "refused", newerReading: 2 });
+  });
+
+  test("the short signature is its first eight characters", () => {
+    expect(shortSignature(SETTLED_IPHONE)).toBe("2SpG1YUR…");
   });
 });
 
