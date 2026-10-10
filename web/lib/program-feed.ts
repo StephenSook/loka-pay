@@ -21,25 +21,34 @@
 // The feed keeps the newest MAX_ROWS rows, so a kiosk left open all weekend does not grow
 // without limit.
 //
-// Public devnet allows 10 getTransaction calls per 10 seconds per IP, so details are read
-// in batches of DETAIL_BATCH, newest first, waiting between batches; a row whose details
-// were refused for the limit stays "reading" and is tried again in the next batch. Each
-// answer in a batch is read on its own: one this page cannot read marks only its own row
-// "unavailable", and the other rows of the batch still get their details.
+// Public devnet allows 10 getTransaction calls per 10 seconds per IP, so every detail read,
+// for history rows and for rows that just arrived over the socket alike, goes through one
+// queue (pump): one request at a time, newest rows first, at most DETAIL_BUDGET calls in any
+// DETAIL_WINDOW_MS, and nothing at all for RATE_LIMIT_PAUSE_MS after a rate-limited answer.
+// A burst of notifications therefore never becomes a burst of requests. A row dropped past
+// MAX_ROWS leaves the queue, and an answer for it that was already on its way is discarded.
+// Each answer in a batch is read on its own: one this page cannot read marks only its own
+// row "unavailable", and the other rows of the batch still get their details.
 
 import { resultOf, summarizeLogs, summarizeTransaction, type TxResult, type TxSummary } from "./logs";
-import { WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
+import { RpcError, WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
 import { isUnixSeconds } from "./time";
 
 export const HISTORY_LIMIT = 20;
 export const MAX_ROWS = 100;
 export const MAX_ATTEMPTS = 8;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
-const DETAIL_BATCH = 8;
-const DETAIL_ROUNDS = 6;
-const DETAIL_WAIT_MS = 11_000;
-const LIVE_DETAIL_ATTEMPTS = 3;
-const LIVE_DETAIL_DELAY_MS = 1500;
+/** getTransaction calls in one batch request. */
+export const DETAIL_BATCH = 8;
+/** At most this many getTransaction calls in any DETAIL_WINDOW_MS, under devnet's 10 per 10 s. */
+export const DETAIL_BUDGET = 8;
+export const DETAIL_WINDOW_MS = 11_000;
+/** No getTransaction call for this long after a rate-limited answer (devnet answers Retry-After: 10). */
+export const RATE_LIMIT_PAUSE_MS = 11_000;
+/** A row answered "not found yet", or whose request failed, is tried again after this long. */
+export const DETAIL_RETRY_MS = 1500;
+/** A row is given up on ("unread") after this many tries. */
+export const DETAIL_ATTEMPTS = 6;
 const SUBSCRIBE_ID = 1;
 const SLOT_SUBSCRIBE_ID = 2;
 /** With nothing on the socket for longer than this, the connection is "stalled", not "live". */
@@ -108,11 +117,13 @@ export const INITIAL_FEED_STATE: FeedState = {
   announcement: "",
 };
 
-/** The time and a repeating timer: the browser's, or a fake one in unit/program-feed.test.ts. */
+/** The time and timers: the browser's, or a fake one in unit/program-feed.test.ts. */
 export interface FeedClock {
   now(): number;
   /** Calls `fn` every `ms` milliseconds until the returned function is called. */
   every(ms: number, fn: () => void): () => void;
+  /** Resolves after `ms` milliseconds. */
+  sleep(ms: number): Promise<void>;
 }
 
 export const SYSTEM_CLOCK: FeedClock = {
@@ -121,6 +132,7 @@ export const SYSTEM_CLOCK: FeedClock = {
     const id = setInterval(fn, ms);
     return () => clearInterval(id);
   },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
 const TX_OPTIONS = { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" } as const;
@@ -167,7 +179,12 @@ export async function loadSignatures(programId: string): Promise<Row[]> {
   }));
 }
 
-export type DetailOutcome = { kind: "read"; summary: TxSummary } | { kind: "retry" } | { kind: "unread" } | { kind: "unavailable" };
+export type DetailOutcome =
+  | { kind: "read"; summary: TxSummary }
+  /** Try again later; `rateLimited` pauses every detail read (RATE_LIMIT_PAUSE_MS). */
+  | { kind: "retry"; rateLimited: boolean }
+  | { kind: "unread" }
+  | { kind: "unavailable" };
 
 /**
  * One getTransaction answer. A per-call rate limit or a null result (not found yet) means
@@ -176,8 +193,8 @@ export type DetailOutcome = { kind: "read"; summary: TxSummary } | { kind: "retr
  * the other answers of its batch from being read.
  */
 export function detailOutcome(outcome: RpcOutcome, programId: string): DetailOutcome {
-  if (!outcome.ok) return outcome.error.code === 429 ? { kind: "retry" } : { kind: "unread" };
-  if (outcome.result === null) return { kind: "retry" };
+  if (!outcome.ok) return outcome.error.code === 429 ? { kind: "retry", rateLimited: true } : { kind: "unread" };
+  if (outcome.result === null) return { kind: "retry", rateLimited: false };
   try {
     const summary = summarizeTransaction(outcome.result, programId);
     return summary ? { kind: "read", summary } : { kind: "unavailable" };
@@ -191,14 +208,14 @@ export async function loadDetails(signatures: string[], programId: string): Prom
   let outcomes: RpcOutcome[];
   try {
     outcomes = await rpcBatch(signatures.map((s) => ({ method: "getTransaction", params: [s, TX_OPTIONS] })));
-  } catch {
-    // The whole request was refused or failed: every row waits for the next batch.
-    return signatures.map((): DetailOutcome => ({ kind: "retry" }));
+  } catch (e) {
+    // The whole request was refused or failed: every row waits for a later batch, and a
+    // rate-limited request pauses the queue.
+    const rateLimited = e instanceof RpcError && e.code === 429;
+    return signatures.map((): DetailOutcome => ({ kind: "retry", rateLimited }));
   }
   return outcomes.map((outcome) => detailOutcome(outcome, programId));
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * A row with the details getTransaction answered. An answer that does not say how the
@@ -290,9 +307,18 @@ export class ProgramFeed {
   private attempts = 0;
   private everLive = false;
   private running = false;
-  private enriching = false;
-  /** Rows that just arrived over the socket, whose details enrichLive is reading. */
-  private readonly liveEnriching = new Set<string>();
+  /** True while the detail queue (pump) is running; there is only ever one. */
+  private pumping = false;
+  /** Wakes the queue from a wait early, when a row arrives or the feed stops. */
+  private wake: (() => void) | null = null;
+  /** Tries so far, per row still waiting for its details. */
+  private readonly tries = new Map<string, number>();
+  /** When a waiting row may be tried again (this.clock), after "not found yet" or a failed request. */
+  private readonly notBefore = new Map<string, number>();
+  /** When each getTransaction call of the last DETAIL_WINDOW_MS was sent, oldest first. */
+  private sent: number[] = [];
+  /** No detail read before this time (this.clock), after a rate-limited answer. */
+  private pausedUntilMs = 0;
   /** When the current socket last sent a message classifyMessage recognized (this.clock). */
   private lastMessageMs = 0;
   /** The current socket's subscription ids, once acknowledged. */
@@ -324,6 +350,7 @@ export class ProgramFeed {
 
   stop(): void {
     this.running = false;
+    this.wake?.();
     this.stopWatching();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
@@ -343,7 +370,11 @@ export class ProgramFeed {
 
   private update(patch: Partial<FeedState>): void {
     const { kept, dropped } = keepNewest(this.rows.values(), MAX_ROWS);
-    for (const signature of dropped) this.rows.delete(signature);
+    // A dropped row also leaves the detail queue.
+    for (const signature of dropped) {
+      this.rows.delete(signature);
+      this.forget(signature);
+    }
     this.state = { ...this.state, ...patch, rows: kept };
     for (const listener of this.listeners) listener(this.state);
   }
@@ -377,51 +408,99 @@ export class ProgramFeed {
       if (!this.running) return;
       for (const row of mergeHistory(this.rows, loaded, retryUnread)) this.setRow(row);
       this.update({ history: { kind: "ok", atMs: this.clock.now(), count: loaded.length } });
-      void this.enrich();
+      void this.pump();
     } catch (e) {
       if (!this.running) return;
       this.update({ history: { kind: "failed", atMs: this.clock.now(), reason: describeFailure(e) } });
     }
   }
 
-  /** A row whose details the history reader (enrich) should read: not one enrichLive is reading. */
-  private waitsForDetails(row: Row): boolean {
-    return row.details === "reading" && !this.liveEnriching.has(row.signature);
+  private forget(signature: string): void {
+    this.tries.delete(signature);
+    this.notBefore.delete(signature);
   }
 
-  /** Reads details for rows still "reading", newest first, a batch at a time. */
-  private async enrich(): Promise<void> {
-    if (this.enriching) return;
-    this.enriching = true;
-    try {
-      for (let round = 0; round < DETAIL_ROUNDS && this.running; round += 1) {
-        const pending = this.state.rows.filter((r) => this.waitsForDetails(r)).slice(0, DETAIL_BATCH);
-        if (pending.length === 0) return;
-        if (round > 0) await sleep(DETAIL_WAIT_MS);
-        if (!this.running) return;
-        const outcomes = await loadDetails(
-          pending.map((r) => r.signature),
-          this.programId,
-        );
-        pending.forEach((row, i) => {
-          const outcome = outcomes[i];
-          const current = this.rows.get(row.signature);
-          // Dropped past MAX_ROWS while its details were being read: not added back.
-          if (!current) return;
-          if (outcome.kind === "read") {
-            this.setRow(mergeDetails(current, outcome.summary));
-          } else if (outcome.kind === "unread" || outcome.kind === "unavailable") {
-            this.setRow({ ...current, details: outcome.kind });
-          }
-        });
-        this.update({});
-      }
-      // Out of rounds: say so on each row still waiting.
-      for (const row of this.rows.values()) if (this.waitsForDetails(row)) this.setRow({ ...row, details: "unread" });
-      this.update({});
-    } finally {
-      this.enriching = false;
+  /**
+   * The one detail queue: reads getTransaction for rows still "reading", newest first, one
+   * batch request at a time, within the shared budget and any rate-limit pause. Calling it
+   * while it runs only wakes it, so it never runs twice.
+   */
+  private async pump(): Promise<void> {
+    if (this.pumping) {
+      this.wake?.();
+      return;
     }
+    this.pumping = true;
+    try {
+      while (this.running) {
+        const now = this.clock.now();
+        const waiting = this.state.rows.filter((r) => r.details === "reading");
+        if (waiting.length === 0) return;
+        this.sent = this.sent.filter((t) => now - t < DETAIL_WINDOW_MS);
+        const budget = DETAIL_BUDGET - this.sent.length;
+        const due = waiting.filter((r) => (this.notBefore.get(r.signature) ?? 0) <= now);
+        if (now >= this.pausedUntilMs && budget > 0 && due.length > 0) {
+          const batch = due.slice(0, Math.min(DETAIL_BATCH, budget));
+          for (let i = 0; i < batch.length; i += 1) this.sent.push(now);
+          const outcomes = await loadDetails(
+            batch.map((r) => r.signature),
+            this.programId,
+          );
+          if (!this.running) return;
+          this.apply(batch, outcomes);
+          continue;
+        }
+        // Wait for the first moment a read can be sent: the pause ends, the budget's window
+        // frees a call, and a waiting row is due.
+        const budgetAt = budget > 0 ? now : this.sent[0] + DETAIL_WINDOW_MS;
+        const dueAt = due.length > 0 ? now : Math.min(...waiting.map((r) => this.notBefore.get(r.signature) ?? now));
+        await this.nap(Math.max(this.pausedUntilMs, budgetAt, dueAt) - now);
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  private async nap(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      this.wake = resolve;
+      void this.clock.sleep(Math.max(ms, 1)).then(resolve);
+    });
+    this.wake = null;
+  }
+
+  private apply(batch: Row[], outcomes: DetailOutcome[]): void {
+    const now = this.clock.now();
+    let rateLimited = false;
+    batch.forEach((row, i) => {
+      const outcome = outcomes[i];
+      const current = this.rows.get(row.signature);
+      // Dropped past MAX_ROWS while its details were being read: not added back.
+      if (!current) {
+        this.forget(row.signature);
+        return;
+      }
+      if (outcome.kind === "read") {
+        this.setRow(mergeDetails(current, outcome.summary));
+        this.forget(row.signature);
+      } else if (outcome.kind === "unread" || outcome.kind === "unavailable") {
+        this.setRow({ ...current, details: outcome.kind });
+        this.forget(row.signature);
+      } else {
+        if (outcome.rateLimited) rateLimited = true;
+        const tries = (this.tries.get(row.signature) ?? 0) + 1;
+        if (tries >= DETAIL_ATTEMPTS) {
+          // Out of tries: the row says so.
+          this.setRow({ ...current, details: "unread" });
+          this.forget(row.signature);
+        } else {
+          this.tries.set(row.signature, tries);
+          this.notBefore.set(row.signature, now + DETAIL_RETRY_MS);
+        }
+      }
+    });
+    if (rateLimited) this.pausedUntilMs = now + RATE_LIMIT_PAUSE_MS;
+    this.update({});
   }
 
   private onNotification(message: LogsNotification): void {
@@ -438,42 +517,7 @@ export class ProgramFeed {
     this.setRow({ ...summary, arrivedLive: true, seenAtMs: now, details: "reading" });
     const what = summary.actions.join(", ") || "no loka_vault instruction";
     this.update({ lastEventMs: now, announcement: `New transaction: ${what}, ${resultWords(summary.result)}.` });
-    void this.enrichLive(summary.signature);
-  }
-
-  /** The block time and instruction data of a transaction that just arrived, retried briefly. */
-  private async enrichLive(signature: string): Promise<void> {
-    this.liveEnriching.add(signature);
-    try {
-      await this.readLiveDetails(signature);
-    } finally {
-      this.liveEnriching.delete(signature);
-    }
-  }
-
-  private async readLiveDetails(signature: string): Promise<void> {
-    for (let attempt = 0; attempt < LIVE_DETAIL_ATTEMPTS && this.running; attempt += 1) {
-      if (attempt > 0) await sleep(LIVE_DETAIL_DELAY_MS);
-      const [outcome] = await loadDetails([signature], this.programId);
-      const current = this.rows.get(signature);
-      if (!current || !this.running) return;
-      if (outcome.kind === "read") {
-        this.setRow(mergeDetails(current, outcome.summary));
-        this.update({});
-        return;
-      }
-      if (outcome.kind === "unavailable") {
-        this.setRow({ ...current, details: "unavailable" });
-        this.update({});
-        return;
-      }
-      if (outcome.kind === "unread") break;
-    }
-    const current = this.rows.get(signature);
-    if (current && this.running) {
-      this.setRow({ ...current, details: "unread" });
-      this.update({});
-    }
+    void this.pump();
   }
 
   private connect(): void {

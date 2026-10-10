@@ -150,17 +150,22 @@ test.describe("reading a batch of transaction details", () => {
   });
 });
 
-// The connection chip says Live only while the socket carries traffic. A FAKE clock drives
-// the liveness check, a FAKE WebSocket stands in for devnet's, and a stubbed fetch answers
-// the history read: no request leaves this machine.
+// The connection chip says Live only while the socket carries traffic, and the detail queue
+// bounds getTransaction reads. A FAKE clock drives the liveness check and the queue's waits,
+// a FAKE WebSocket stands in for devnet's, and a stubbed fetch answers the RPC calls: no
+// request leaves this machine.
 test.describe("the liveness check", () => {
   const T0 = 1_791_700_000_000;
 
   class FakeClock implements FeedClock {
     ms = T0;
     private timers: { every: number; next: number; fn: () => void }[] = [];
+    private sleepers: { at: number; resolve: () => void }[] = [];
     now(): number {
       return this.ms;
+    }
+    sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => this.sleepers.push({ at: this.ms + ms, resolve }));
     }
     every(ms: number, fn: () => void): () => void {
       const timer = { every: ms, next: this.ms + ms, fn };
@@ -169,7 +174,7 @@ test.describe("the liveness check", () => {
         this.timers = this.timers.filter((t) => t !== timer);
       };
     }
-    /** Moves time forward, firing each repeating timer at every moment it is due. */
+    /** Moves time forward, firing each repeating timer at every moment it is due, and each sleep that ends. */
     advance(ms: number): void {
       const end = this.ms + ms;
       for (;;) {
@@ -180,6 +185,9 @@ test.describe("the liveness check", () => {
         due.fn();
       }
       this.ms = end;
+      const woken = this.sleepers.filter((w) => w.at <= end);
+      this.sleepers = this.sleepers.filter((w) => w.at > end);
+      for (const w of woken) w.resolve();
     }
   }
 
@@ -215,14 +223,22 @@ test.describe("the liveness check", () => {
     params: { subscription, result: { slot: n, parent: n - 1, root: n - 2 } },
   });
 
-  function withFakes(run: (ctx: { clock: FakeClock; feed: ProgramFeed; ws: FakeSocket; historyReads: () => number }) => Promise<void>) {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+
+  function withFakes(
+    run: (ctx: { clock: FakeClock; feed: ProgramFeed; ws: FakeSocket; historyReads: () => number }) => Promise<void>,
+    /** Answers a JSON-RPC batch (getTransaction); the history read always answers an empty list. */
+    batch: (calls: { id: number; params: [string, unknown] }[]) => Promise<Response> = async () => json([]),
+  ) {
     return async () => {
       const realFetch = globalThis.fetch;
       const realWebSocket = globalThis.WebSocket;
       let reads = 0;
-      globalThis.fetch = (async () => {
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        if (Array.isArray(body)) return batch(body);
         reads += 1;
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 0, result: [] }), { headers: { "content-type": "application/json" } });
+        return json({ jsonrpc: "2.0", id: 0, result: [] });
       }) as typeof fetch;
       FakeSocket.opened = [];
       globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
@@ -337,6 +353,153 @@ test.describe("the liveness check", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       globalThis.fetch = realFetch;
       globalThis.WebSocket = realWebSocket;
+    }
+  });
+});
+
+// The detail queue (lib/program-feed.ts pump): every getTransaction read, for history and
+// for transactions that arrive over the socket, shares one request at a time, one budget
+// and one rate-limit pause. TEST FIXTURE notifications and answers.
+test.describe("the detail queue bounds getTransaction reads", () => {
+  const T0 = 1_791_700_000_000;
+  const P = PINS.programId;
+  const flush = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  class Clock implements FeedClock {
+    ms = T0;
+    private sleepers: { at: number; resolve: () => void }[] = [];
+    now(): number {
+      return this.ms;
+    }
+    every(): () => void {
+      return () => {};
+    }
+    sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => this.sleepers.push({ at: this.ms + ms, resolve }));
+    }
+    advance(ms: number): void {
+      this.ms += ms;
+      const woken = this.sleepers.filter((w) => w.at <= this.ms);
+      this.sleepers = this.sleepers.filter((w) => w.at > this.ms);
+      for (const w of woken) w.resolve();
+    }
+  }
+
+  class Socket {
+    static opened: Socket[] = [];
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    constructor(readonly url: string) {
+      Socket.opened.push(this);
+    }
+    send(): void {}
+    close(): void {
+      this.onclose?.();
+    }
+    receive(message: object): void {
+      this.onmessage?.({ data: JSON.stringify(message) });
+    }
+  }
+
+  const notification = (signature: string, slot: number) => ({
+    jsonrpc: "2.0",
+    method: "logsNotification",
+    params: { subscription: 7, result: { context: { slot }, value: { signature, err: null, logs: [`Program ${P} invoke [1]`, `Program ${P} success`] } } },
+  });
+
+  /** Batches of getTransaction signatures as they were sent, each answered when the test says. */
+  async function setup() {
+    const realFetch = globalThis.fetch;
+    const realWebSocket = globalThis.WebSocket;
+    const batches: { signatures: string[]; answer: (r: Response) => void }[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (!Array.isArray(body)) {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 0, result: [] }), { headers: { "content-type": "application/json" } });
+      }
+      return new Promise<Response>((answer) => batches.push({ signatures: body.map((c: { params: [string] }) => c.params[0]), answer }));
+    }) as typeof fetch;
+    Socket.opened = [];
+    globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+    const clock = new Clock();
+    const feed = new ProgramFeed(P, "wss://devnet.fixture.test", clock);
+    feed.start();
+    const ws = Socket.opened[0];
+    ws.onopen!();
+    ws.receive({ jsonrpc: "2.0", id: 1, result: 7 });
+    await flush();
+    const restore = async () => {
+      feed.stop();
+      await flush();
+      globalThis.fetch = realFetch;
+      globalThis.WebSocket = realWebSocket;
+    };
+    return { clock, feed, ws, batches, restore };
+  }
+
+  const notFound = (signatures: string[]) =>
+    new Response(JSON.stringify(signatures.map((_, id) => ({ jsonrpc: "2.0", id, result: null }))), { headers: { "content-type": "application/json" } });
+
+  test("101 notifications at once: 100 rows, one request in flight at a time, the budget held, the dropped row never asked again", async () => {
+    const t = await setup();
+    try {
+      for (let i = 0; i <= 100; i += 1) t.ws.receive(notification(`burst-${i}`, 600_000_000 + i));
+      await flush();
+      expect(t.feed.getState().rows).toHaveLength(100);
+      // The first arrival started the one request; the other 100 wait for it instead of each
+      // starting their own.
+      expect(t.batches.map((b) => b.signatures)).toEqual([["burst-0"]]);
+      // burst-0, the oldest, was dropped past the cap while its request was out.
+      expect(t.feed.getState().rows.map((r) => r.signature)).not.toContain("burst-0");
+      t.batches[0].answer(notFound(t.batches[0].signatures));
+      await flush();
+      // Its answer is discarded, and the next request takes the newest rows within the budget
+      // (8 calls per 11 s, one already spent).
+      expect(t.batches).toHaveLength(2);
+      expect(t.batches[1].signatures).toEqual(Array.from({ length: 7 }, (_, i) => `burst-${100 - i}`));
+      t.batches[1].answer(notFound(t.batches[1].signatures));
+      await flush();
+      // The budget is spent: nothing more is sent until the window frees.
+      t.clock.advance(5_000);
+      await flush();
+      expect(t.batches).toHaveLength(2);
+      t.clock.advance(6_000);
+      await flush();
+      expect(t.batches).toHaveLength(3);
+      expect(t.batches[2].signatures).toHaveLength(8);
+      for (const b of t.batches.slice(1)) expect(b.signatures).not.toContain("burst-0");
+    } finally {
+      await t.restore();
+    }
+  });
+
+  test("a rate-limited answer pauses every detail read; nothing is retried until the pause has passed", async () => {
+    const t = await setup();
+    try {
+      t.ws.receive(notification("limited-1", 600_000_001));
+      t.ws.receive(notification("limited-2", 600_000_002));
+      await flush();
+      expect(t.batches).toHaveLength(1);
+      t.batches[0].answer(new Response("Too many requests", { status: 429 }));
+      await flush();
+      // The budget would allow 6 more calls, and each row's own retry is due after 1.5 s, but
+      // the pause holds everything for 11 s.
+      t.clock.advance(1_500);
+      await flush();
+      t.ws.receive(notification("limited-3", 600_000_003));
+      await flush();
+      t.clock.advance(9_000);
+      await flush();
+      expect(t.batches).toHaveLength(1);
+      t.clock.advance(1_000);
+      await flush();
+      expect(t.batches).toHaveLength(2);
+      expect(t.batches[1].signatures).toEqual(["limited-3", "limited-2", "limited-1"]);
+    } finally {
+      await t.restore();
     }
   });
 });
