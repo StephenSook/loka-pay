@@ -106,30 +106,37 @@ public extension Data {
 
 /// One lock per canonical file path, shared by every store object in this process, so two
 /// instances pointed at the same file serialize their whole read-check-write transaction.
+/// Stores call `resolve` at the start of EVERY operation: if the path cannot be canonicalized
+/// the operation fails closed (`storage`) instead of locking under a second spelling.
 enum FileLocks {
     private static let registryLock = NSLock()
     private static var locks: [String: NSLock] = [:]
 
-    /// A file URL that names the same file before and after the file exists: the parent
-    /// folder is created if needed and resolved with realpath(3), then the file name is
-    /// appended. (URL.resolvingSymlinksInPath depends on whether the file exists, so it
-    /// cannot be a lock identity.) Stores use this URL for both locking and I/O.
-    static func canonical(_ url: URL) -> URL {
+    /// The URL that names this file before and after it exists: the parent folder is created
+    /// if needed and resolved with realpath(3), then the file name is appended.
+    /// (URL.resolvingSymlinksInPath depends on whether the file exists, so it cannot be a lock
+    /// identity.) Throws `storage` rather than returning an unresolved fallback.
+    static func canonical(_ url: URL) throws -> URL {
         let dir = url.standardizedFileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        guard let resolved = realpath(dir.path, nil) else { return url.standardizedFileURL }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            throw PaymentError.storage
+        }
+        guard let resolved = realpath(dir.path, nil) else { throw PaymentError.storage }
         defer { free(resolved) }
         return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
             .appendingPathComponent(url.lastPathComponent)
     }
 
-    static func lock(for url: URL) -> NSLock {
-        let key = canonical(url).path
+    /// The shared lock and the canonical URL to read and write, for one operation.
+    static func resolve(_ url: URL) throws -> (lock: NSLock, url: URL) {
+        let canonicalURL = try canonical(url)
         registryLock.lock()
         defer { registryLock.unlock() }
-        if let existing = locks[key] { return existing }
+        if let existing = locks[canonicalURL.path] { return (existing, canonicalURL) }
         let created = NSLock()
-        locks[key] = created
-        return created
+        locks[canonicalURL.path] = created
+        return (created, canonicalURL)
     }
 }
