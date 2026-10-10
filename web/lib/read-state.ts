@@ -7,7 +7,9 @@
 //   and exact age. Only a current value may make a claim Live;
 // - cached: an older good read, with its time and age. Never Live;
 // - stale: an older good read PLUS the newer read that failed (or was not made), with its
-//   reason and time. A page shows both; it never shows the older value as if it were current;
+//   reason and time. A page shows both; it never shows the older value as if it were current.
+//   A read this server held back (no request sent) says nothing about devnet or GitHub by
+//   itself, so it never makes a read still inside its window stale; a failure since does;
 // - failed: no value at all, only the reason and the time.
 //
 // Age and current-ness are decided when the page renders, never when it asked: a page awaits
@@ -171,7 +173,9 @@ export interface ResolveInput<T> {
   now: () => number;
   /**
    * For a page whose claims say Live: reuse a current read, else read now; the cache is the
-   * fallback only when that read fails or is not made, and its value is then never current.
+   * fallback only when that read fails or is not made. A fallback value is then current only
+   * when the read was held back (no request sent), nothing has failed since the value, and the
+   * value is still inside its window.
    */
   needCurrent?: boolean;
 }
@@ -221,7 +225,13 @@ export async function resolveRead<T>(input: ResolveInput<T>): Promise<Read<T>> {
     if (!entry) return { ok: false, ...failure };
     if (entry.readAtMs > failure.atMs) return answer(entry, null);
     // When no read was sent now, the recorded failure since the entry says more than "not made".
-    const recorded = known !== null && known.atMs > entry.readAtMs ? known : null;
+    // Asked again here, after the awaits: a read that failed while this page waited counts too.
+    const since = input.lastFailure();
+    const recorded = since !== null && since.atMs > entry.readAtMs ? since : null;
+    // A read this server did not send (its budget for the window was spent) says nothing about
+    // the source. With no failure since the entry, an entry still inside its window is current
+    // (its age is checked again at render); only one past its window names the read not made.
+    if (failure.notMade && recorded === null && input.now() - entry.readAtMs <= input.currentForMs) return answer(entry, null);
     return answer(entry, failure.notMade && recorded ? recorded : failure);
   }
 
