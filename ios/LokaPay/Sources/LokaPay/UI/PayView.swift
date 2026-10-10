@@ -108,6 +108,7 @@ public struct PayView: View {
             .buttonStyle(LokaButtonStyle())
             .disabled(!amountIsValid)
             Button("Change merchant") { model.changeMerchant() }
+                .buttonStyle(LokaTextButtonStyle())
                 .font(LokaStyle.label)
                 .foregroundStyle(LokaColor.ink)
         }
@@ -178,6 +179,7 @@ public struct PayView: View {
             .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
             CodeEntryField(prompt: "Or paste the merchant's receipt") { model.acceptReturn(text: $0) }
             Button("New payment") { model.newPayment() }
+                .buttonStyle(LokaTextButtonStyle())
                 .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
         }
         .lokaCard()

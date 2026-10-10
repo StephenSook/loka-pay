@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import LokaPay
 
@@ -279,5 +280,50 @@ struct InboxJunkTests {
         #expect(ReceiveModel.inboxLine(dropped: 0, ignored: 0, unreadable: 2, maxAge: 300)
                 == "Bluetooth texts that were not valid payment codes: 2 (damaged, or not LOKA codes). "
                 + "Ask the payer to send again if one was theirs.")
+    }
+}
+
+@Suite("plain text buttons have a 44 pt tap target and look disabled when disabled (low finding 5)")
+@MainActor
+struct TextButtonTests {
+    /// The rendered size of a view at its ideal size, in points (scale 1).
+    func size(_ view: some View) throws -> CGSize {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        let image = try #require(renderer.cgImage)
+        return CGSize(width: image.width, height: image.height)
+    }
+
+    func pixels(_ view: some View) throws -> Data {
+        let renderer = ImageRenderer(content: view.frame(width: 200, height: 60).background(Color.white))
+        renderer.scale = 1
+        let image = try #require(renderer.cgImage)
+        return try #require(image.dataProvider?.data) as Data
+    }
+
+    func textButton(_ title: String, enabled: Bool = true) -> some View {
+        Button(title) {}
+            .buttonStyle(LokaTextButtonStyle())
+            .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+            .disabled(!enabled)
+    }
+
+    @Test("the label alone is shorter than 44 pt; the styled button is at least 44 x 44")
+    func tapTarget() throws {
+        let label = try size(Text("Use").font(LokaStyle.label))
+        #expect(label.height < 44, "the measurement must be able to see a small target")
+        #expect(label.width < 44)
+        for title in ["Use", "Done", "Next payment", "Change merchant", "New payment"] {
+            let button = try size(textButton(title))
+            #expect(button.height >= 44, "\(title): \(button)")
+            #expect(button.width >= 44, "\(title): \(button)")
+        }
+    }
+
+    @Test("a disabled text button renders differently from an enabled one")
+    func disabledLooksDisabled() throws {
+        let enabled = try pixels(textButton("Next payment"))
+        #expect(try pixels(textButton("Next payment")) == enabled, "rendering is deterministic")
+        #expect(try pixels(textButton("Next payment", enabled: false)) != enabled)
     }
 }

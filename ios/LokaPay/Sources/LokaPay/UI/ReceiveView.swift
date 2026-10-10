@@ -183,8 +183,11 @@ public struct ReceiveView: View {
             inboxNotes
             Text(ReceiveModel.unsettledNextPaymentText)
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.ink)
+            // Disabled while signing or settling: nextPayment() does nothing then, so it must not look tappable.
             Button("Next payment") { model.nextPayment() }
+                .buttonStyle(LokaTextButtonStyle())
                 .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                .disabled(model.isWorking)
         }
         .lokaCard()
     }

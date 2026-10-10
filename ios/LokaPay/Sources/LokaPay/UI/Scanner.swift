@@ -22,7 +22,9 @@ struct CodeEntryField: View {
                 #endif
                 .onSubmit(submit)
             Button("Use", action: submit)
+                .buttonStyle(LokaTextButtonStyle())
                 .font(LokaStyle.label)
+                .foregroundStyle(.tint)
                 .disabled(text.isEmpty)
         }
     }
@@ -166,7 +168,10 @@ struct ScanSheet: View {
                 HStack {
                     Text(title).font(LokaStyle.title).foregroundStyle(LokaColor.ink)
                     Spacer()
-                    Button("Done") { dismiss() }.font(LokaStyle.label)
+                    Button("Done") { dismiss() }
+                        .buttonStyle(LokaTextButtonStyle())
+                        .font(LokaStyle.label)
+                        .foregroundStyle(.tint)
                 }
                 #if os(iOS)
                 PaymentScannerView(onScan: onText)

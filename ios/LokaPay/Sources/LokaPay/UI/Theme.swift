@@ -180,3 +180,26 @@ private struct LokaButtonBody: View {
             .opacity(isEnabled ? 1 : LokaButtonStyle.disabledOpacity)
     }
 }
+
+/// A plain text button (Next payment, Change merchant, Use, Done). The font and color come from
+/// the call site. The tap target is at least 44 x 44 pt (Apple's minimum), and disabled it is
+/// dimmed like `LokaButtonStyle`, so it never looks tappable.
+struct LokaTextButtonStyle: ButtonStyle {
+    static let minTapSize: CGFloat = 44
+
+    func makeBody(configuration: Configuration) -> some View {
+        LokaTextButtonBody(configuration: configuration)
+    }
+}
+
+private struct LokaTextButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .frame(minWidth: LokaTextButtonStyle.minTapSize, minHeight: LokaTextButtonStyle.minTapSize)
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : LokaButtonStyle.disabledOpacity)
+    }
+}
