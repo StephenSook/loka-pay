@@ -14,9 +14,9 @@ export const INIT_TX_SIGNATURE =
  * The first real settled redeem_note on devnet, Sat Oct 10 2:01 AM ET: the "settled payment"
  * link in the repository README ("First real payment and refused cheat on devnet", commit
  * b8a79b0, PLAN.md 1.4). Checked against devnet with getTransaction: loka_vault logged
- * "Instruction: RedeemNote" and the transaction succeeded. /proof links it as the evidence
- * that a note has been redeemed, because a single transaction cannot scroll away the way
- * /live's newest rows do.
+ * "Instruction: RedeemNote" and the transaction succeeded. It was signed outside the iPhone
+ * app with a test key, so it now sits in the earlier test-key pair (lib/proof-pair.ts), and
+ * /proof's redeem evidence is the iPhone payment, IPHONE_SETTLED_TX_SIGNATURE.
  */
 export const FIRST_REDEEM_TX_SIGNATURE =
   "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
@@ -37,7 +37,9 @@ export const REFUSED_CHEAT_TX_SIGNATURE =
  * to the merchant iPhone while both were offline, settled when the merchant phone came online.
  * Checked against devnet with getTransaction: meta.err null, loka_vault logged
  * "Instruction: RedeemNote", and the precompile's 141-byte note hashes to IPHONE_SETTLED_NOTE_ID.
- * The proof pair (lib/proof-pair.ts) leads with it (PLAN.md 3.74).
+ * The proof pair (lib/proof-pair.ts) leads with it (PLAN.md 3.74), and /proof links it as the
+ * evidence that a note has been redeemed, because a single transaction cannot scroll away the
+ * way /live's newest rows do.
  */
 export const IPHONE_SETTLED_TX_SIGNATURE =
   "2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17";

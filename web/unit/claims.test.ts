@@ -103,6 +103,12 @@ test("current reads make the chain claims Live, each with its evidence and the r
   }
   expect(c.deployed.checked).toEqual({ source: "Solana devnet", readAtMs: NOW - 4_000, ageMs: 4_000 });
   expect(c.redeemed.checked).toEqual({ source: "Solana devnet", readAtMs: NOW, ageMs: 0 });
+  // The redeemed claim's evidence is the 4:23 PM iPhone payment, typed out here, not the
+  // 2:01 AM test-key redeem.
+  expect(c.redeemed.evidence?.href).toBe(
+    "https://explorer.solana.com/tx/2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17?cluster=devnet",
+  );
+  expect(c.redeemed.more?.href).toBe("/live");
   // A claim no read decides carries no read stamp.
   expect(c.verify.checked).toBeUndefined();
 });

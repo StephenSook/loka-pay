@@ -19,8 +19,12 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const pins = JSON.parse(readFileSync(path.join(repoRoot, "config", "pins.json"), "utf8"));
 const recorded = JSON.parse(readFileSync(path.join(__dirname, "..", "unit", "fixtures", "devnet-transactions.json"), "utf8"));
 const INIT_TX = "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R";
-// The first real settled redeem_note on devnet (the README's "settled payment" link).
-const FIRST_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
+// The first payment signed on an iPhone, settled on devnet Sat Oct 10 4:23 PM ET (the README's
+// "settled iPhone payment" link). /proof links it as the evidence of a redeemed note.
+const IPHONE_SETTLED_TX = "2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17";
+// The earlier redeem signed outside the iPhone app, Sat Oct 10 2:01 AM ET, which /proof no longer
+// offers as that evidence.
+const EARLIER_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
 const DEVNET = /^https:\/\/api\.devnet\.solana\.com\/?$/;
 const DEVNET_WS = /^wss:\/\/api\.devnet\.solana\.com\/?$/;
 // Why a read on the failing server did not succeed: nothing listens there, or this server's
@@ -289,10 +293,12 @@ test("/proof: every read-backed claim Live from its current read, exact reserves
   const statusOf = await readClaims(page);
   // The success path, every run: each read-backed claim is Live from the stand-in's reads.
   for (const id of Object.keys(READ_BACKED)) expect(statusOf[id], id).toBe("live");
-  // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
-  // /live's newest rows; /live is the second link.
+  // A redeemed note is evidenced by the first iPhone payment itself, which cannot scroll off
+  // /live's newest rows; /live is the second link. The 2:01 AM test-key redeem is not used.
   const redeemed = page.getByTestId("claim-redeemed");
-  await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${FIRST_REDEEM_TX}?cluster=devnet`);
+  await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${IPHONE_SETTLED_TX}?cluster=devnet`);
+  await expect(redeemed.getByTestId("claim-evidence")).toContainText("The first iPhone payment, settled Sat Oct 10 4:23 PM ET");
+  await expect(redeemed.locator(`a[href*="${EARLIER_REDEEM_TX}"]`)).toHaveCount(0);
   await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
   await expect(page.getByTestId("claim-precompile").getByTestId("claim-evidence")).toContainText("active since slot 380592000");
   await expect(page.getByTestId("claim-program-ci").getByTestId("claim-evidence")).toContainText(`(${EXPECTED.mainCommit})`);
