@@ -42,7 +42,7 @@ class Chain implements ChainGateway {
   decision: ChainDecision | null = { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 };
 }
 
-async function fixture() {
+async function fixture(budget = feeBudget) {
   const db = await testDatabase();
   closers.push(() => db.close());
   let time = 1800000001;
@@ -52,7 +52,7 @@ async function fixture() {
   const chain = new Chain();
   const seed = randomBytes(32);
   const sign = vi.fn((fields: P.ConfFields) => P.signConfWire(fields, seed));
-  const service = new SettlementService({ feeBudget, deployment, store, chain, signConfirmation: sign, now: clock });
+  const service = new SettlementService({ feeBudget: budget, deployment, store, chain, signConfirmation: sign, now: clock });
   const app = Fastify({ logger: false });
   registerSettlementRoutes(app, service);
   closers.push(() => app.close());
@@ -549,4 +549,28 @@ test('fee quote for another payer fails before signing', async () => {
     lastValidBlockHeight: 100, feePayer: base58.encode(new Uint8Array(32).fill(9)), lamports: '10' });
   expect((await f.service.submit({ note })).body.signature).toBeNull();
   expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.chain.send).not.toHaveBeenCalled();
+});
+
+test.each(['denied', 'lost reply'] as const)('GET fee recovery keeps an accepted unsigned note when admission is %s', async failure => {
+  const budget = { ...feeBudget, dailyLamports: '10' }; const f = await fixture(budget);
+  const reserve = f.store.reserveFee.bind(f.store);
+  vi.spyOn(f.store, 'reserveFee').mockImplementationOnce(async (...args) => {
+    await reserve(...args); throw new Error('lost admission reply');
+  });
+  expect((await f.post({ note, ack })).statusCode).toBe(202);
+  const saved = (await f.store.get(noteId))!; expect(saved.attempt).toBeNull();
+  const recoveryStore = new SettlementStore(f.db, f.clock);
+  const admission = vi.spyOn(recoveryStore, 'reserveFee');
+  if (failure === 'lost reply') admission.mockRejectedValue(new Error('database reply lost'));
+  const recovery = new SettlementService({ feeBudget: budget, deployment, store: recoveryStore, chain: f.chain,
+    signConfirmation: f.sign, now: f.clock });
+  for (let poll = 0; poll < 2; poll++) {
+    f.advance(30);
+    expect(await recovery.get(noteId)).toMatchObject({ statusCode: 202, body: { signature: null } });
+    expect((await f.store.get(noteId))!).toMatchObject({ ack: saved.ack, uploadedAt: saved.uploadedAt, attempt: null });
+  }
+  expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.chain.send).not.toHaveBeenCalled();
+  admission.mockRestore(); f.advance(86400);
+  expect((await recovery.get(noteId)).statusCode).toBe(200);
+  expect((await f.store.get(noteId))!.uploadedAt).toBe(saved.uploadedAt);
 });

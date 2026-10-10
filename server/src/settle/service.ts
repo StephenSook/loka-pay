@@ -60,6 +60,7 @@ export class SettlementService {
       if (quote.feePayer !== this.feeBudget.feePayer) throw new Error('Fee quote payer mismatch');
       stage = 'fee_admission';
       if (!await this.options.store.reserveFee(row.noteId, this.feeBudget, quote.lamports, { token })) {
+        if (replayed) return this.pending(row, 'fee_admission');
         if (await this.options.store.releaseUnsigned(row.noteId, token)) throw new HttpError(429, 'budget_exhausted');
         return this.pending((await this.options.store.get(row.noteId))!);
       }
