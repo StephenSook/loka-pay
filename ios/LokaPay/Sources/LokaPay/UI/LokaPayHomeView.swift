@@ -126,11 +126,16 @@ public struct LokaPayHomeView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             if isActive {
-                switch tab {
-                case .pay: PayView(model: payModel, connectivity: connectivity)
-                case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn,
-                                           resendReply: resendReplyAction)
+                Group {
+                    switch tab {
+                    case .pay: PayView(model: payModel, connectivity: connectivity)
+                    case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn,
+                                               resendReply: resendReplyAction)
+                    }
                 }
+                // A merchant phone on the counter must not lock mid-payment (task 2.23). Counted, so
+                // a tab switch never turns it off early; hidden screens (isActive false) hold nothing.
+                .keepsScreenAwake()
             } else {
                 Spacer(minLength: 0)
             }

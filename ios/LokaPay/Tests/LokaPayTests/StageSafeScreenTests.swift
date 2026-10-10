@@ -17,6 +17,32 @@ struct StageSafeScreenTests {
         return image.height
     }
 
+    // MARK: (b) the screen stays awake on money screens
+
+    @Test("the screen stays awake while any money screen holds it; the last to go puts back the earlier setting")
+    func screenAwakeIsCounted() {
+        var system = false
+        var writes: [Bool] = []
+        let awake = ScreenAwake(read: { system }, write: { system = $0; writes.append($0) })
+        awake.hold()
+        #expect(system)
+        #expect(awake.isHeld)
+        // A tab switch where the new screen appears before the old one goes.
+        awake.hold()
+        awake.release()
+        #expect(system, "one money screen is still shown")
+        awake.release()
+        #expect(!system, "back to the setting found before")
+        #expect(!awake.isHeld)
+        awake.release()  // an unmatched release changes nothing
+        #expect(writes == [true, false])
+        // An app that already kept the screen on keeps it on afterwards.
+        system = true
+        awake.hold()
+        awake.release()
+        #expect(system)
+    }
+
     // MARK: (c) the holding clock stays until settled, then freezes into the receipt line
 
     @Test("the holding clock stays on the Received card when signal returns, on every internet path")
