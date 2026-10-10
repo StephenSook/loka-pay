@@ -2,31 +2,24 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
 import { SandboxChip } from "@/components/chips";
+import { CiStatusList } from "@/components/ci-status";
 import { CARD, OutLink, PAGE } from "@/components/judge-ui";
 import { ProgramFactsPanel } from "@/components/program-facts";
 import { readProgramFacts } from "@/lib/chain";
 import { TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
+import { readMainChecks } from "@/lib/github";
 import { REPO_URL } from "@/lib/site";
 
 // The judge door (PLAN.md 3.2): a numbered three-minute route through everything a judge
 // can check without logging in. Rendered per request (connection()); the devnet reads
-// behind step 2 are cached for 30 seconds in lib/chain.ts.
+// behind step 2 are cached for 30 seconds in lib/chain.ts, and the workflow results behind
+// step 7 for 5 minutes in lib/github.ts. Every read is made by this server: the page loads
+// nothing from another site.
 
 export const metadata: Metadata = {
   title: "Judge door | LOKA Pay",
   description: "A three-minute route through LOKA Pay: a receipt you check in your browser, the program on devnet, the live feed, the proof and the threat model. No login.",
 };
-
-// Every workflow in .github/workflows/, each labelled with its own job name. A red badge is
-// shown as red: hiding one would make the list say less than GitHub does.
-const WORKFLOWS = [
-  { file: "ios", label: "ios (package tests, app build, release checks)" },
-  { file: "android", label: "android (core tests, debug build, lint)" },
-  { file: "program", label: "program (secp256r1 feature check, anchor test)" },
-  { file: "server", label: "server (typecheck, unit, integration, vectors)" },
-  { file: "web", label: "web (lint, typecheck, build, Playwright)" },
-  { file: "hygiene", label: "hygiene (gitleaks, scrub guard, prose gate, FACTS)" },
-] as const;
 
 function Step({
   n,
@@ -75,7 +68,7 @@ function GoLink({ href, children }: { href: string; children: React.ReactNode })
 
 export default async function JudgePage() {
   await connection();
-  const facts = await readProgramFacts();
+  const [facts, checks] = await Promise.all([readProgramFacts(), readMainChecks()]);
   return (
     <main className={PAGE}>
       <header className="flex flex-col gap-4">
@@ -104,8 +97,8 @@ export default async function JudgePage() {
         <Step n={2} title="The program on devnet" minutes="About 40 seconds">
           <p className="leading-relaxed">
             The <code className="font-mono text-sm">loka_vault</code> program verifies the phone&apos;s signature on
-            chain and holds the sandbox tokens. These facts come from a devnet read; the line under them says when, and
-            whether it was made for this page or is a cached read.
+            chain and holds the sandbox tokens. These facts come from a devnet read; the line under them says when it
+            was read and how old it was when this page loaded.
           </p>
           <ProgramFactsPanel read={facts} />
         </Step>
@@ -120,8 +113,9 @@ export default async function JudgePage() {
 
         <Step n={4} title="Proof" minutes="About 30 seconds">
           <p className="leading-relaxed">
-            Each claim marked Live links to its evidence; the rest say Building. Then the vault&apos;s tokens against
-            everything it owes, read at one slot, and what this team committed since hacking started.
+            Each claim marked Live links to its evidence and says when that evidence was read; the rest say Not checked
+            or Building. Then the vault&apos;s tokens against everything it owes, read at one slot, and what this team
+            committed since hacking started.
           </p>
           <GoLink href="/proof">Open /proof</GoLink>
         </Step>
@@ -144,39 +138,14 @@ export default async function JudgePage() {
 
         <Step n={7} title="The code and its checks" minutes="About 20 seconds">
           <p className="leading-relaxed">
-            The repository is public. Each badge below is GitHub&apos;s own live status for that workflow on the main
-            branch; select one to open its runs.
+            The repository is public. Each line below is the result GitHub reports for that workflow&apos;s job on
+            main&apos;s latest commit, read by this site&apos;s server, so your browser loads nothing from GitHub. Select
+            one to open it on GitHub.
           </p>
           <OutLink href={REPO_URL} testId="repo-link">
             github.com/StephenSook/loka-pay
           </OutLink>
-          <ul className="flex flex-col gap-3" aria-label="GitHub Actions workflows">
-            {WORKFLOWS.map((w) => (
-              <li key={w.file} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                <a
-                  href={`${REPO_URL}/actions/workflows/${w.file}.yml`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex shrink-0"
-                >
-                  {/* GitHub's live status badge: an SVG from github.com that must not be cached or resized by Next. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`${REPO_URL}/actions/workflows/${w.file}.yml/badge.svg`}
-                    alt={`${w.file} workflow status on GitHub Actions (opens in a new tab)`}
-                    height={20}
-                    className="h-5 w-auto"
-                    data-testid={`badge-${w.file}`}
-                  />
-                </a>
-                <span className="text-sm text-muted">{w.label}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="text-sm text-muted" data-testid="server-workflow-note">
-            The server workflow tests the settlement server in server/, so its badge stays red until that code is merged
-            into main.
-          </p>
+          <CiStatusList read={checks} />
         </Step>
       </ol>
     </main>

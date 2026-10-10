@@ -15,6 +15,19 @@ export const COMPARE_API_URL = `https://api.github.com/repos/${REPO}/compare/${K
 export const CHECKS_API_URL = `https://api.github.com/repos/${REPO}/commits/main/check-runs?per_page=100&filter=latest`;
 /** The program workflow's one job (.github/workflows/program.yml): the secp256r1 feature check, then anchor test. */
 export const PROGRAM_JOB = "program (secp256r1 feature check, anchor test)";
+/**
+ * Every workflow in .github/workflows/ with its one job's name, as GitHub's check runs name
+ * it (unit/evidence.test.ts compares them with the workflow files). /judge shows each
+ * job's result on main's latest commit.
+ */
+export const WORKFLOWS = [
+  { file: "ios", job: "ios (package tests, app build, release checks)" },
+  { file: "android", job: "android (core tests, debug build, lint)" },
+  { file: "program", job: PROGRAM_JOB },
+  { file: "server", job: "server (typecheck, unit, integration, vectors)" },
+  { file: "web", job: "web (lint, typecheck, build, Playwright)" },
+  { file: "hygiene", job: "hygiene (gitleaks, scrub guard, prose gate, FACTS)" },
+] as const;
 export const COMPARE_PAGE_URL = `${REPO_URL}/compare/${KIT_TAG}...main`;
 /**
  * GitHub reads: cached 5 minutes; current for 60 s; at most 3 reads of each kind per minute

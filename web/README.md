@@ -7,7 +7,7 @@ Pages today:
 | Path | What it shows |
 |---|---|
 | `/` | What LOKA Pay is, the sandbox chip, the build status, the judge door button and links to every page |
-| `/judge` | The judge door: a numbered three-minute itinerary, the program's facts read live from devnet, the TestFlight status and the CI badges |
+| `/judge` | The judge door: a numbered three-minute itinerary, the program's facts read live from devnet, the TestFlight status and each workflow's result on main, read from GitHub's API by the server |
 | `/live` | The program's transactions, read by the browser straight from devnet (`getSignaturesForAddress`, `getTransaction`, then a `logsSubscribe` WebSocket). It keeps the newest 100 rows, and after a reconnect it reads the history again and retries rows whose details it had given up on. A transaction answer it cannot read marks only its own row "Details unavailable". The socket also carries a `slotSubscribe` heartbeat, so with nothing arriving for 10 s the connection chip says "No update for N s" instead of Live, and Live again when traffic resumes. `/live?kiosk=1` uses large type |
 | `/verify` | Checks a payment receipt in the visitor's browser (PAYMENT-V1 section 4.9): from a `#r=<base64url>` link or pasted text, plus a button that loads the published test receipt |
 | `/proof` | Claims marked Live only with an evidence link, proof of reserves from the program's accounts at one slot, and "Built this weekend" from GitHub's compare API |
@@ -65,7 +65,7 @@ CI (`.github/workflows/web.yml`) runs the same steps, each on its own exit code.
 ## Telemetry and tracking
 
 - Next.js telemetry is off in CI (`NEXT_TELEMETRY_DISABLED=1` in the workflow). Locally, run `pnpm exec next telemetry disable` once, or export `NEXT_TELEMETRY_DISABLED=1`.
-- No analytics, telemetry or error-tracking packages, and no cookies. `e2e/judge.spec.ts` fails if `/` or `/privacy` sets a cookie or requests anything from another origin. `e2e/judge-door.spec.ts` checks the same for `/proof` and `/trust`, allows only GitHub's badge images on `/judge`, and leaves `/live` free to reach devnet (the privacy page says so).
+- No analytics, telemetry or error-tracking packages, and no cookies. `e2e/judge.spec.ts` fails if `/` or `/privacy` sets a cookie or requests anything from another origin. `e2e/judge-door.spec.ts` checks the same for `/judge`, `/proof` and `/trust` (the workflow results on `/judge` are read by the server, not loaded as images from github.com), and leaves `/live` free to reach devnet (the privacy page says so).
 - Fonts (Bricolage Grotesque, Figtree) are committed in `app/fonts` and loaded with `next/font/local`, so neither a build nor a page load contacts another site for them.
 
 ## Design tokens

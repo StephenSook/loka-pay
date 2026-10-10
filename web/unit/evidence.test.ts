@@ -1,6 +1,8 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { secp256r1FeaturePart } from "../lib/chain";
-import { GitHubError, PROGRAM_JOB, summarizeCheckRuns } from "../lib/github";
+import { GitHubError, PROGRAM_JOB, WORKFLOWS, summarizeCheckRuns } from "../lib/github";
 import { DecodeError, FEATURE_PROGRAM, decodeFeature } from "../lib/vault";
 
 // The evidence behind two /proof claims: the secp256r1 feature account on devnet, and the
@@ -93,4 +95,16 @@ test.describe("main's checks from GitHub", () => {
   test("no GitHub Actions job at all: no commit, no runs", () => {
     expect(summarizeCheckRuns({ check_runs: [] })).toEqual({ sha: null, runs: [] });
   });
+});
+
+// /judge matches each workflow to its check run by the job's name, so a renamed job would
+// silently show "No run on this commit". The names are read from the workflow files here.
+test("every workflow file is listed for /judge with its one job's name", () => {
+  const dir = path.join(__dirname, "..", "..", ".github", "workflows");
+  const files = readdirSync(dir).filter((f) => f.endsWith(".yml"));
+  expect(WORKFLOWS.map((w) => `${w.file}.yml`).sort()).toEqual(files.sort());
+  for (const w of WORKFLOWS) {
+    const jobNames = [...readFileSync(path.join(dir, `${w.file}.yml`), "utf8").matchAll(/^ {4}name: (.+)$/gm)].map((m) => m[1].trim());
+    expect(jobNames, w.file).toEqual([w.job]);
+  }
 });

@@ -88,7 +88,7 @@ test("header and landing page link to every judge door page", async ({ page }) =
   }
 });
 
-test("/judge: seven numbered stops, the program facts or an honest failure, real CI badges", async ({ page, baseURL }) => {
+test("/judge: seven numbered stops, the program facts or an honest failure, CI results read by the server", async ({ page, baseURL }) => {
   const foreign = watchForeign(page, baseURL!);
   await open(page, "/judge");
   const steps = page.getByRole("list", { name: "Itinerary" }).getByRole("listitem").filter({ has: page.getByRole("heading", { level: 2 }) });
@@ -134,22 +134,44 @@ test("/judge: seven numbered stops, the program facts or an honest failure, real
     "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves.",
   );
   await expect(page.getByTestId("repo-link")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay");
-  // Every workflow in .github/workflows has its badge, so a red one cannot be left out.
+  // Every workflow in .github/workflows has its line, so a red one cannot be left out.
   const workflows = readdirSync(path.join(repoRoot, ".github", "workflows"))
     .filter((f) => f.endsWith(".yml"))
     .map((f) => f.replace(/\.yml$/, ""));
   expect(workflows.length).toBeGreaterThanOrEqual(6);
   await expect(page.getByRole("list", { name: "GitHub Actions workflows" }).getByRole("listitem")).toHaveCount(workflows.length);
+  // The results come from the server's read of GitHub's API, or the page says that read failed.
+  const ciStamp = page.getByTestId("ci-read-stamp");
+  const ciFailure = page.getByTestId("ci-read-failure");
+  await expect(ciStamp.or(ciFailure)).toBeVisible();
+  const ciRead = await ciStamp.isVisible();
+  if (ciRead) await expect(ciStamp).toContainText(/Read from GitHub's API at main's latest commit [0-9a-f]{7}/);
+  else test.info().annotations.push({ type: "github", description: await ciFailure.innerText() });
+  const results = ["success", "failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", "stale", "queued", "in_progress", "missing"];
   for (const file of workflows) {
-    await expect(page.getByTestId(`badge-${file}`)).toHaveAttribute(
-      "src",
-      `https://github.com/StephenSook/loka-pay/actions/workflows/${file}.yml/badge.svg`,
-    );
+    const line = page.getByTestId(`ci-${file}`);
+    const result = await line.getAttribute("data-result");
+    if (ciRead) {
+      expect(results, `${file}: ${result}`).toContain(result);
+      await expect(line.getByTestId("ci-result")).toBeVisible();
+    } else {
+      // No read, no result: never a status from nowhere.
+      expect(result).toBe("not-read");
+      await expect(line.getByTestId("ci-result")).toHaveCount(0);
+    }
+    await expect(line.getByRole("link")).toHaveAttribute("href", /^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\//);
   }
-  await expect(page.getByTestId("server-workflow-note")).toContainText("its badge stays red until that code is merged");
+  // The note about the server workflow only when its job did not pass.
+  const serverResult = await page.getByTestId("ci-server").getAttribute("data-result");
+  if (ciRead && serverResult !== "success" && serverResult !== "missing") {
+    await expect(page.getByTestId("server-workflow-note")).toContainText("does not pass until that code is merged");
+  } else {
+    await expect(page.getByTestId("server-workflow-note")).toHaveCount(0);
+  }
+  // No image from GitHub: a hotlinked badge would send the visitor's GitHub cookies with it.
+  await expect(page.locator("img")).toHaveCount(0);
   await page.waitForLoadState("networkidle");
-  // The only requests to another origin are GitHub's badge images.
-  for (const url of foreign) expect(url).toMatch(/^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\/workflows\/[a-z]+\.yml\/badge\.svg$/);
+  expect(foreign).toEqual([]);
 });
 
 test("/trust: pilot status, custody, the checks and the limits; no request leaves the site", async ({ page, baseURL }) => {

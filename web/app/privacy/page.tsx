@@ -76,11 +76,10 @@ export default function PrivacyPage() {
           this site&apos;s own address.
         </p>
         <p>
-          Two pages make your browser contact another website, and only to show public data: /live
-          connects to {browserRpc} to read the program&apos;s transactions, and /judge shows workflow
-          status badges loaded from github.com. Those sites see your browser&apos;s request, as any
-          website does; this site sends them nothing about you. Every other page makes no request to
-          any other website.
+          One page makes your browser contact another website, and only to show public data: /live
+          connects to {browserRpc} to read the program&apos;s transactions. That site sees your
+          browser&apos;s request, as any website does; this site sends it nothing about you. Every
+          other page makes no request to any other website.
         </p>
         <p>
           The /judge, /proof and /trust pages read public data from Solana devnet ({serverHosts}) and
