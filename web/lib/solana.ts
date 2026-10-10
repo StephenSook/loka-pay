@@ -76,12 +76,25 @@ export interface RpcRequest {
 
 export type RpcOutcome = { ok: true; result: unknown } | { ok: false; error: RpcError };
 
+/** A time limit shared by every call of one read: the signal that fires, and its length for the message. */
+export interface Deadline {
+  signal: AbortSignal;
+  ms: number;
+}
+
+/** A deadline that passes `ms` milliseconds from now. */
+export function deadlineIn(ms: number): Deadline {
+  return { signal: AbortSignal.timeout(ms), ms };
+}
+
 export interface RpcOptions {
   url?: string;
   /** Per attempt. Default 8 seconds. */
   timeoutMs?: number;
   /** Extra attempts after a timeout, a network error or a 5xx. Default 1. */
   retries?: number;
+  /** A total limit for a whole read: once it passes, every call made with it stops at once. */
+  deadline?: Deadline;
 }
 
 const RETRY_DELAY_MS = 400;
@@ -95,7 +108,17 @@ function retryable(error: RpcError): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function postOnce(url: string, body: string, timeoutMs: number): Promise<unknown> {
+async function postOnce(url: string, body: string, timeoutMs: number, deadline: Deadline | undefined): Promise<unknown> {
+  const host = new URL(url).host;
+  const timedOut = () =>
+    deadline?.signal.aborted
+      ? new RpcError("timeout", `no answer from ${host} within this read's ${deadline.ms / 1000} s limit`)
+      : new RpcError("timeout", `no answer from ${host} within ${timeoutMs / 1000} s`);
+  if (deadline?.signal.aborted) throw timedOut();
+  const perAttempt = AbortSignal.timeout(timeoutMs);
+  // The deadline is only passed by server reads (lib/server-rpc.ts), so the browser never
+  // needs AbortSignal.any.
+  const signal = deadline ? AbortSignal.any([perAttempt, deadline.signal]) : perAttempt;
   let response: Response;
   try {
     response = await fetch(url, {
@@ -105,14 +128,12 @@ async function postOnce(url: string, body: string, timeoutMs: number): Promise<u
       // Never let the framework cache a raw RPC response: lib/chain.ts caches the
       // decoded result together with the time it was read.
       cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
-    if (name === "TimeoutError" || name === "AbortError") {
-      throw new RpcError("timeout", `no answer from ${new URL(url).host} within ${timeoutMs / 1000} s`);
-    }
-    throw new RpcError("network", `could not reach ${new URL(url).host}`);
+    if (name === "TimeoutError" || name === "AbortError") throw timedOut();
+    throw new RpcError("network", `could not reach ${host}`);
   }
   if (response.status === 429) {
     throw new RpcError("http", `${new URL(url).host} is rate limiting requests (HTTP 429)`, 429);
@@ -123,7 +144,9 @@ async function postOnce(url: string, body: string, timeoutMs: number): Promise<u
   try {
     return await response.json();
   } catch {
-    throw new RpcError("shape", `${new URL(url).host} sent a body that is not JSON`);
+    // A body still arriving when a limit passed is a timeout, not a malformed answer.
+    if (signal.aborted) throw timedOut();
+    throw new RpcError("shape", `${host} sent a body that is not JSON`);
   }
 }
 
@@ -133,10 +156,10 @@ async function post(url: string, body: string, options: RpcOptions): Promise<unk
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await sleep(RETRY_DELAY_MS);
     try {
-      return await postOnce(url, body, options.timeoutMs ?? 8000);
+      return await postOnce(url, body, options.timeoutMs ?? 8000, options.deadline);
     } catch (e) {
       last = e instanceof RpcError ? e : new RpcError("network", String(e));
-      if (!retryable(last)) throw last;
+      if (!retryable(last) || options.deadline?.signal.aborted) throw last;
     }
   }
   throw last ?? new RpcError("network", "no attempt was made");
