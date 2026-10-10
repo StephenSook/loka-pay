@@ -49,6 +49,14 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      - name: No build-time font downloads (fonts are committed in app/fonts)
+        run: |
+          set -euo pipefail
+          if grep -rnE --include='*.ts' --include='*.tsx' "from ['\"]next/font/google['\"]" app components lib; then
+            echo "::error::next/font/google downloads fonts during the build; use next/font/local with app/fonts"
+            exit 1
+          fi
+
       - name: Typecheck
         # next typegen writes next-env.d.ts and the route types, then tsc --noEmit.
         run: pnpm run typecheck

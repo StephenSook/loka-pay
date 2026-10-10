@@ -1,21 +1,23 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, Figtree } from "next/font/google";
+import localFont from "next/font/local";
 import { SiteFooter } from "@/components/site-footer";
 import { SENTENCE } from "@/lib/site";
 import "./globals.css";
 
-// next/font downloads these at build time and serves them from this site,
-// so a page load never requests a font from another origin.
-const display = Bricolage_Grotesque({
-  subsets: ["latin"],
-  weight: ["800"],
+// The font files are committed (app/fonts, SIL Open Font License, from Fontsource 5.3.0),
+// so neither a build nor a page load ever contacts another origin. next/font/google
+// downloaded them at build time, and a failed download broke a main CI build.
+const display = localFont({
+  src: [{ path: "./fonts/bricolage-grotesque-latin-800-normal.woff2", weight: "800", style: "normal" }],
   variable: "--font-bricolage",
   display: "swap",
 });
 
-const body = Figtree({
-  subsets: ["latin"],
-  weight: ["500", "700"],
+const body = localFont({
+  src: [
+    { path: "./fonts/figtree-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/figtree-latin-700-normal.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-figtree",
   display: "swap",
 });
