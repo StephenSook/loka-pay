@@ -150,6 +150,13 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
   for (const name of ["Who holds what", "What the program checks before it moves money", "What the protocol does not promise"]) {
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
+  // The spec's words (PAYMENT-V1 section 1): the server cannot forge a payer's NOTE, and
+  // its key alone is trusted by phones for confirmations and certificates.
+  await expect(page.getByRole("main")).toContainText("It cannot forge a payer's note");
+  await expect(page.getByRole("main")).not.toContainText("cannot forge a payment");
+  await expect(page.getByTestId("server-key-risk")).toHaveText(
+    "Phones show Paid on its signed confirmation, and merchants accept its signed certificates offline, so whoever holds the server's Ed25519 key can sign a false confirmation or certificate that phones trust. The chain still decides who actually got paid.",
+  );
   const server = page.getByTestId("server-status");
   if (pins.serverEd25519PublicKey === null) {
     await expect(server).toHaveText("The settlement server is not live yet: its key is not published in config/pins.json.");

@@ -132,9 +132,14 @@ export default async function TrustPage() {
           <Fact label="The settlement server">
             <span className="flex flex-col gap-2">
               <span>
-                It relays notes to the program and pays the network fees. It cannot forge a payment: the program checks the
-                payer&apos;s own signature on chain, so a note the payer never signed fails there. It also signs
+                It relays notes to the program and pays the network fees. It cannot forge a payer&apos;s note: the program
+                checks the payer&apos;s own signature on chain, so a note the payer never signed fails there. It also signs
                 confirmations and certificates with an Ed25519 key.
+              </span>
+              <span data-testid="server-key-risk">
+                Phones show Paid on its signed confirmation, and merchants accept its signed certificates offline, so
+                whoever holds the server&apos;s Ed25519 key can sign a false confirmation or certificate that phones
+                trust. The chain still decides who actually got paid.
               </span>
               {PINS.serverEd25519PublicKey === null ? (
                 <span data-testid="server-status" className="font-bold">
