@@ -79,3 +79,45 @@ struct OfflineLedgerTests {
         #expect(throws: PaymentError.storage) { try ledger.unsettledTotal(allowanceId: 77) }
     }
 }
+
+@Suite("offline-limit ledger review fixes")
+struct OfflineLedgerReviewTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func note(serial: UInt8, amount: UInt64) throws -> SignedNote {
+        try SignedNote.sign(NoteV1(deployment: Vectors.deployment, allowanceId: 77, payeeKeyHash: merchant.keyHash,
+                                   amount: amount, serial: serial, expiry: 1_893_456_000), with: payer)
+    }
+
+    @Test("two ledger objects on one file never approve more than the offline limit")
+    func sharedLock() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("ledger.json")
+        let ledgers = [OfflineLedger(url: url), OfflineLedger(url: url)]
+        let cert = AllowanceCertificate(allowanceId: 77, payerKeyHash: payer.keyHash, cap: 50_000_000, offlineLimit: 1_000_000,
+                                        expiry: 1_893_456_000, earmarks: [], bond: 0)
+        let notes = try (0..<40).map { try note(serial: UInt8($0), amount: 100_000) }
+        let lock = NSLock()
+        var accepted = 0
+        DispatchQueue.concurrentPerform(iterations: notes.count) { i in
+            if (try? ledgers[i % 2].accept(note: notes[i], certificate: cert, now: Int64(i))) != nil {
+                lock.lock(); accepted += 1; lock.unlock()
+            }
+        }
+        #expect(accepted == 10, "limit 1.00 at 0.10 each allows exactly 10, got \(accepted)")
+        #expect(try ledgers[0].unsettledTotal(allowanceId: 77) == 1_000_000)
+        #expect(try ledgers[1].entries().count == 10, "an accepted note was lost")
+    }
+
+    @Test("a record whose cached amount disagrees with its note wire is corruption")
+    func cachedFieldsMustMatchWire() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("ledger.json")
+        let cert = AllowanceCertificate(allowanceId: 77, payerKeyHash: payer.keyHash, cap: 5_000_000, offlineLimit: 5_000_000,
+                                        expiry: 1_893_456_000, earmarks: [], bond: 0)
+        try OfflineLedger(url: url).accept(note: note(serial: 0, amount: 2_000_000), certificate: cert, now: 1)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("2000000"))
+        try text.replacingOccurrences(of: "2000000", with: "1").write(to: url, atomically: true, encoding: .utf8)
+        #expect(throws: PaymentError.storage) { try OfflineLedger(url: url).unsettledTotal(allowanceId: 77) }
+    }
+}
