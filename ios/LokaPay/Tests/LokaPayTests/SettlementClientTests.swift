@@ -1185,4 +1185,18 @@ struct RegistrationPendingTests {
             #expect(stub.requests.count == replies.count)
         }
     }
+
+    @Test("409 registration_failed on a note upload or read is a protocol violation that leaves the outcome unknown")
+    func registrationFailedOnlyOnRegistrationRoutes() async throws {
+        let expected = SettlementError.protocolViolation("HTTP 409 with error registration_failed")
+        #expect(expected.leavesOutcomeUnknown)
+        let upload = StubTransport([APIFixtures.registrationFailed()])
+        await #expect(throws: expected) { try await APIFixtures.client(upload).settle(note: APIFixtures.note(0)) }
+        #expect(upload.requests.count == 1, "never retried")
+        let read = StubTransport([APIFixtures.registrationFailed()])
+        await #expect(throws: expected) {
+            try await APIFixtures.client(read).outcome(noteId: APIFixtures.note(0).noteId)
+        }
+        #expect(read.requests.count == 1, "never retried")
+    }
 }

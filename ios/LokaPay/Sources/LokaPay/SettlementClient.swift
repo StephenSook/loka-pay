@@ -181,7 +181,7 @@ extension SettlementError {
     /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` speaks for earlier uploads.
     /// True again when one of those ended an upload whose earlier automatic attempt got no answer
     /// (`afterUnansweredAttempt`). The two registration errors describe a registration, never a
-    /// note: false.
+    /// note (a 409 `registration_failed` on a note route is a `protocolViolation`): false.
     public var leavesOutcomeUnknown: Bool {
         switch self {
         case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
@@ -508,7 +508,7 @@ public struct SettlementClient: Sendable {
             let data: Data
             let response: HTTPURLResponse
             do {
-                (data, response) = try await perform(request, deadline: deadline)
+                (data, response) = try await perform(request, deadline: deadline, registration: true)
             } catch is BudgetSpent {
                 throw SettlementError.registrationPending(pending ?? Self.unknownRegistration(kind, keyHash))
             } catch SettlementError.network(.timedOut) where clock.now() >= deadline {
@@ -650,7 +650,10 @@ public struct SettlementClient: Sendable {
         }
     }
 
-    private func perform(_ request: URLRequest, deadline: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
+    /// `registration`: the request is `POST /v1/payers` or `POST /v1/merchants`, the only routes
+    /// that may answer `registration_failed`.
+    private func perform(_ request: URLRequest, deadline: TimeInterval? = nil,
+                         registration: Bool = false) async throws -> (Data, HTTPURLResponse) {
         var request = request
         if let deadline {
             // Never start a request with no budget left, and never let one outlive the budget.
@@ -673,7 +676,7 @@ public struct SettlementClient: Sendable {
         }
         guard (200..<300).contains(response.statusCode) else {
             throw Self.apiError(status: response.statusCode, data: data, response: response,
-                                clusterId: deployment.clusterId)
+                                clusterId: deployment.clusterId, registration: registration)
         }
         return (data, response)
     }
@@ -693,8 +696,10 @@ public struct SettlementClient: Sendable {
         "unknown_allowance", "unknown_merchant", "payer_mismatch",
     ]
 
-    /// `clusterId` is for the explorer link of `registration_failed`, built from its signature.
-    static func apiError(status: Int, data: Data, response: HTTPURLResponse, clusterId: UInt8) -> SettlementError {
+    /// `registration`: the request was a registration, the only kind `registration_failed` may
+    /// answer. `clusterId` is for that error's explorer link, built from its signature.
+    static func apiError(status: Int, data: Data, response: HTTPURLResponse, clusterId: UInt8,
+                         registration: Bool = false) -> SettlementError {
         guard let body = try? JSONDecoder().decode(SettlementAPI.ErrorBody.self, from: data) else {
             return .http(status: status, error: nil, message: nil)
         }
@@ -706,8 +711,9 @@ public struct SettlementClient: Sendable {
             guard refusalChecks.contains(name) else { return .protocolViolation("HTTP 422 with error \(name)") }
             return .refused(check: name, message: message)
         }
-        // A 409 carries only registration_failed.
-        if status == 409, name != "registration_failed" {
+        // A 409 carries only registration_failed, and only on a registration route: on a note
+        // route it is an answer API v1 never sends, so it is not trusted (the outcome stays unknown).
+        if status == 409, !(registration && name == "registration_failed") {
             return .protocolViolation("HTTP 409 with error \(name)")
         }
         guard let expected = errorStatus[name] else { return .http(status: status, error: name, message: message) }
