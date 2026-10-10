@@ -16,6 +16,7 @@ import {
   type CalledPayment,
   type RateLimitReason,
 } from "@/lib/call-shared";
+import { WOLOF, offeredCallLangs } from "@/lib/call-wolof";
 import { ProgramFeed, type Connection } from "@/lib/program-feed";
 import { formatUnits } from "@/lib/vault";
 import { OutlineChip, StateChip } from "./chips";
@@ -35,6 +36,17 @@ type Phase =
   | { kind: "failed"; reason: string };
 
 const FIELD = "w-full min-w-0 rounded-xl border-2 border-ink bg-paper p-3 text-base text-ink";
+
+/**
+ * The language menu: English and French, and Wolof only once lib/call-wolof.ts offers it (its
+ * script complete and rated understandable by a native speaker after a real test call).
+ */
+const LANGS = offeredCallLangs();
+const LANG_OPTION: Record<CallLang, { label: string; lang?: string }> = {
+  en: { label: "English" },
+  fr: { label: "Français", lang: "fr" },
+  wo: { label: WOLOF.script.optionLabel, lang: "wo" },
+};
 
 /** What an answer from POST /api/call means for the page. */
 function phaseOf(status: number, body: CallAnswer | null, retryAfter: string | null): Phase {
@@ -214,11 +226,18 @@ export function CallPanel({ programId, enabled, codeRequired }: { programId: str
             <label htmlFor={langId} className="font-bold">
               Language
             </label>
-            <select id={langId} value={lang} onChange={(e) => setLang(e.target.value === "fr" ? "fr" : "en")} disabled={watch !== null} className={FIELD}>
-              <option value="en">English</option>
-              <option value="fr" lang="fr">
-                Français
-              </option>
+            <select
+              id={langId}
+              value={lang}
+              onChange={(e) => setLang(LANGS.find((l) => l === e.target.value) ?? "en")}
+              disabled={watch !== null}
+              className={FIELD}
+            >
+              {LANGS.map((l) => (
+                <option key={l} value={l} lang={LANG_OPTION[l].lang}>
+                  {LANG_OPTION[l].label}
+                </option>
+              ))}
             </select>
           </div>
         </div>

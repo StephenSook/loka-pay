@@ -426,6 +426,11 @@ test.describe("Wolof: Khadim's script behind a native-speaker gate", () => {
     expect(offeredCallLangs({ script: WOLOF_SCRIPT, reviewed: false })).toEqual(["en", "fr"]);
     expect(offeredCallLangs()).toEqual(WOLOF_REVIEWED_BY_NATIVE_SPEAKER ? ["en", "fr", "wo"] : ["en", "fr"]);
     expect(acceptedCallLangs()).toEqual(wolofScriptReady(WOLOF) ? ["en", "fr", "wo"] : ["en", "fr"]);
+    // The page builds its menu from offeredCallLangs, with no language written into the markup.
+    const panel = readFileSync(path.join(__dirname, "..", "components", "call-panel.tsx"), "utf8");
+    expect(panel).toMatch(/import \{[^}]*\bofferedCallLangs\b[^}]*\} from "@\/lib\/call-wolof";/);
+    expect(panel).toContain("const LANGS = offeredCallLangs();");
+    expect(panel).not.toMatch(/<option value="(en|fr|wo)"/);
   });
 
   test("Wolof preview: the shipped script's text for sample payments, printed once it is complete", () => {

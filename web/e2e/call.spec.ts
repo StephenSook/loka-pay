@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { E2E_CALL_CODE, E2E_ELEVENLABS_KEY, E2E_FROM_NUMBER, E2E_VONAGE_APP_ID, FAILING_URL } from "./fixtures/ports";
 import { E2E_AUDIO, EXPECTED, UPSTREAM } from "./fixtures/upstream";
+import { WOLOF_REVIEWED_BY_NATIVE_SPEAKER, offeredCallLangs } from "../lib/call-wolof";
 
 // /call (PLAN.md 3.9). The healthy e2e server places its calls through the local stand-in's
 // Vonage and ElevenLabs (e2e/fixtures/upstream.ts, wired in playwright.config.ts) and reads the
@@ -71,6 +72,11 @@ test("/call: loads with no login and no cookies, shows the consent text, and mak
   await expect(page.getByRole("button", { name: "Call me now about the latest settled payment" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Call me when the next payment settles" })).toBeEnabled();
   await expect(page.getByLabel("Language")).toHaveValue("en");
+  // The menu is exactly what lib/call-wolof.ts offers; Wolof stays hidden until a native speaker
+  // rated a real test call (PLAN.md 3.89).
+  const options = page.getByLabel("Language").locator("option");
+  expect(await options.evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value))).toEqual(offeredCallLangs());
+  if (!WOLOF_REVIEWED_BY_NATIVE_SPEAKER) await expect(options).toHaveText(["English", "Français"]);
   // The healthy e2e server asks for a desk code (LOKA_CALL_CODE).
   await expect(page.getByLabel("Desk code (from the LOKA Pay table)")).toBeVisible();
   await expect(page.getByTestId("call-state")).toHaveAttribute("data-state", "idle");
