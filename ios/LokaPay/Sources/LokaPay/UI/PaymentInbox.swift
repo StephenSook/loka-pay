@@ -18,8 +18,8 @@ public final class PaymentInbox {
     /// texts the attached screen has queued and not started checking yet: held and queued together
     /// stay at or under it, so a radio peer cannot grow either without limit.
     public static let capacity = 16
-    /// A held text older than this is dropped (and counted) instead of being handed over: a payer
-    /// who sent it has likely left the till.
+    /// A held or queued text older than this is dropped (and counted) instead of being handed over
+    /// or checked: a payer who sent it has likely left the till.
     public nonisolated static let defaultMaxAge: TimeInterval = 300
 
     private struct Held {
@@ -82,9 +82,12 @@ public final class PaymentInbox {
 
     /// The next queued text for `owner`'s consumer, oldest first; nil when the queue is empty or
     /// `attachment` no longer owns the inbox (the screen went away, or a newer one took over), so a
-    /// text is never checked by a screen that is not shown.
+    /// text is never checked by a screen that is not shown. A text that waited past `maxAge` behind
+    /// a busy consumer is dropped and counted first, never handed over.
     func takeNext(for owner: AnyObject, attachment: UInt64) -> (text: String, arrivedAt: Date)? {
-        guard listener == ObjectIdentifier(owner), generation == attachment, !queued.isEmpty else { return nil }
+        guard listener == ObjectIdentifier(owner), generation == attachment else { return nil }
+        dropExpired()
+        guard !queued.isEmpty else { return nil }
         let item = queued.removeFirst()
         return (item.text, item.at)
     }
@@ -167,11 +170,15 @@ public final class PaymentInbox {
         list.insert(item, at: index)
     }
 
+    /// Drops and counts every held or queued text older than `maxAge`, by its first arrival time.
+    /// `release()` (so every attach and takeover) and `takeNext` run it before handing a text over.
     private func dropExpired() {
         let cutoff = now().addingTimeInterval(-maxAge)
-        let before = waiting.count
+        let before = waiting.count + queued.count
         waiting.removeAll { $0.at < cutoff }
+        queued.removeAll { $0.at < cutoff }
+        let dropped = before - waiting.count - queued.count
         // Assigned only on a real drop: an observed write would refresh the screen for nothing.
-        if waiting.count < before { droppedWhileDetached += before - waiting.count }
+        if dropped > 0 { droppedWhileDetached += dropped }
     }
 }

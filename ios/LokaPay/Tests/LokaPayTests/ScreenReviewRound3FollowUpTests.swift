@@ -97,3 +97,46 @@ struct SoleReservationTests {
         #expect(try !clean.holdsSoleReservation(noteId: a.noteId), "no longer pending")
     }
 }
+
+@Suite("queued Bluetooth texts expire by their first arrival time (review 3 round 3, finding 3)")
+@MainActor
+struct InboxQueuedExpiryTests {
+    let payer = SoftwareP256Signer()
+
+    @Test("a text queued behind a blocked consumer past maxAge is dropped and counted, never handed to the new screen")
+    func queuedTextExpiresAtTakeover() async throws {
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        let merchant = GatedSigner()
+        let merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        func makeModel() -> ReceiveModel {
+            ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: OfflineLedger(url: F.tempURL("ledger.json")),
+                         settlementClient: nil, deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox,
+                         now: { F.now })
+        }
+        let old = makeModel()
+        old.startInbox()
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        inbox.deliver(PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        inbox.deliver(PaymentTransport.encode(.note, note.wire))
+        try await merchant.waitUntilStarted()
+
+        // Queued behind the blocked consumer, then left there past the age limit.
+        inbox.deliver(PaymentTransport.encode(.allowance, F.allowanceWire(payer: SoftwareP256Signer().keyHash, id: 501)))
+        #expect(inbox.droppedWhileDetached == 0)
+        clock.now += 301
+
+        let fresh = makeModel()
+        fresh.startInbox()
+        await fresh.inboxDrained()
+        #expect(fresh.allowances[501] == nil, "an expired text was handed to the new screen")
+        #expect(fresh.lastAllowance == nil)
+        #expect(inbox.droppedWhileDetached == 1)
+        #expect(fresh.inboxDropped == 1)
+
+        merchant.open()
+        await old.inboxDrained()
+        #expect(old.allowances[501] == nil)
+        #expect(inbox.droppedWhileDetached == 1, "counted once")
+    }
+}
