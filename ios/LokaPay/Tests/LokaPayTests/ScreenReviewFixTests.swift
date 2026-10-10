@@ -397,3 +397,58 @@ struct ScreenCopyTests {
         #expect(model.issue?.message.hasPrefix("Failed on chain, but this phone could not record it") == true)
     }
 }
+
+@Suite("amounts typed with a comma decimal separator (review 1, finding 7)")
+@MainActor
+struct DecimalSeparatorTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func makeModel(_ locale: String) -> PayModel {
+        let model = PayModel(allowanceWire: F.allowanceWire(payer: payer.keyHash), signer: payer,
+                             serials: SerialReservations(url: F.tempURL("serials.json")), deployment: F.deployment,
+                             serverPublicKey: F.serverKey, locale: Locale(identifier: locale), now: { F.now })
+        model.acceptMerchant(text: PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchant.keyHash)))
+        return model
+    }
+
+    func check(_ model: PayModel, _ text: String) -> Result<UInt64, MoneyIssueKind> {
+        model.amountText = text
+        return model.amountCheck
+    }
+
+    @Test("a comma locale reads 1,25 as 1.25; limits still apply; mixed grouping is refused")
+    func commaLocales() async throws {
+        for locale in ["de_DE", "fr_FR"] {
+            let model = makeModel(locale)
+            #expect(check(model, "1,25") == .success(1_250_000), "\(locale)")
+            #expect(check(model, "0,5") == .success(500_000))
+            #expect(check(model, " $2,75 ") == .success(2_750_000))
+            #expect(check(model, "1.25") == .success(1_250_000))
+            #expect(check(model, "3,000001") == .failure(.payment(.offlineLimit)))
+            #expect(check(model, "1.000,50") == .failure(.amountUnreadable))
+            #expect(check(model, "1,2,3") == .failure(.amountUnreadable))
+        }
+        let model = makeModel("de_DE")
+        model.amountText = "1,25"
+        await model.pay()
+        #expect(model.phase == .showNote)
+        #expect(model.payment?.note.note.amount == 1_250_000)
+    }
+
+    @Test("a dot locale keeps a comma as a thousands separator, so 1,25 and 1,000 stay unreadable")
+    func dotLocale() {
+        let model = makeModel("en_US")
+        #expect(check(model, "1,25") == .failure(.amountUnreadable))
+        #expect(check(model, "1,000") == .failure(.amountUnreadable))
+        #expect(check(model, "1.25") == .success(1_250_000))
+    }
+
+    @Test("any separator the locale names becomes a dot; a dot or empty separator changes nothing")
+    func normalize() {
+        #expect(PayModel.normalizedAmount("1,5", decimalSeparator: ",") == "1.5")
+        #expect(PayModel.normalizedAmount("1\u{066B}5", decimalSeparator: "\u{066B}") == "1.5")
+        #expect(PayModel.normalizedAmount("1,5", decimalSeparator: ".") == "1,5")
+        #expect(PayModel.normalizedAmount("1,5", decimalSeparator: "") == "1,5")
+    }
+}

@@ -14,8 +14,10 @@ struct PayModelTests {
     func makeModel(signer: (any PaymentSigner)? = nil, serials: SerialReservations? = nil,
                    allowance: Data? = nil, serverKey: Data? = F.serverKey) -> (PayModel, SerialReservations) {
         let store = serials ?? SerialReservations(url: F.tempURL("serials.json"))
+        // A fixed "." locale, so "1,000" means one thousand (unreadable) on any test machine.
         let model = PayModel(allowanceWire: allowance ?? F.allowanceWire(payer: payer.keyHash), signer: signer ?? payer,
-                             serials: store, deployment: F.deployment, serverPublicKey: serverKey, now: { F.now })
+                             serials: store, deployment: F.deployment, serverPublicKey: serverKey,
+                             locale: Locale(identifier: "en_US_POSIX"), now: { F.now })
         return (model, store)
     }
 

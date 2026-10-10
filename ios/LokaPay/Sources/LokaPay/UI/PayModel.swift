@@ -69,19 +69,24 @@ public final class PayModel {
     private let serverPublicKey: Data?
     private let meshSend: (@MainActor (String) -> Void)?
     private let now: @Sendable () -> Date
+    /// The decimal separator the phone's keyboard types ("," in many locales).
+    private let decimalSeparator: String
 
     /// - Parameters:
     ///   - allowanceWire: the allowance wire from `POST /v1/payers` (verified here before use).
     ///   - meshSend: Bluetooth glue that sends one transport text; nil hides the Bluetooth button.
+    ///   - locale: whose decimal separator the amount field accepts (the decimal pad types it).
     public init(allowanceWire: Data?, signer: (any PaymentSigner)?, serials: SerialReservations,
                 deployment: Deployment, serverPublicKey: Data?,
                 meshSend: (@MainActor (String) -> Void)? = nil,
+                locale: Locale = .current,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.deployment = deployment
         self.signer = signer
         self.serials = serials
         self.serverPublicKey = serverPublicKey
         self.meshSend = meshSend
+        self.decimalSeparator = locale.decimalSeparator ?? "."
         self.now = now
         if let problem = setUp(allowanceWire: allowanceWire) { report(problem) }
     }
@@ -142,11 +147,20 @@ public final class PayModel {
         guard let certificate = allowance?.certificate else { return .failure(.noAllowance) }
         var text = amountText.trimmingCharacters(in: .whitespaces)
         if text.hasPrefix("$") { text = String(text.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        text = Self.normalizedAmount(text, decimalSeparator: decimalSeparator)
         guard let units = Money.baseUnits(text) else { return .failure(.amountUnreadable) }
         guard units > 0 else { return .failure(.payment(.amountZero)) }
         guard units <= certificate.cap else { return .failure(.overCap) }
         guard units <= certificate.offlineLimit else { return .failure(.payment(.offlineLimit)) }
         return .success(units)
+    }
+
+    /// `Money.baseUnits` reads "." only. In a locale whose decimal separator is something else
+    /// ("," in German or French), that separator becomes "." first. A "," in a "." locale is a
+    /// thousands separator there, so it is left alone and "1,000" stays unreadable.
+    static func normalizedAmount(_ text: String, decimalSeparator: String) -> String {
+        guard !decimalSeparator.isEmpty, decimalSeparator != "." else { return text }
+        return text.replacingOccurrences(of: decimalSeparator, with: ".")
     }
 
     // MARK: - Pay
