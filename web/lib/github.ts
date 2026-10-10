@@ -8,16 +8,40 @@
 import { cachedRead, sourceTag, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { KIT_TAG } from "./facts";
 import { REPO_URL } from "./site";
+import { E2E_TEST_TOKEN, UpstreamConfigError, assertTestUpstream, isLoopback, testMode } from "./test-upstream";
 
 export const REPO = "StephenSook/loka-pay";
 export const DEFAULT_GITHUB_API = "https://api.github.com";
 
+/** GITHUB_API_URL as set, unchecked: only for telling cache entries of different endpoints apart. */
+function githubApiSource(): string {
+  return process.env.GITHUB_API_URL?.trim() || DEFAULT_GITHUB_API;
+}
+
 /**
- * The GitHub API base: GITHUB_API_URL (server only), or api.github.com. Only the e2e tests
- * change it, to a local stand-in (playwright.config.ts). Read when each request is made.
+ * The GitHub API base: api.github.com. GITHUB_API_URL (server only) may replace it only with
+ * a local test endpoint, only in the e2e test mode, and never in a deployed production build
+ * (lib/test-upstream.ts); anything else throws UpstreamConfigError, so the read fails with
+ * that reason and no other host's answer ever counts as GitHub's. Read when each request is made.
  */
 export function githubApiBase(): string {
-  return (process.env.GITHUB_API_URL?.trim() || DEFAULT_GITHUB_API).replace(/\/+$/, "");
+  const override = process.env.GITHUB_API_URL?.trim();
+  if (!override) return DEFAULT_GITHUB_API;
+  if (!isLoopback(override)) {
+    throw new UpstreamConfigError("GITHUB_API_URL may only name a local test endpoint; GitHub's API is always https://api.github.com");
+  }
+  assertTestUpstream("GITHUB_API_URL");
+  return override.replace(/\/+$/, "");
+}
+
+/** True only for https://api.github.com itself (default port): the one host a real token goes to. */
+export function isGitHubApi(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.host === "api.github.com";
+  } catch {
+    return false;
+  }
 }
 
 export function compareApiUrl(): string {
@@ -158,12 +182,20 @@ function githubToken(): string | null {
 }
 
 /**
- * The headers of a GitHub API request to `url`: the token's Authorization only when
- * GITHUB_TOKEN is set AND the request goes to the configured API base, so the token is never
- * sent to any other host.
+ * The headers of a GitHub API request to `url`. A token goes only to https://api.github.com
+ * itself, never to any other host or over http. In the e2e test mode the only token ever sent
+ * is the known test token, and only to the local stand-in, so a real token is never sent
+ * while a test seam is open.
  */
 export function githubHeaders(url: string): Record<string, string> {
-  const token = new URL(url).origin === new URL(githubApiBase()).origin ? githubToken() : null;
+  const configured = githubToken();
+  const token = testMode()
+    ? configured === E2E_TEST_TOKEN && isLoopback(url)
+      ? configured
+      : null
+    : configured !== null && isGitHubApi(url)
+      ? configured
+      : null;
   return {
     accept: "application/vnd.github+json",
     "x-github-api-version": "2022-11-28",
@@ -276,9 +308,9 @@ export async function readMainChecksUncached(url: string = checksApiUrl(), timeo
 
 /** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readMainChecks(options: CachedReadOptions = {}): Promise<Read<MainChecks>> {
-  return cachedRead(`github-checks:${sourceTag(githubApiBase())}:${REPO}:main`, GITHUB_READS, () => readMainChecksUncached(), options);
+  return cachedRead(`github-checks:${sourceTag(githubApiSource())}:${REPO}:main`, GITHUB_READS, () => readMainChecksUncached(), options);
 }
 
 export function readBuiltThisWeekend(): Promise<Read<BuiltThisWeekend>> {
-  return cachedRead(`github-compare:${sourceTag(githubApiBase())}:${REPO}:${KIT_TAG}`, GITHUB_READS, () => readCompareUncached());
+  return cachedRead(`github-compare:${sourceTag(githubApiSource())}:${REPO}:${KIT_TAG}`, GITHUB_READS, () => readCompareUncached());
 }

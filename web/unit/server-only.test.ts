@@ -3,14 +3,19 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { GitHubError, githubHeaders, readMainChecksUncached } from "../lib/github";
+import { E2E_GITHUB_TOKEN } from "../e2e/fixtures/ports";
+import { readProgramFactsUncached } from "../lib/chain";
+import { GitHubError, githubApiBase, githubHeaders, readMainChecksUncached } from "../lib/github";
+import { serverReadOptions, serverRpcUrl } from "../lib/server-rpc";
+import { E2E_TEST_TOKEN, UpstreamConfigError } from "../lib/test-upstream";
 
-// Server-only configuration (GITHUB_TOKEN, SOLANA_RPC_URL) must never reach a browser: no
-// client module may import the modules that read it, and the token goes only on server
-// requests to GitHub. The local server below is a TEST FIXTURE on 127.0.0.1.
+// Server-only configuration (GITHUB_TOKEN, SOLANA_RPC_URL, GITHUB_API_URL) must never reach a
+// browser: no client module may import the modules that read it. A real token goes only to
+// https://api.github.com, and the local test seam (lib/test-upstream.ts) opens only in the
+// e2e test mode and never in a deployed production build. The local server below is a TEST
+// FIXTURE on 127.0.0.1.
 
 const WEB = path.join(__dirname, "..");
-const SENTINEL = "test-token-not-a-secret";
 
 async function withGitHubStandIn(status: number, run: (url: string, seen: IncomingHttpHeaders[]) => Promise<void>) {
   const seen: IncomingHttpHeaders[] = [];
@@ -46,54 +51,144 @@ function withEnv<T>(vars: Record<string, string | undefined>, run: () => Promise
   return run().finally(() => set(before));
 }
 
-/** GITHUB_TOKEN set (or not), with the stand-in as the configured API base. */
-const withToken = <T>(value: string | undefined, url: string, run: () => Promise<T>) =>
-  withEnv({ GITHUB_TOKEN: value, GITHUB_API_URL: new URL(url).origin }, run);
+// Every variable these tests set, cleared first so the machine's own settings never leak in.
+const CLEAN = { GITHUB_TOKEN: undefined, GITHUB_API_URL: undefined, LOKA_E2E_UPSTREAM: undefined, SOLANA_RPC_URL: undefined, VERCEL: undefined, NODE_ENV: "test" };
+const env = <T>(vars: Record<string, string | undefined>, run: () => Promise<T>) => withEnv({ ...CLEAN, ...vars }, run);
+const DEPLOYED = { NODE_ENV: "production", VERCEL: "1" };
+const REAL = "ghp_this-stands-for-a-real-token";
+const API = "https://api.github.com/repos/StephenSook/loka-pay/commits/main/check-runs";
 
-test.describe("GITHUB_TOKEN", () => {
-  test("set: GitHub requests carry it as a Bearer token", async () => {
+test.describe("GITHUB_TOKEN goes only to https://api.github.com", () => {
+  test("set: a request to https://api.github.com carries it as a Bearer token", async () => {
+    await env({ GITHUB_TOKEN: REAL }, async () => {
+      expect(githubHeaders(API).authorization).toBe(`Bearer ${REAL}`);
+      expect(githubHeaders("https://api.github.com:443/x").authorization).toBe(`Bearer ${REAL}`);
+    });
+  });
+
+  test("never to another host, another port, or over http", async () => {
+    await env({ GITHUB_TOKEN: REAL }, async () => {
+      for (const url of [
+        "http://api.github.com/x",
+        "https://api.github.com:8443/x",
+        "https://api.github.com.example.org/x",
+        "https://example.org/x",
+        "http://127.0.0.1:3190/github/x",
+      ]) {
+        expect(githubHeaders(url).authorization, url).toBeUndefined();
+      }
+    });
+    // An explicit request to a local server, outside test mode, carries no token either.
     await withGitHubStandIn(200, (url, seen) =>
-      withToken(SENTINEL, url, async () => {
+      env({ GITHUB_TOKEN: REAL }, async () => {
         await readMainChecksUncached(url, 5000);
-        expect(seen).toHaveLength(1);
-        expect(seen[0].authorization).toBe(`Bearer ${SENTINEL}`);
+        expect(seen[0].authorization).toBeUndefined();
       }),
     );
   });
 
   test("unset or blank: no Authorization header at all", async () => {
     for (const value of [undefined, "", "   "]) {
-      await withGitHubStandIn(200, (url, seen) =>
-        withToken(value, url, async () => {
-          await readMainChecksUncached(url, 5000);
-          expect(seen[0].authorization, JSON.stringify(value)).toBeUndefined();
-          expect(githubHeaders(url).authorization).toBeUndefined();
-        }),
-      );
+      await env({ GITHUB_TOKEN: value }, async () => expect(githubHeaders(API).authorization, JSON.stringify(value)).toBeUndefined());
     }
   });
 
-  test("never sent to a host other than the configured API base", async () => {
-    await withGitHubStandIn(200, (url, seen) =>
-      withEnv({ GITHUB_TOKEN: SENTINEL, GITHUB_API_URL: undefined }, async () => {
-        // The base is api.github.com; this request goes elsewhere, so it carries no token.
+  test("GITHUB_API_URL naming another host is refused, so no request and no token goes there", async () => {
+    for (const base of ["https://example.org", "http://github-proxy.example.org/api", "https://api.github.com.example.org"]) {
+      await env({ GITHUB_TOKEN: REAL, GITHUB_API_URL: base, LOKA_E2E_UPSTREAM: "1" }, async () => {
+        expect(() => githubApiBase(), base).toThrow(UpstreamConfigError);
+        const error = await readMainChecksUncached().catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(UpstreamConfigError);
+        expect((error as Error).message).toContain("GITHUB_API_URL");
+        expect((error as Error).message).not.toContain(new URL(base).host);
+      });
+    }
+  });
+
+  test("a local GITHUB_API_URL works only in the e2e test mode", async () => {
+    await withGitHubStandIn(200, async (url, seen) => {
+      const base = new URL(url).origin;
+      await env({ GITHUB_API_URL: base }, async () => {
+        const error = await readMainChecksUncached().catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(UpstreamConfigError);
+        expect((error as Error).message).toBe("GITHUB_API_URL names a local test endpoint, which is accepted only in the e2e test mode (LOKA_E2E_UPSTREAM=1)");
+      });
+      expect(seen).toHaveLength(0);
+      await env({ GITHUB_API_URL: base, LOKA_E2E_UPSTREAM: "1" }, async () => {
+        expect(githubApiBase()).toBe(base);
+      });
+    });
+  });
+
+  test("a deployed production build refuses any override, even in test mode, naming the variable", async () => {
+    await env({ ...DEPLOYED, LOKA_E2E_UPSTREAM: "1", GITHUB_API_URL: "http://127.0.0.1:3190/github" }, async () => {
+      expect(() => githubApiBase()).toThrow("GITHUB_API_URL names a local test endpoint, which a deployed production build refuses");
+    });
+    // Unset, the real API is used there, and a real token goes to it.
+    await env({ ...DEPLOYED, GITHUB_TOKEN: REAL }, async () => {
+      expect(githubApiBase()).toBe("https://api.github.com");
+      expect(githubHeaders(API).authorization).toBe(`Bearer ${REAL}`);
+    });
+  });
+
+  test("in test mode only the e2e test token is sent, and only to the local stand-in", async () => {
+    await withGitHubStandIn(200, async (url, seen) => {
+      await env({ LOKA_E2E_UPSTREAM: "1", GITHUB_API_URL: new URL(url).origin, GITHUB_TOKEN: E2E_TEST_TOKEN }, async () => {
         await readMainChecksUncached(url, 5000);
-        expect(seen[0].authorization).toBeUndefined();
-        expect(githubHeaders("https://api.github.com/repos/x/y").authorization).toBe(`Bearer ${SENTINEL}`);
-        expect(githubHeaders("https://api.github.com.example.org/repos/x/y").authorization).toBeUndefined();
-      }),
-    );
+        expect(seen[0].authorization).toBe(`Bearer ${E2E_TEST_TOKEN}`);
+        expect(githubHeaders(API).authorization).toBeUndefined();
+      });
+      // A real token is never sent while the test seam is open, not even to GitHub.
+      await env({ LOKA_E2E_UPSTREAM: "1", GITHUB_API_URL: new URL(url).origin, GITHUB_TOKEN: REAL }, async () => {
+        await readMainChecksUncached(url, 5000);
+        expect(seen[1].authorization).toBeUndefined();
+        expect(githubHeaders(API).authorization).toBeUndefined();
+      });
+    });
+  });
+
+  test("the e2e stand-in's token is the one test mode accepts", () => {
+    expect(E2E_GITHUB_TOKEN).toBe(E2E_TEST_TOKEN);
   });
 
   test("a spent limit with the token says so without ever printing the token", async () => {
     await withGitHubStandIn(403, (url) =>
-      withToken(SENTINEL, url, async () => {
+      env({ LOKA_E2E_UPSTREAM: "1", GITHUB_API_URL: new URL(url).origin, GITHUB_TOKEN: E2E_TEST_TOKEN }, async () => {
         const error = await readMainChecksUncached(url, 5000).catch((e: unknown) => e);
         expect(error).toBeInstanceOf(GitHubError);
         expect((error as GitHubError).message).toBe("GitHub's limit for this site's token is used up");
-        expect((error as GitHubError).message).not.toContain(SENTINEL);
+        expect((error as GitHubError).message).not.toContain(E2E_TEST_TOKEN);
       }),
     );
+  });
+});
+
+test.describe("SOLANA_RPC_URL: any real provider, a local endpoint only in test mode", () => {
+  const KEYED = "https://devnet.helius-rpc.com/?api-key=SECRET-KEY-VALUE";
+
+  test("a keyed provider URL is accepted, also in a deployed production build", async () => {
+    await env({ ...DEPLOYED, SOLANA_RPC_URL: KEYED }, async () => {
+      expect(serverRpcUrl()).toBe(KEYED);
+      expect(serverReadOptions().url).toBe(KEYED);
+    });
+  });
+
+  test("a local endpoint is refused outside test mode, and in a deployed production build even in test mode", async () => {
+    await env({ SOLANA_RPC_URL: "http://127.0.0.1:3190/rpc" }, async () => {
+      expect(() => serverReadOptions()).toThrow("SOLANA_RPC_URL names a local test endpoint, which is accepted only in the e2e test mode (LOKA_E2E_UPSTREAM=1)");
+    });
+    await env({ ...DEPLOYED, LOKA_E2E_UPSTREAM: "1", SOLANA_RPC_URL: "http://localhost:8899" }, async () => {
+      expect(() => serverRpcUrl()).toThrow("SOLANA_RPC_URL names a local test endpoint, which a deployed production build refuses");
+    });
+    await env({ LOKA_E2E_UPSTREAM: "1", SOLANA_RPC_URL: "http://127.0.0.1:3190/rpc" }, async () => {
+      expect(serverRpcUrl()).toBe("http://127.0.0.1:3190/rpc");
+    });
+  });
+
+  test("a refused endpoint fails the read with its named reason, sending nothing", async () => {
+    await env({ SOLANA_RPC_URL: "http://127.0.0.1:3190/rpc" }, async () => {
+      await expect(readProgramFactsUncached()).rejects.toThrow(UpstreamConfigError);
+    });
   });
 });
 
@@ -137,7 +232,7 @@ test("no client module reaches a module that reads server-only configuration", (
   const rel = [...reached].map((f) => path.relative(WEB, f)).sort();
   // The walk follows imports: live-feed reaches lib/program-feed.ts, so it is not vacuous.
   expect(rel).toContain("lib/program-feed.ts");
-  for (const serverOnly of ["lib/github.ts", "lib/server-rpc.ts", "lib/cached-read.ts", "lib/chain.ts", "lib/claims.ts"]) {
+  for (const serverOnly of ["lib/github.ts", "lib/server-rpc.ts", "lib/test-upstream.ts", "lib/cached-read.ts", "lib/chain.ts", "lib/claims.ts"]) {
     expect(rel, `${serverOnly} is reachable from a client module`).not.toContain(serverOnly);
   }
 });
@@ -148,8 +243,13 @@ test("GITHUB_TOKEN is read in lib/github.ts only, and never under a NEXT_PUBLIC 
   for (const f of ALL) expect(readFileSync(f, "utf8"), f).not.toMatch(/NEXT_PUBLIC_GITHUB/);
 });
 
+// Set by the platform, not by us: never listed in .env.example.
+const PLATFORM_VARIABLES = new Set(["NODE_ENV", "VERCEL"]);
+
 test(".env.example lists exactly the variables the code reads", () => {
-  const read = new Set(ALL.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1])));
+  const read = new Set(
+    ALL.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1])).filter((v) => !PLATFORM_VARIABLES.has(v)),
+  );
   const listed = new Set([...readFileSync(path.join(WEB, ".env.example"), "utf8").matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]));
   expect(read.size).toBeGreaterThanOrEqual(4);
   expect([...listed].sort()).toEqual([...read].sort());

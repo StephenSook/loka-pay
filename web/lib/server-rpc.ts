@@ -4,8 +4,22 @@
 // server uses the same endpoint as the browser (lib/solana.ts RPC_URL).
 
 import { RPC_URL, deadlineIn, type RpcOptions } from "./solana";
+import { assertTestUpstream, isLoopback } from "./test-upstream";
 
+/** SOLANA_RPC_URL as set (or the public endpoint), unchecked: for naming its host and telling cache entries apart. */
 export const SERVER_RPC_URL = process.env.SOLANA_RPC_URL || RPC_URL;
+
+/**
+ * The endpoint a server read uses, checked when the read starts. A real provider URL, keyed or
+ * not, is always accepted; a local endpoint (the e2e stand-in) only in the e2e test mode and
+ * never in a deployed production build (lib/test-upstream.ts), so a refused setting fails the
+ * read with a reason that names the variable.
+ */
+export function serverRpcUrl(): string {
+  const url = process.env.SOLANA_RPC_URL || RPC_URL;
+  if (isLoopback(url)) assertTestUpstream("SOLANA_RPC_URL");
+  return url;
+}
 
 /**
  * Every call of one server read shares this total limit, so a hanging node cannot hold
@@ -20,5 +34,5 @@ export const SERVER_READ_DEADLINE_MS = 10_000;
  * the start of each read.
  */
 export function serverReadOptions(deadlineMs: number = SERVER_READ_DEADLINE_MS): RpcOptions {
-  return { url: SERVER_RPC_URL, retries: 0, deadline: deadlineIn(deadlineMs) };
+  return { url: serverRpcUrl(), retries: 0, deadline: deadlineIn(deadlineMs) };
 }

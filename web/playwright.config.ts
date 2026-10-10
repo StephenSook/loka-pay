@@ -37,6 +37,8 @@ export default defineConfig({
       timeout: 240_000,
       env: {
         NEXT_TELEMETRY_DISABLED: "1",
+        // The explicit test mode that lets the server read a local stand-in (lib/test-upstream.ts).
+        LOKA_E2E_UPSTREAM: "1",
         SOLANA_RPC_URL: `${UPSTREAM}/rpc`,
         GITHUB_API_URL: `${UPSTREAM}/github`,
         GITHUB_TOKEN: E2E_GITHUB_TOKEN,
@@ -49,7 +51,13 @@ export default defineConfig({
       url: `http://127.0.0.1:${FAILING_PORT}`,
       reuseExistingServer: false,
       timeout: 240_000,
-      env: { NEXT_TELEMETRY_DISABLED: "1", SOLANA_RPC_URL: closed, GITHUB_API_URL: `${closed}/github`, GITHUB_TOKEN: "" },
+      env: {
+        NEXT_TELEMETRY_DISABLED: "1",
+        LOKA_E2E_UPSTREAM: "1",
+        SOLANA_RPC_URL: closed,
+        GITHUB_API_URL: `${closed}/github`,
+        GITHUB_TOKEN: "",
+      },
     },
   ],
 });
