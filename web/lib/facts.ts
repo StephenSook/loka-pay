@@ -53,9 +53,13 @@ export const IPHONE_REFUSED_TX_SIGNATURE =
   "3XtQtnHRKC3QvhBGye8gTMWimPg3iPXuBskf3LMsQEhJPdzeGiqEEjrmjFLqXFTJMQ9JFAitWoCbuEGFSLKjZc9n";
 export const IPHONE_REFUSED_NOTE_ID = "5ecdc8dc27d8ed9ecaf952efce6f6aedb206fd8c480d3f7b46fcb280d34ac0da";
 
-/** iOS status (PLAN.md 1.11): App Store Connect read betaReviewState WAITING_FOR_REVIEW, submitted 12:05:42 AM ET. */
+/**
+ * iOS status (PLAN.md 1.11), read from App Store Connect Sat Oct 10 6:15 PM ET: build 1's beta
+ * review is WAITING_FOR_REVIEW (submitted 12:05:42 AM ET); build 5 (the scanner fix, uploaded
+ * 5:56 PM ET) is processingState VALID and internalBuildState IN_BETA_TESTING.
+ */
 export const TESTFLIGHT_STATUS =
-  "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves";
+  "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight";
 export const TESTFLIGHT_STATUS_AS_OF = "2026-10-10";
 
 /** The hacking window opened Fri Oct 9 8:08 PM ET (organizers' announcement, PLAN.md). */

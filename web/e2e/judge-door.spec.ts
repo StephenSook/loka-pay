@@ -143,7 +143,7 @@ test("/judge: seven numbered stops, the program facts and each workflow's result
   await expect(page.getByTestId("program-read-stamp")).toHaveAttribute("data-stale", "false");
 
   await expect(page.getByTestId("testflight-status")).toHaveText(
-    "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves.",
+    "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight.",
   );
   await expect(page.getByTestId("repo-link")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay");
   // Every workflow in .github/workflows has its line, so a red one cannot be left out, and
@@ -274,7 +274,7 @@ async function readClaims(page: Page): Promise<Record<string, string | null>> {
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");
   // The same dated status as /judge step 6.
   await expect(page.getByTestId("claim-testflight")).toContainText(
-    "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves. Status as of 2026-10-10.",
+    "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight. Status as of 2026-10-10.",
   );
   return statusOf;
 }
