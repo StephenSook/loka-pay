@@ -1,0 +1,18 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A00000000000000000000001 = {isa = PBXProject; buildConfigurationList = A00000000000000000000010; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en,Base); mainGroup = A00000000000000000000002; productRefGroup = A00000000000000000000003; projectDirPath = ""; targets = (A00000000000000000000004); };
+A00000000000000000000002 = {isa = PBXGroup; children = (A00000000000000000000005,A00000000000000000000003); sourceTree = "<group>"; };
+A00000000000000000000003 = {isa = PBXGroup; name = Products; children = (A00000000000000000000006); sourceTree = "<group>"; };
+A00000000000000000000004 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000011; buildPhases = (A00000000000000000000008,A00000000000000000000009); buildRules = (); dependencies = (); name = AwareProbe; productName = AwareProbe; productReference = A00000000000000000000006; productType = "com.apple.product-type.application"; };
+A00000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Probe.swift; sourceTree = "<group>"; };
+A00000000000000000000006 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = AwareProbe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+A00000000000000000000007 = {isa = PBXBuildFile; fileRef = A00000000000000000000005; };
+A00000000000000000000008 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
+A00000000000000000000009 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A00000000000000000000010 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000012,A00000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A00000000000000000000011 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000014,A00000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A00000000000000000000012 = {isa = XCBuildConfiguration; name = Debug; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SWIFT_VERSION = 5.0; }; };
+A00000000000000000000013 = {isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SWIFT_VERSION = 5.0; }; };
+A00000000000000000000014 = {isa = XCBuildConfiguration; name = Debug; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = org.loka.awareprobe; PRODUCT_NAME = AwareProbe; INFOPLIST_FILE = Info.plist; CODE_SIGN_ENTITLEMENTS = AwareProbe.entitlements; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = Y8XVCMLQCZ; TARGETED_DEVICE_FAMILY = 1; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; };
+A00000000000000000000015 = {isa = XCBuildConfiguration; name = Release; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = org.loka.awareprobe; PRODUCT_NAME = AwareProbe; INFOPLIST_FILE = Info.plist; CODE_SIGN_ENTITLEMENTS = AwareProbe.entitlements; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = Y8XVCMLQCZ; TARGETED_DEVICE_FAMILY = 1; }; };
+}; rootObject = A00000000000000000000001; }

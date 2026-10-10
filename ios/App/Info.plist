@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIAppFonts</key>
+	<array><string>LilitaOne-Regular.ttf</string></array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>org.loka.contact</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>loka</string>
+			</array>
+		</dict>
+	</array>
+	<key>LOKAWiFiAwareEnabled</key>
+	<string>$(LOKA_WIFI_AWARE)</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_loka-v0._tcp</string>
+	</array>
+	<key>NSContactsUsageDescription</key>
+	<string>Find a name for the phone number you enter. Contacts stay on this device and are never uploaded by LOKA.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Send encrypted messages to nearby LOKA phones on your Wi-Fi network, without Internet.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record a voice note to send to your LOKA friend.</string>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
+	<key>WiFiAwareServices</key>
+	<dict>
+		<key>_loka-v0._tcp</key>
+		<dict>
+			<key>Publishable</key>
+			<dict/>
+			<key>Subscribable</key>
+			<dict/>
+		</dict>
+	</dict>
+</dict>
+</plist>

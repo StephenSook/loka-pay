@@ -1,0 +1,117 @@
+{
+  "id": "quick_quiz",
+  "version": 1,
+  "rulesVersion": 1,
+  "questions": [
+    {
+      "id": "qq_001",
+      "text": "Which planet is known as the Red Planet?",
+      "options": [
+        "Mars",
+        "Venus",
+        "Jupiter",
+        "Mercury"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "qq_002",
+      "text": "How many sides does a triangle have?",
+      "options": [
+        "Four",
+        "Three",
+        "Five",
+        "Six"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "qq_003",
+      "text": "Which ocean is the largest?",
+      "options": [
+        "Atlantic",
+        "Indian",
+        "Arctic",
+        "Pacific"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "qq_004",
+      "text": "What is the chemical symbol for gold?",
+      "options": [
+        "Ag",
+        "Fe",
+        "Au",
+        "Cu"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "qq_005",
+      "text": "How many minutes are in one hour?",
+      "options": [
+        "30",
+        "60",
+        "90",
+        "100"
+      ],
+      "answer": 1
+    },
+    {
+      "id": "qq_006",
+      "text": "Which animal is a mammal?",
+      "options": [
+        "Shark",
+        "Octopus",
+        "Dolphin",
+        "Trout"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "qq_007",
+      "text": "What is 7 multiplied by 8?",
+      "options": [
+        "48",
+        "54",
+        "64",
+        "56"
+      ],
+      "answer": 3
+    },
+    {
+      "id": "qq_008",
+      "text": "Which instrument has keys, pedals and strings?",
+      "options": [
+        "Piano",
+        "Flute",
+        "Drum",
+        "Trumpet"
+      ],
+      "answer": 0
+    },
+    {
+      "id": "qq_009",
+      "text": "Which shape has eight sides?",
+      "options": [
+        "Hexagon",
+        "Pentagon",
+        "Octagon",
+        "Heptagon"
+      ],
+      "answer": 2
+    },
+    {
+      "id": "qq_010",
+      "text": "At standard atmospheric pressure, water freezes at which Celsius temperature?",
+      "options": [
+        "0",
+        "10",
+        "32",
+        "100"
+      ],
+      "answer": 0
+    }
+  ]
+}

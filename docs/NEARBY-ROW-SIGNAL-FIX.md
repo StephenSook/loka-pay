@@ -1,0 +1,7 @@
+# Nearby rows and signal readings — October 3, 2026
+
+Identified people remain grouped by verified profile ID. Apple central `ble:` and `ble:extra:` handles now match the same CBPeripheral UUID for signal lookup. Incoming CBCentral UUIDs are deliberately not equated to CBPeripheral UUIDs. Android incoming/outgoing BLE handles share a radio address for signal lookup; Wi-Fi/Aware addresses are never guessed to be the same device. Unidentified routes now produce one discovery-status line rather than anonymous person rows alongside named profiles. This avoids implying separate people without claiming unverified cross-radio identity.
+
+Android keeps RSSI from service-filtered Apple advertisements before checking Android's election token. Missing tokens still cannot authorize a new outgoing connection. Outgoing GATT sessions refresh RSSI every ten seconds when their write queue is idle, serialize that operation with writes, and use the existing bounded operation timeout. Invalid/older-than-30-second readings are not displayed as current strength. Missing measurements display a dash, not weak/red signal. BLE signal is not Wi-Fi route quality, distance, or an end-to-end delivery guarantee. Some incoming-only links expose no measurable RSSI.
+
+Validation: signed iOS device build passed; Android assembleDebug/lintDebug passed; Swift framing, canonical handle mapping, route-state and queue checks passed. Physical visual verification and moving-distance signal changes remain pending.

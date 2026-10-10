@@ -1,0 +1,15 @@
+# Quick Quiz application protocol review
+
+Scope: two verified devices, one untimed session, existing signed RSA-OAEP/AES-GCM envelopes and existing automatic verified local routing. No packet schema, signature input, trust provisioning, radio or cryptographic primitive changes. This is an implementation threat review, not independent production certification.
+
+Expiry policy review: expose a caller-selected shorter lifetime through the existing message boundary, within the existing packet lifetime maximum. Construct the original envelope with that expiry before AAD encryption/signing; never rewrite expiry on an encrypted packet. Games choose the remaining event lifetime (at most 120 seconds); chat's default stays unchanged. Existing validation/signatures authenticate the field and relays can prune expired ciphertext without reading game content. Tests must verify shorter expiry, signature tampering rejection, invalid lifetime rejection, and unchanged default chat expiry on both platforms.
+
+Game plaintext uses the reserved `L1|G|` content type. Existing L1 decoders reject unknown types; it must be intercepted before chat parsing on upgraded endpoints. A capability request and matching response precede invitation. No game content enters chat history or produces a chat receipt. Authenticated packet source supplies player identity; a transport handle never grants membership.
+
+Invitation acceptance is explicit. Only the two bound identities can act; only the host can issue state commits/snapshots. Revision, legal turn, option range, action UUID and event expiry are checked. Duplicate commits acknowledge the existing revision without applying twice. Snapshots must extend the existing action prefix and preserve a pending guest answer. Unsupported packs/versions, conflicting IDs or revision gaps stop progress and request recovery rather than accepting arbitrary state.
+
+The host is authoritative and can cheat. Bundled quiz answer keys can be inspected by a modified client. There is no malicious-host or anti-cheat claim. Future hidden-answer competitive games require another design/review. Wire events contain chosen option IDs and already-applied actions, never future correct answers.
+
+Bounds: one session, ten moves, eight pending events, 64 recent acknowledged event IDs, 1,024-byte event plaintext, 16-KiB encrypted session plaintext, 120-second event expiry, 24-hour session expiry. Game sends reserve mesh capacity for chat, use the ordinary lane and never send countdown ticks. Applied acknowledgments are separate from packet acceptance. Session records use existing protected storage keys with a distinct game AAD/table/file and are excluded from chat history/backups.
+
+Host disappearance pauses progress; explicit recovery obtains an authoritative snapshot. No host migration, timed modes, perpetual background operation or reliable real-time mesh is claimed. Validate wire compatibility, duplicates, reorder, loss, restart and mixed chat in software; actual offline hardware results must be recorded separately.

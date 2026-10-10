@@ -1,0 +1,27 @@
+# Knit review for LOKA
+
+Reviewed 2026-10-02 at commit `ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c`. Read selected source and documentation; did not build Knit, run its tests or reproduce its hardware results. No Knit implementation was copied into LOKA. The project identifies itself as GPL-3.0-or-later and includes GPLv3 in [COPYING](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/COPYING). This review takes architectural lessons; code reuse would be a separate licensing decision.
+
+## Useful lessons
+
+| Area | Evidence in the reviewed source | LOKA application |
+| --- | --- | --- |
+| Coordinate radios | CompositeMeshTransport merges links and sends a frame once per merged neighbor; attachment transfers can prefer its faster transport and fall back. | Preserve our transport boundary. Add local Wi-Fi/L2CAP adapters only after native interoperability and hardware tests; do not tie chat to a radio. [Source](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/app/src/main/java/app/getknit/knit/mesh/CompositeMeshTransport.kt) |
+| Reduce relay duplication | MeshRouter delays relays with jitter and suppresses pending relays after hearing distinct neighbors; repeated copies from one neighbor do not count as independent coverage. | Evaluate bounded jitter with line/diamond/dense topology tests before changing LOKA's flood. Suppression must not cut off the only downstream path. [Source](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/app/src/main/java/app/getknit/knit/mesh/MeshRouter.kt) |
+| Durable encrypted forwarding | ForwardSync exchanges held IDs and sends missing items. ForwardRepository combines absolute expiry with global/per-sender/per-group quotas and transactional updates. | LOKA currently persists its own outbox, not intermediary queues. A reviewed durable relay store and bounded reconciliation are worthwhile next engineering work. [Sync](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/app/src/main/java/app/getknit/knit/mesh/ForwardSync.kt), [store](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/app/src/main/java/app/getknit/knit/data/forward/ForwardRepository.kt) |
+| Keep large media out of floods | Knit documents encrypted, content-addressed attachment blobs fetched separately from message frames. | Investigate resumable, bounded media transfer before increasing LOKA's small voice-note limit. Do not send long recordings repeatedly across every relay. [Architecture](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/docs/ARCHITECTURE.md) |
+| Measure presence honestly | BlePresenceTracker smooths per-peer RSSI and models dwell/last-seen time with an injected clock. | Keep signal samples fresh; separate nearby signal from a live link, recipient reachability and delivery. RSSI is not distance, bandwidth or voice-call quality. [Source](https://github.com/getknit/knit/blob/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c/app/src/main/java/app/getknit/knit/mesh/bluetooth/BlePresenceTracker.kt) |
+
+## What this does not solve
+
+Knit's Android/Wear implementation and Android foreground-service strategy do not establish iPhone background reliability. Its reviewed materials describe voice notes; this review did not establish an implemented live-call stack. Its peer profiles and trust/discovery model also differ from LOKA's explicit contact verification and anonymous nearby UI. Its wire format and cryptographic sessions are incompatible with LOKA v0; adopting a new envelope or ratchet requires a separate security review and migration, never a silent replacement. [Project overview](https://github.com/getknit/knit/tree/ee0ee85b56dfe99c52f3ad476acbcf187a1ac53c)
+
+LOKA's current iPhone GATT link uses small acknowledged writes; Knit documents BLE L2CAP sockets and Wi-Fi Aware. A successful Knit transfer is therefore not throughput evidence for our transport. Hardware claims remain external claims until reproduced on our devices.
+
+## Calls and capability UI
+
+An Internet connection is not inherently required for a live call over a suitable local route. LOKA still needs a bidirectional streaming transport, authenticated capability negotiation, call signaling, a reviewed encryption/session design, native audio with echo cancellation, an evaluated codec such as Opus, jitter buffering and measured packet loss/latency/throughput. Start with direct links and actual screen-off tests; multi-hop calls are a later gate. See [offline networking research](OFFLINE-NETWORKING-RESEARCH.md).
+
+Version 0.6.1 shows actual product limits on both Local connection screens: text, voice notes up to 12 seconds / 32 KiB, and live calls unavailable. iPhone reads RSSI for the selected connected peripheral on request; Strong/Fair/Weak are provisional nearby-signal bands (−60/−75 dBm), invalidated on disconnect and after 30 seconds. Android's existing server/socket adapters do not expose current connected-link RSSI, so the UI says it is not measured. Neither platform claims that a strong adjacent signal proves a route or call capability. Remote feature negotiation remains unimplemented; both endpoints need a compatible updated app.
+
+Recommended next sequence: finish the two-phone delivery/background measurements; pass the Android relay/alternate-route gates; investigate L2CAP/local Wi-Fi transport; then design durable relay reconciliation and media transfer. Live calls follow measured streaming feasibility, not signal bars alone.

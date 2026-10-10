@@ -1,0 +1,9 @@
+# 0.6.13 media extension implementation review
+
+Scope: larger bounded AAC voice notes, bounded JPEG attachments, receiver assembly and history/export compatibility. This review does not change or approve the existing experimental envelope cryptography and is not an independent security audit.
+
+No key, algorithm, signature, AAD, trust or relay authorization change. Attachments pass through the same trusted-sender encrypted v0 packets and recipient-save acknowledgements. Only application content types/limits and encrypted storage size bounds change. No plaintext attachment upload or address-book transfer is introduced.
+
+Reviewed controls: 64 KiB images, 96 KiB voice, 1024-byte fragments, strict declared counts, canonical Base64, authenticated sender separation, media-kind separation, eight assembly slots, original expiry, existing duplicate protection and 120-packet origin preflight. Corrupt/oversized JPEG dimensions or headers fail before persistence. Native image decoders remain a dependency; header validation cannot establish that every JPEG stream is decodable. Import resizes and re-encodes, removing original EXIF metadata; selected images are capped before decompression. Android source is read with a streaming cap; iOS PhotosPicker materializes Data before enforcing its 16 MiB cap, a remaining memory-hardening opportunity.
+
+Compatibility: both endpoints must update. No capability negotiation exists; legacy receivers fail closed on new image types or longer voice counts. Do not infer a Delivered receipt from transport writes. Android history v3 exports retain readers for v1/v2. iOS optional image fields preserve old archive decoding. Bounds tests cover new maximum voice data, JPEG truncation/oversized dimensions, reordered assemblies and encrypted archive round trips. Physical recording quality, maximum media delivery time, low-memory decoding and 60-second background delivery remain test gates.

@@ -1,0 +1,2385 @@
+{
+    "games": [
+        {
+            "id": "never_have_i_ever",
+            "name": "Never Have I Ever",
+            "description": "Players take turns saying something they have never done. Works for 2+ players.",
+            "minPlayers": 2,
+            "maxPlayers": 20,
+            "supportsTwoPlayers": true,
+            "categories": [
+                "classic",
+                "confession",
+                "mixed"
+            ],
+            "intensityLevels": [
+                "clean"
+            ],
+            "cards": [
+                {
+                    "text": "Never have I ever stayed up all night binge-watching a show.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_001",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever ghosted someone.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_002",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever cried during a movie.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_003",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever peed in a pool.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_004",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever stolen something (even something small).",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_005",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever lied about my age.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_006",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever had a huge embarrassing public fail.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_007",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Never have I ever eaten food that fell on the floor.",
+                    "intensity": "clean",
+                    "id": "never_have_i_ever_008",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "statement",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_family_006",
+                    "text": "Never have I ever laughed so hard I forgot what I was saying.",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 0
+                }
+            ],
+            "supportedModes": [
+                "couples",
+                "friends",
+                "group"
+            ],
+            "recommendedModes": [
+                "friends",
+                "group"
+            ],
+            "playerCountLabel": "2–20 players",
+            "instructionsByMode": {
+                "couples": "Take turns reading a statement. Each player says whether they have done it.",
+                "friends": "Take turns reading a statement. Each player says whether they have done it.",
+                "group": "Take turns reading a statement. Players who have done it raise a hand or score a point."
+            },
+            "cardCount": 9,
+            "cardCountsByMode": {
+                "couples": {
+                    "clean": 9
+                },
+                "friends": {
+                    "clean": 9
+                },
+                "group": {
+                    "clean": 9
+                }
+            }
+        },
+        {
+            "id": "whos_most_likely_to",
+            "name": "Who's Most Likely To",
+            "description": "Everyone points at who they think is most likely. Adaptable for 2 players by discussion.",
+            "minPlayers": 2,
+            "maxPlayers": 20,
+            "supportsTwoPlayers": true,
+            "categories": [
+                "voting",
+                "roast",
+                "mixed"
+            ],
+            "intensityLevels": [
+                "clean"
+            ],
+            "cards": [
+                {
+                    "text": "Who's most likely to survive a zombie apocalypse?",
+                    "intensity": "clean",
+                    "id": "whos_most_likely_to_001",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "vote",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Who's most likely to become famous?",
+                    "intensity": "clean",
+                    "id": "whos_most_likely_to_002",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "vote",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Who's most likely to forget their own birthday?",
+                    "intensity": "clean",
+                    "id": "whos_most_likely_to_003",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "vote",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Who's most likely to get lost in their own city?",
+                    "intensity": "clean",
+                    "id": "whos_most_likely_to_004",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "vote",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Who's most likely to win the lottery and lose the ticket?",
+                    "intensity": "clean",
+                    "id": "whos_most_likely_to_005",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "vote",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_family_004",
+                    "text": "Who is most likely to remember everyone’s favorite food?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_family_005",
+                    "text": "Who is most likely to start a kitchen dance party?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_001",
+                    "text": "Who is most likely to turn a missed train into an adventure?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_002",
+                    "text": "Who is most likely to remember a name after one introduction?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_003",
+                    "text": "Who is most likely to make a stranger feel welcome?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_004",
+                    "text": "Who is most likely to invent a game using three random objects?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_005",
+                    "text": "Who is most likely to give the best unexpected pep talk?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_006",
+                    "text": "Who is most likely to organize a surprise without spoiling it?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "id": "experience_big_party_007",
+                    "text": "Who is most likely to lead an impromptu dance lesson?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "id": "experience_big_party_008",
+                    "text": "Who is most likely to make everyone laugh without saying a word?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "group"
+                    ],
+                    "minPlayers": 3,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "big_party"
+                    ],
+                    "stage": 1
+                }
+            ],
+            "supportedModes": [
+                "couples",
+                "friends",
+                "group"
+            ],
+            "recommendedModes": [
+                "group"
+            ],
+            "playerCountLabel": "2–20 players",
+            "instructionsByMode": {
+                "couples": "Choose which of the two of you best fits the prompt, then explain your choice.",
+                "friends": "Choose which of the two of you best fits the prompt, then explain your choice.",
+                "group": "Read the prompt and vote for a player. Discuss the result, then pass the turn."
+            },
+            "cardCount": 15,
+            "cardCountsByMode": {
+                "couples": {
+                    "clean": 7
+                },
+                "friends": {
+                    "clean": 7
+                },
+                "group": {
+                    "clean": 15
+                }
+            }
+        },
+        {
+            "id": "would_you_rather",
+            "name": "Would You Rather",
+            "description": "Choose one option. Great debate starter. Excellent for 2 players.",
+            "minPlayers": 2,
+            "maxPlayers": 15,
+            "supportsTwoPlayers": true,
+            "categories": [
+                "choice",
+                "debate",
+                "mixed"
+            ],
+            "intensityLevels": [
+                "clean"
+            ],
+            "cards": [
+                {
+                    "text": "Would you rather have unlimited money or unlimited free time?",
+                    "intensity": "clean",
+                    "id": "would_you_rather_001",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 15,
+                    "type": "choice",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Would you rather be able to fly or be invisible?",
+                    "intensity": "clean",
+                    "id": "would_you_rather_002",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 15,
+                    "type": "choice",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Would you rather always be 10 minutes late or 20 minutes early?",
+                    "intensity": "clean",
+                    "id": "would_you_rather_003",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 15,
+                    "type": "choice",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                },
+                {
+                    "text": "Would you rather never use social media again or never watch TV/movies again?",
+                    "intensity": "clean",
+                    "id": "would_you_rather_004",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 15,
+                    "type": "choice",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 0
+                }
+            ],
+            "supportedModes": [
+                "couples",
+                "friends",
+                "group"
+            ],
+            "recommendedModes": [
+                "couples",
+                "friends",
+                "group"
+            ],
+            "playerCountLabel": "2–15 players",
+            "instructionsByMode": {
+                "couples": "Both players choose an option and explain why.",
+                "friends": "Both players choose an option and explain why.",
+                "group": "Each player chooses an option; compare choices before the next card."
+            },
+            "cardCount": 4,
+            "cardCountsByMode": {
+                "couples": {
+                    "clean": 4
+                },
+                "friends": {
+                    "clean": 4
+                },
+                "group": {
+                    "clean": 4
+                }
+            }
+        },
+        {
+            "id": "hot_seat",
+            "name": "Hot Seat",
+            "description": "One person answers rapid-fire questions for 1–2 minutes. Works with 2 as focused Q&A.",
+            "minPlayers": 2,
+            "maxPlayers": 20,
+            "supportsTwoPlayers": true,
+            "categories": [
+                "questions",
+                "intense",
+                "mixed"
+            ],
+            "intensityLevels": [
+                "clean"
+            ],
+            "cards": [
+                {
+                    "text": "What's your biggest fear?",
+                    "intensity": "clean",
+                    "id": "hot_seat_001",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 12,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "text": "What's one thing you pretend to like but actually don't?",
+                    "intensity": "clean",
+                    "id": "hot_seat_002",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 12,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "text": "What's the biggest lie you've ever told?",
+                    "intensity": "clean",
+                    "id": "hot_seat_003",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 12,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "text": "What's your most unpopular opinion?",
+                    "intensity": "clean",
+                    "id": "hot_seat_004",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 12,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "id": "experience_new_friends_001",
+                    "text": "What tiny thing can instantly improve your day?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What tiny thing can instantly improve your day?"
+                },
+                {
+                    "id": "experience_new_friends_002",
+                    "text": "Which everyday task would you turn into an Olympic event?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: Which everyday task would you turn into an Olympic event?"
+                },
+                {
+                    "id": "experience_new_friends_003",
+                    "text": "What place would you happily show a visitor?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What place would you happily show a visitor?"
+                },
+                {
+                    "id": "experience_new_friends_004",
+                    "text": "What harmless opinion will you defend forever?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What harmless opinion will you defend forever?"
+                },
+                {
+                    "id": "experience_new_friends_005",
+                    "text": "What hobby would you try if nobody judged your first attempt?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What hobby would you try if nobody judged your first attempt?"
+                },
+                {
+                    "id": "experience_new_friends_006",
+                    "text": "Describe your ideal free afternoon in three words.",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: Describe your ideal free afternoon in three words."
+                },
+                {
+                    "id": "experience_new_friends_007",
+                    "text": "What is something you changed your mind about recently?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What is something you changed your mind about recently?"
+                },
+                {
+                    "id": "experience_new_friends_008",
+                    "text": "What did you love doing as a child that you still enjoy?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What did you love doing as a child that you still enjoy?"
+                },
+                {
+                    "id": "experience_new_friends_009",
+                    "text": "What skill could you teach someone here in five minutes?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What skill could you teach someone here in five minutes?"
+                },
+                {
+                    "id": "experience_new_friends_010",
+                    "text": "What kind of invitation makes you feel included?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What kind of invitation makes you feel included?"
+                },
+                {
+                    "id": "experience_new_friends_011",
+                    "text": "What is a small kindness from a stranger you still remember?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What is a small kindness from a stranger you still remember?"
+                },
+                {
+                    "id": "experience_new_friends_012",
+                    "text": "What would you like people to understand about you sooner?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "new_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What would you like people to understand about you sooner?"
+                },
+                {
+                    "id": "experience_close_friends_001",
+                    "text": "What is our funniest shared misunderstanding?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What is our funniest shared misunderstanding?"
+                },
+                {
+                    "id": "experience_close_friends_002",
+                    "text": "Which shared memory deserves a movie title?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: Which shared memory deserves a movie title?"
+                },
+                {
+                    "id": "experience_close_friends_003",
+                    "text": "What would our group be surprisingly good at running?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What would our group be surprisingly good at running?"
+                },
+                {
+                    "id": "experience_close_friends_004",
+                    "text": "What habit of yours would your friends recognize immediately?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What habit of yours would your friends recognize immediately?"
+                },
+                {
+                    "id": "experience_close_friends_005",
+                    "text": "Which friend taught you something useful without realizing it?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: Which friend taught you something useful without realizing it?"
+                },
+                {
+                    "id": "experience_close_friends_006",
+                    "text": "What adventure should we finally put on the calendar?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What adventure should we finally put on the calendar?"
+                },
+                {
+                    "id": "experience_close_friends_007",
+                    "text": "What have your friends helped you become more confident about?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What have your friends helped you become more confident about?"
+                },
+                {
+                    "id": "experience_close_friends_008",
+                    "text": "What is a compliment you have wanted to give someone here?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What is a compliment you have wanted to give someone here?"
+                },
+                {
+                    "id": "experience_close_friends_009",
+                    "text": "What is a goal your friends could help you stick with?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What is a goal your friends could help you stick with?"
+                },
+                {
+                    "id": "experience_close_friends_010",
+                    "text": "When did someone here make you feel supported?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "close_friends"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: When did someone here make you feel supported?"
+                },
+                {
+                    "id": "experience_family_002",
+                    "text": "Which snack deserves its own national holiday?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: Which snack deserves its own national holiday?"
+                },
+                {
+                    "id": "experience_family_011",
+                    "text": "What family recipe would you like to learn?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What family recipe would you like to learn?"
+                },
+                {
+                    "id": "experience_family_012",
+                    "text": "What is the funniest thing a younger family member has said?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What is the funniest thing a younger family member has said?"
+                },
+                {
+                    "id": "experience_family_013",
+                    "text": "What game did you enjoy before you had a phone?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What game did you enjoy before you had a phone?"
+                },
+                {
+                    "id": "experience_family_014",
+                    "text": "Which family outing would you happily do again?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: Which family outing would you happily do again?"
+                },
+                {
+                    "id": "experience_family_015",
+                    "text": "What is a talent in this family that deserves more applause?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What is a talent in this family that deserves more applause?"
+                },
+                {
+                    "id": "experience_family_016",
+                    "text": "What would you put in a time capsule for our family?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What would you put in a time capsule for our family?"
+                },
+                {
+                    "id": "experience_family_017",
+                    "text": "What is a kind thing someone here did this week?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What is a kind thing someone here did this week?"
+                },
+                {
+                    "id": "experience_family_018",
+                    "text": "What family tradition would you like to keep?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What family tradition would you like to keep?"
+                },
+                {
+                    "id": "experience_family_019",
+                    "text": "What story from an older relative would you like to hear?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What story from an older relative would you like to hear?"
+                },
+                {
+                    "id": "experience_family_020",
+                    "text": "What new memory should we make together?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "recommendedModes": [
+                        "couples",
+                        "friends",
+                        "group"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 20,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "family"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What new memory should we make together?"
+                }
+            ],
+            "supportedModes": [
+                "couples",
+                "friends",
+                "group"
+            ],
+            "recommendedModes": [
+                "group"
+            ],
+            "playerCountLabel": "2–12 players",
+            "instructionsByMode": {
+                "couples": "One player answers questions for one minute, then switch roles.",
+                "friends": "One player answers questions for one minute, then switch roles.",
+                "group": "Choose one player for a one-minute question round, then rotate the hot seat."
+            },
+            "cardCount": 37,
+            "cardCountsByMode": {
+                "couples": {
+                    "clean": 15
+                },
+                "friends": {
+                    "clean": 37
+                },
+                "group": {
+                    "clean": 37
+                }
+            }
+        },
+        {
+            "id": "two_player_specials",
+            "name": "Couples Connection",
+            "description": "Questions for exactly two romantic partners, from shared memories to intimate conversation.",
+            "minPlayers": 2,
+            "maxPlayers": 2,
+            "supportsTwoPlayers": true,
+            "categories": [
+                "couples",
+                "intimate",
+                "mixed"
+            ],
+            "intensityLevels": [
+                "clean"
+            ],
+            "cards": [
+                {
+                    "text": "What's one thing I do that always makes you smile?",
+                    "intensity": "clean",
+                    "id": "two_player_specials_001",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "text": "What's your favorite memory of us so far?",
+                    "intensity": "clean",
+                    "id": "two_player_specials_002",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "text": "If we could go anywhere tomorrow, where would you take me?",
+                    "intensity": "clean",
+                    "id": "two_player_specials_003",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "classic"
+                    ],
+                    "stage": 1
+                },
+                {
+                    "id": "experience_couples_001",
+                    "text": "What ordinary moment together would you happily repeat?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What ordinary moment together would you happily repeat?"
+                },
+                {
+                    "id": "experience_couples_002",
+                    "text": "What would our perfect low-cost date look like?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What would our perfect low-cost date look like?"
+                },
+                {
+                    "id": "experience_couples_003",
+                    "text": "What song belongs on a playlist about us?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: What song belongs on a playlist about us?"
+                },
+                {
+                    "id": "experience_couples_004",
+                    "text": "Which little habit of mine makes you smile?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 0,
+                    "namedText": "{player}, ask {partner}: Which little habit of mine makes you smile?"
+                },
+                {
+                    "id": "experience_couples_005",
+                    "text": "What new thing should we learn together?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What new thing should we learn together?"
+                },
+                {
+                    "id": "experience_couples_006",
+                    "text": "What shared memory do you wish we had photographed?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What shared memory do you wish we had photographed?"
+                },
+                {
+                    "id": "experience_couples_007",
+                    "text": "What makes you feel appreciated on a difficult day?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What makes you feel appreciated on a difficult day?"
+                },
+                {
+                    "id": "experience_couples_008",
+                    "text": "What is one tradition we could start this month?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 1,
+                    "namedText": "{player}, ask {partner}: What is one tradition we could start this month?"
+                },
+                {
+                    "id": "experience_couples_009",
+                    "text": "What dream would you like us to make room for?",
+                    "intensity": "clean",
+                    "supportedModes": [
+                        "couples"
+                    ],
+                    "recommendedModes": [
+                        "couples"
+                    ],
+                    "minPlayers": 2,
+                    "maxPlayers": 2,
+                    "type": "question",
+                    "requiresConsent": false,
+                    "tags": [
+                        "clean"
+                    ],
+                    "requiresAdult": false,
+                    "requiresDrinking": false,
+                    "packs": [
+                        "couples"
+                    ],
+                    "stage": 2,
+                    "namedText": "{player}, ask {partner}: What dream would you like us to make room for?"
+                }
+            ],
+            "supportedModes": [
+                "couples"
+            ],
+            "recommendedModes": [
+                "couples"
+            ],
+            "playerCountLabel": "2 players",
+            "instructionsByMode": {
+                "couples": "Take turns asking your partner a question. Either partner can skip."
+            },
+            "cardCount": 12,
+            "cardCountsByMode": {
+                "couples": {
+                    "clean": 12
+                }
+            }
+        }
+    ],
+    "meta": {
+        "version": "3.2",
+        "totalGames": 5,
+        "totalCards": 77,
+        "notes": [
+            "Player limits are editorial game limits, not networking or device limits.",
+            "Two friends and a romantic couple are separate modes; groups may contain multiple couples.",
+            "supportedModes and player limits determine eligibility; recommendedModes only affects ordering.",
+            "No pricing is specified in this catalog.",
+            "Clean-only public subset of catalog 3.2, made for the public LOKA Pay repo at Hacklanta II: only cards tagged clean are kept; cards tagged dirty or drinking and the three games named for drinking or explicit content were removed, and sentences about drinking were removed from game descriptions. Kept card ids and texts are unchanged."
+        ],
+        "sources": [
+            "1.json",
+            "2.json"
+        ],
+        "filteredDeck": {
+            "categories": [
+                "clean"
+            ],
+            "tagPolicy": "Clean-only public subset: every card is tagged clean and needs no age, consent or drinking gate."
+        },
+        "subset": "clean-only"
+    },
+    "playModes": [
+        {
+            "id": "couples",
+            "label": "Couple",
+            "description": "Two romantic partners.",
+            "minPlayers": 2,
+            "maxPlayers": 2
+        },
+        {
+            "id": "friends",
+            "label": "Two friends",
+            "description": "Two friends playing together.",
+            "minPlayers": 2,
+            "maxPlayers": 2
+        },
+        {
+            "id": "group",
+            "label": "Group",
+            "description": "Three or more players, including friends or multiple couples.",
+            "minPlayers": 3,
+            "maxPlayers": 20
+        }
+    ],
+    "sessionOptions": {
+        "playerCount": {
+            "required": true,
+            "type": "integer",
+            "min": 2,
+            "max": 20
+        },
+        "mode": {
+            "required": true,
+            "values": [
+                "couples",
+                "friends",
+                "group"
+            ]
+        },
+        "intensities": {
+            "required": true,
+            "values": [
+                "clean"
+            ],
+            "default": [
+                "clean"
+            ],
+            "selection": "one_or_more"
+        },
+        "allowConsentDares": {
+            "type": "boolean",
+            "default": false
+        },
+        "allowSkip": true
+    },
+    "selectionRules": {
+        "gameFilters": [
+            "Player count must be inside the selected play mode and game minPlayers/maxPlayers ranges.",
+            "The selected mode must appear in game.supportedModes.",
+            "Only show games with at least one card remaining after all card filters."
+        ],
+        "cardFilters": [
+            "The selected mode must appear in card.supportedModes.",
+            "Player count must be inside card.minPlayers/maxPlayers.",
+            "Card intensity must appear in the selected intensities.",
+            "Exclude requiresConsent cards unless allowConsentDares is true."
+        ],
+        "recommendationRule": "Use recommendedModes to sort eligible games/cards, never to override eligibility.",
+        "displayRule": "Show game name, playerCountLabel, description, eligible card count and instructionsByMode for the selected mode.",
+        "repeatRule": "Track played card IDs for this session. Draw without replacement; when exhausted, offer replay or a different game.",
+        "emptyResultRule": "Show that no cards match and let players change their filters or choose another game."
+    }
+}

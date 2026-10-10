@@ -1,0 +1,173 @@
+{
+  "catalog": "bundled-v1",
+  "avatars": [
+    {
+      "id": "avatar_0",
+      "sha256": "7ca15b71304cde6eb4b3192ff6fc74771e38b024ae8f3a468ecaccc61fa287a7"
+    },
+    {
+      "id": "avatar_1",
+      "sha256": "8b2a8b1ac70996fb782197f50dc4cf894313e91562c038094ee0786b13ec7093"
+    },
+    {
+      "id": "avatar_2",
+      "sha256": "d1c92ea1253b7bb608841ca6f14a8b996fcf8ac9f233d2f7238c4f5043bea903"
+    },
+    {
+      "id": "avatar_3",
+      "sha256": "bd190fe0e58078c652a025ecc0050899dba76c47b80c092efe42679441cf2095"
+    },
+    {
+      "id": "avatar_4",
+      "sha256": "7911accdccba250f6c93cd5f61190fcdf35ecf7e330752e1ced9b67cd1015a4e"
+    },
+    {
+      "id": "avatar_5",
+      "sha256": "0a599f9c89ce11cbd39df336c0a84e21b259b1b377e930631cdfabf01f9d386b"
+    },
+    {
+      "id": "avatar_6",
+      "sha256": "54174301fed09d593ddc5fc6c8aac706e446751a7a062893c8f8b43bc2faff0f"
+    },
+    {
+      "id": "avatar_7",
+      "sha256": "9fecd9cb8a4800d0bc530cb22ccd8d2159690d9b174e82f1ea44c748c98f382d"
+    },
+    {
+      "id": "avatar_8",
+      "sha256": "95b456b31bf46b0fd4e5845ed4955e300548f4763114f138defafb403a86328c"
+    },
+    {
+      "id": "avatar_9",
+      "sha256": "ea66a65a5a4f9b44cefb30a0c20ae7a652dfe6552df51d3a73c27e3276e9eff2"
+    },
+    {
+      "id": "avatar_10",
+      "sha256": "40a91e7026279f518e31cb04eadc43e44432bc763301a219fea18e24d51ed8b3"
+    },
+    {
+      "id": "avatar_11",
+      "sha256": "a6f8554ceadd0256a4be3d31571c5c759ebbdf2e9254983ced709ee7704d0315"
+    },
+    {
+      "id": "avatar_12",
+      "sha256": "fb1f64f156ea6d0792ff99db0911d8ccb0c63e87217ddad3b7c60d513cc865b1"
+    },
+    {
+      "id": "avatar_13",
+      "sha256": "2825d6a7d6cc65ad8f24dd2fb5b09f6e9fc4f382b24c748339e59a0baf6858e8"
+    },
+    {
+      "id": "avatar_14",
+      "sha256": "aaca0ede1d928cf0a6c2ea86929a92ab280d17f7cd8cd8795ffc7b23eb4ce608"
+    },
+    {
+      "id": "avatar_15",
+      "sha256": "6c01077b5b3b09a8dea948b884423b7b3bb45bbd860895d2782a295642e2c470"
+    },
+    {
+      "id": "avatar_16",
+      "sha256": "4617ab3d624c7e55eb584d8815e52d53bd9efda0b81b62940322b9a1a19c1fef"
+    },
+    {
+      "id": "avatar_17",
+      "sha256": "5fc151f976b8667a2f600e44398c38a7d9d3bbffe4173388b1b0960ff6cf7918"
+    },
+    {
+      "id": "avatar_18",
+      "sha256": "894924636a8e92e1f605073021003d21c64794ddbcfdafa3da6e652481f05915"
+    },
+    {
+      "id": "avatar_19",
+      "sha256": "b9d26bd4f0da9e9215d3a6d40cf21da1db194b7e3c2f3661877408b7c7038d73"
+    },
+    {
+      "id": "avatar_20",
+      "sha256": "ed5a75ec9931bf9aeb63839093b2218734f6090d367038ab24ea490c1ee1d966"
+    },
+    {
+      "id": "avatar_21",
+      "sha256": "0f3c693472bc1503c1dbae8ed0ba7e224b0128b74b3b3f1528ccac5166cc1b44"
+    },
+    {
+      "id": "avatar_22",
+      "sha256": "932ab85dbdc5e5e154592f3ad8e27625df1530245f4f496ce65681cf98062bfc"
+    },
+    {
+      "id": "avatar_23",
+      "sha256": "ed013f918f3436a19b4b88f5ac373881fea3ded0e179966bb7dd7e8fdde8b973"
+    },
+    {
+      "id": "avatar_24",
+      "sha256": "19fb0f877995082836560f09a37977e139edfc8628ee0b83093a5f669f00c751"
+    },
+    {
+      "id": "avatar_25",
+      "sha256": "a55bde61e7f906da76f1229436ddd7c76b3c382e0ceea249b7a5e87f3093c9cb"
+    },
+    {
+      "id": "avatar_26",
+      "sha256": "fa0e3e96f0b121cffd53757a573829bdc9d828f5a03a757d0fc4a29f6f8b1f97"
+    },
+    {
+      "id": "avatar_27",
+      "sha256": "06e9de2ee4dfb50a3269f44f433de6a73818b1f613cd861467ff1dececb59123"
+    },
+    {
+      "id": "avatar_28",
+      "sha256": "c60e57561ebcfee4fa0b1920c5645d143ffbdc3f2e60cfdeeea554b2a2c87506"
+    },
+    {
+      "id": "avatar_29",
+      "sha256": "84b558c6f378e5778f40b322219562ab4e0734b50a9d53d0d7d98ce3b3e3bd2f"
+    },
+    {
+      "id": "avatar_30",
+      "sha256": "8425a00888e6ea539db56a66c7d4f0eff592c33c61700680425e54233e545a97"
+    },
+    {
+      "id": "avatar_31",
+      "sha256": "ccf9b811fde46d35d8d610c5a91d577fd00e61b54217da45fb8cc461878b808b"
+    },
+    {
+      "id": "avatar_32",
+      "sha256": "e7d7a776aa83eed5a49e869d14ea4fee2272ac75e309f159909f108e52bd35a4"
+    },
+    {
+      "id": "avatar_33",
+      "sha256": "d609fe244919bc4a6ce4df9df7f728726bea8b1b1147b1f1fcb06909a925f6ef"
+    },
+    {
+      "id": "avatar_34",
+      "sha256": "a5f46d863c5c2d5c65113db9c8b3172eab11aebdccef75db5fa7eb5b50efe90f"
+    },
+    {
+      "id": "avatar_35",
+      "sha256": "0bc97a9fd5c4255db1786bb4e502859df75c7d25fe7d079094e4f54926f97690"
+    },
+    {
+      "id": "avatar_36",
+      "sha256": "3d4c4679b05785d2f0d89b26ba60829104e6bb4d455eb25dbc946f419fec5596"
+    },
+    {
+      "id": "avatar_37",
+      "sha256": "a710f59c060eea5462c1dca10df0d0d193b5908b5b25db63e387e773f9f2b1e6"
+    },
+    {
+      "id": "avatar_38",
+      "sha256": "ccb926d881caddc56cc52d8bfcd69f21bc26068db07072da4f5ab8cf3b68e5ab"
+    },
+    {
+      "id": "avatar_39",
+      "sha256": "1b5eda109079e3e40534412a6cced83a56303eeb6323cd549d0f70047ab9b558"
+    },
+    {
+      "id": "avatar_40",
+      "sha256": "8ca5a76e481e6f36563e59086de9b53cdea4759925afa5d7d46b2154f7a4953b"
+    },
+    {
+      "id": "avatar_41",
+      "sha256": "96f0c14f5f1c6b0eea1557f990c0334ee7b8b566c5e9e162f49e16b411be9351"
+    }
+  ]
+}

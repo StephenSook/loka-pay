@@ -1,0 +1,11 @@
+# Local Wi-Fi experiment review — 0.6.20
+
+Scope: supplementary Bonjour/TCP transport on a shared Wi-Fi network. Internal review, not independent security certification.
+
+Unchanged security boundaries: exact packet-v0 encryption, signature verification, recipient trust, expiry, replay limits, and destination-save receipts. Public protocol preface and Bonjour service names do not authenticate a user. No trust-store writes, profile publication, plaintext history or backend delivery added. This transport has no TLS layer; existing endpoint encryption protects message content, while packet metadata remains observable as on the existing transports.
+
+Android binds its listener to a Wi-Fi private IPv4 address; iPhone requires a Wi-Fi interface and discovers in the local Bonjour domain. Before its handshake, it requires a resolved private IPv4 peer address; public, loopback and unsupported address families are rejected. Android INTERNET permission enables sockets and does not establish Internet delivery. No external service address or Internet-validated capability is used. LANs are untrusted: hostile peers can advertise the service or connect to the listener. Sockets, queues, frame lengths, read timeouts and processing rates are bounded; malformed frames must not reach the application as trusted content. Known limitation: a malicious advertiser can occupy the iPhone's single Wi-Fi slot; BLE remains an independent backup.
+
+Do not suppress Bluetooth based on an unauthenticated claim that two radio handles belong to the same user. Current iPhone parallel delivery intentionally avoids that assumption, with additional bounded traffic as a tradeoff. Android's existing allow/block transport policy applies; anonymous links never grant contact trust. No private data was read for validation; the socket integration test used only synthetic bytes on the emulator.
+
+Remaining risks: real-device Bonjour/interface behavior, system local-network permission denial, network migration, sustained hostile connection churn, background socket suspension, shared-network metadata exposure, and battery cost. Physical tests are mandatory before claiming reliable or faster local delivery. Wi-Fi Aware pairing, identity-bound handoff and scored route selection require their own implementation and review.
