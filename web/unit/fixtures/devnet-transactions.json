@@ -1,5 +1,5 @@
 {
- "_about": "Recorded from Solana devnet with getTransaction (encoding json, commitment confirmed) on 2026-10-10 at 05:33 UTC. Real transactions of the loka_vault deploy; used by unit tests and the /live Playwright test only.",
+ "_about": "Recorded from Solana devnet with getTransaction (encoding json, commitment confirmed): initializeVault and deploy on 2026-10-10 at 05:33 UTC, registerMerchant, redeem and refusedRedeem (the second redeem of the same note, refused with SerialUsed 6011) on 2026-10-10 at 16:39 UTC. Real transactions of the loka_vault program; used by unit tests, the /live Playwright test and the e2e stand-in only.",
  "initializeVault": {
   "blockTime": 1791608579,
   "meta": {
@@ -318,6 +318,324 @@
    ]
   },
   "transactionIndex": 2,
+  "version": "legacy"
+ },
+ "registerMerchant": {
+  "blockTime": 1791612090,
+  "meta": {
+   "computeUnitsConsumed": 9398,
+   "costUnits": 10825,
+   "err": null,
+   "fee": 5000,
+   "innerInstructions": [
+    {
+     "index": 1,
+     "instructions": [
+      {
+       "accounts": [
+        0,
+        1
+       ],
+       "data": "11119qXPZUgzyKVfmyDbQK1shjGY2thCgu51wn3vwEi9j2fmxPtTiHEL9NMfG5dYTvjQ4k",
+       "programIdIndex": 2,
+       "stackHeight": 2
+      }
+     ]
+    }
+   ],
+   "loadedAddresses": {
+    "readonly": [],
+    "writable": []
+   },
+   "logMessages": [
+    "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+    "Program ComputeBudget111111111111111111111111111111 success",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG invoke [1]",
+    "Program log: Instruction: RegisterMerchant",
+    "Program 11111111111111111111111111111111 invoke [2]",
+    "Program 11111111111111111111111111111111 success",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG consumed 9248 of 199850 compute units",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG success"
+   ],
+   "postBalances": [
+    2498877560,
+    1107440,
+    1,
+    863600,
+    1,
+    833120
+   ],
+   "postTokenBalances": [],
+   "preBalances": [
+    2499990000,
+    0,
+    1,
+    863600,
+    1,
+    833120
+   ],
+   "preTokenBalances": [],
+   "rewards": [],
+   "status": {
+    "Ok": null
+   }
+  },
+  "slot": 509443542,
+  "transaction": {
+   "message": {
+    "accountKeys": [
+     "Fs3ZVNsqyogFRLwY4eZ3wjrvUHd5UCH13iobYdjY6Zhq",
+     "E2SQAV3a9z1e5jojuEqk75G3SYmsrU5g46iscDbfPcaa",
+     "11111111111111111111111111111111",
+     "BJwtFZHH5sieHV4doCyWwYgrdgrJt5H29Bft1z9ZAMu9",
+     "ComputeBudget111111111111111111111111111111",
+     "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG"
+    ],
+    "header": {
+     "numReadonlySignedAccounts": 0,
+     "numReadonlyUnsignedAccounts": 4,
+     "numRequiredSignatures": 1
+    },
+    "instructions": [
+     {
+      "accounts": [],
+      "data": "Fj2Eoy",
+      "programIdIndex": 4,
+      "stackHeight": 1
+     },
+     {
+      "accounts": [
+       0,
+       3,
+       1,
+       2
+      ],
+      "data": "uQYkY7oKd9n8NzsmqpMLhyS9cWg9yYD7wKUPmNUDjBCPVYryRusHYGnL",
+      "programIdIndex": 5,
+      "stackHeight": 1
+     }
+    ],
+    "recentBlockhash": "25qtTpf8MNEUsZ1f1dsy5CHG6dkd5JkRCCkH65udwSqQ"
+   },
+   "signatures": [
+    "p1BNwcxnqvVkzugSy6NDhWMFMWe7nBHshUaycQM3tV17efV1b3NTw863z6vHuuK5KLoDg8785PxG7SjvJbfV4XC"
+   ]
+  },
+  "transactionIndex": 17,
+  "version": "legacy"
+ },
+ "redeem": {
+  "blockTime": 1791612092,
+  "meta": {
+   "computeUnitsConsumed": 11870,
+   "costUnits": 18488,
+   "err": null,
+   "fee": 10000,
+   "innerInstructions": [],
+   "loadedAddresses": {
+    "readonly": [],
+    "writable": []
+   },
+   "logMessages": [
+    "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+    "Program ComputeBudget111111111111111111111111111111 success",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG invoke [1]",
+    "Program log: Instruction: RedeemNote",
+    "Program data: Oe36Ti7R3SLqxiGLpaInG7zU1pXurA4cLnE+BnXIR8fK627ahUe1modjwi3tJtnOAO29NUmU85x9yewQ4fhp80E+ZzUEbBCkxz5e1bFmnSd2oIYBAAAAAAA=",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG consumed 11720 of 199850 compute units",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG success"
+   ],
+   "postBalances": [
+    2498867560,
+    4053840,
+    1107440,
+    863600,
+    1,
+    833120,
+    1,
+    0
+   ],
+   "postTokenBalances": [],
+   "preBalances": [
+    2498877560,
+    4053840,
+    1107440,
+    863600,
+    1,
+    833120,
+    1,
+    0
+   ],
+   "preTokenBalances": [],
+   "rewards": [],
+   "status": {
+    "Ok": null
+   }
+  },
+  "slot": 509443549,
+  "transaction": {
+   "message": {
+    "accountKeys": [
+     "Fs3ZVNsqyogFRLwY4eZ3wjrvUHd5UCH13iobYdjY6Zhq",
+     "BcbVkCbBuSogtrxPoFmVrA8kEejjEgbwu5DMCkA4GXVV",
+     "E2SQAV3a9z1e5jojuEqk75G3SYmsrU5g46iscDbfPcaa",
+     "BJwtFZHH5sieHV4doCyWwYgrdgrJt5H29Bft1z9ZAMu9",
+     "ComputeBudget111111111111111111111111111111",
+     "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG",
+     "Secp256r1SigVerify1111111111111111111111111",
+     "Sysvar1nstructions1111111111111111111111111"
+    ],
+    "header": {
+     "numReadonlySignedAccounts": 0,
+     "numReadonlyUnsignedAccounts": 5,
+     "numRequiredSignatures": 1
+    },
+    "instructions": [
+     {
+      "accounts": [],
+      "data": "Fj2Eoy",
+      "programIdIndex": 4,
+      "stackHeight": 1
+     },
+     {
+      "accounts": [],
+      "data": "8zEvNbRaLCGcBQSH9cZDqVPbefatDfsvRit2Ej61EEtFKg1VJEXsAdKpYrdToofEQkAvY5DcNcnwT7EDxh4JwnVpfS5avGT9LZQdnrogrVfetkswME3qr3MaXUY4RKDBidqwLfkUofAi3aPPCxNEnoDuRcdKeW31TnSC7DqbtBbmn9DNF4KouiWx3RGALFcGct8u1de7LPCHmdK5vV2RQ53KSBkcrPu3KhW69nrH3tQ2Q4rEzPUMVdk5Ezdhr1xwxKgmj8BD5YfKUUTzRJ7r8ieCPpmG7omfC392WtNL3Mrex9EEik57BPCAK3aUscfigqfnkmee9VjePqBYozUZ2Zrq8T",
+      "programIdIndex": 6,
+      "stackHeight": 1
+     },
+     {
+      "accounts": [
+       3,
+       1,
+       2,
+       7
+      ],
+      "data": "6wtrykCpAhC8Q7KrX4qNUrr9agv4Qnq5Xx7EgiX718eEF42GfLD6GqM7gBDLtpM9kfZCvcuLF8Bwp3dKFdPqkb95tCoN7uStE6mzbbF1mU7HXeUpe8PHXZqM6U4RSv7GLyutS5vMACuCNBZ6iHaGTKGnbGNopXDdxJujv9GvboMVHoLiTVBo96Frswztq6LqF8Y83Vv1TPTD",
+      "programIdIndex": 5,
+      "stackHeight": 1
+     }
+    ],
+    "recentBlockhash": "7FRN6yx3CJdUCzrsWMpjpgv3KmbNBZm2gSb2PfibErc9"
+   },
+   "signatures": [
+    "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa"
+   ]
+  },
+  "transactionIndex": 1,
+  "version": "legacy"
+ },
+ "refusedRedeem": {
+  "blockTime": 1791612096,
+  "meta": {
+   "computeUnitsConsumed": 11764,
+   "costUnits": 18382,
+   "err": {
+    "InstructionError": [
+     2,
+     {
+      "Custom": 6011
+     }
+    ]
+   },
+   "fee": 10000,
+   "innerInstructions": [],
+   "loadedAddresses": {
+    "readonly": [],
+    "writable": []
+   },
+   "logMessages": [
+    "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+    "Program ComputeBudget111111111111111111111111111111 success",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG invoke [1]",
+    "Program log: Instruction: RedeemNote",
+    "Program log: AnchorError thrown in loka_vault/src/instructions/redeem.rs:50. Error Code: SerialUsed. Error Number: 6011. Error Message: This allowance serial was already redeemed.",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG consumed 11614 of 199850 compute units",
+    "Program HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG failed: custom program error: 0x177b"
+   ],
+   "postBalances": [
+    2498857560,
+    4053840,
+    1107440,
+    863600,
+    1,
+    833120,
+    1,
+    0
+   ],
+   "postTokenBalances": [],
+   "preBalances": [
+    2498867560,
+    4053840,
+    1107440,
+    863600,
+    1,
+    833120,
+    1,
+    0
+   ],
+   "preTokenBalances": [],
+   "rewards": [],
+   "status": {
+    "Err": {
+     "InstructionError": [
+      2,
+      {
+       "Custom": 6011
+      }
+     ]
+    }
+   }
+  },
+  "slot": 509443566,
+  "transaction": {
+   "message": {
+    "accountKeys": [
+     "Fs3ZVNsqyogFRLwY4eZ3wjrvUHd5UCH13iobYdjY6Zhq",
+     "BcbVkCbBuSogtrxPoFmVrA8kEejjEgbwu5DMCkA4GXVV",
+     "E2SQAV3a9z1e5jojuEqk75G3SYmsrU5g46iscDbfPcaa",
+     "BJwtFZHH5sieHV4doCyWwYgrdgrJt5H29Bft1z9ZAMu9",
+     "ComputeBudget111111111111111111111111111111",
+     "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG",
+     "Secp256r1SigVerify1111111111111111111111111",
+     "Sysvar1nstructions1111111111111111111111111"
+    ],
+    "header": {
+     "numReadonlySignedAccounts": 0,
+     "numReadonlyUnsignedAccounts": 5,
+     "numRequiredSignatures": 1
+    },
+    "instructions": [
+     {
+      "accounts": [],
+      "data": "Fj2Eoy",
+      "programIdIndex": 4,
+      "stackHeight": 1
+     },
+     {
+      "accounts": [],
+      "data": "8zEvNbRaLCGcBQSH9cZDqVPbefatDfsvRit2Ej61EEtFKg1VJEXsAdKpYrdToofEQkKsEvavJvVUD1ySzax2kFdQGW2rL44iEo6VfiS5Q72QNAtYQw3Z8zMacc4MBvbjygLYDa19wcPFsmvVf1HXwGTNEHUKbmsymm44Sb3sBRksW7Yc54MGPtnWhs8HfBxoVGTofFccJRvd6NMYdpZT7xxSKTjwQGrvCZAqteXt49RNR8pKquF74tNysUPsCqGxnPVqvibg8X6iuSvMPNUNKGTiC8RtJLcQXyFMMTi3B2sKGXJvK7St8t9mq1VJjemvEEnN878djVsznXFDMqpbjpsW63",
+      "programIdIndex": 6,
+      "stackHeight": 1
+     },
+     {
+      "accounts": [
+       3,
+       1,
+       2,
+       7
+      ],
+      "data": "6wtrykCpAhC8Q7KrX4qNUrr9agv4Qnq5Xx7EgiX718eEF42GfLD6GqM7gBDLtpM9kfZCvcuLF8Bwp3dKFdPqkb95tCoN7uStE6mzbbF1mU7HXeUpe8PHXZqM6U4RSv7GLyutS5vMACuCNBZ6iHaGTKGnbGNopXDdxJujv9GvboMVHoLiTVBo96FrswzyfHdHrp8XzKqZ1nbq",
+      "programIdIndex": 5,
+      "stackHeight": 1
+     }
+    ],
+    "recentBlockhash": "BmKKK2fK1KthSHoTiXPUR5bJuUZUGHjm4VN2hKUhLs9"
+   },
+   "signatures": [
+    "2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv"
+   ]
+  },
+  "transactionIndex": 5,
   "version": "legacy"
  }
 }
