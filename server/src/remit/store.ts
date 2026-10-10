@@ -163,11 +163,13 @@ export class RegistrationStore {
   }
   async finish(job: Job, result: Result, priorSuccess = false): Promise<Result> {
     const legacyFailure = result.statusCode === 409 && job.result?.statusCode === 409 && !('retryable' in job.result.body);
-    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb WHERE namespace=$1 AND id=$2
+    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb,
+      plan=CASE WHEN $6::boolean THEN $7::jsonb ELSE plan END WHERE namespace=$1 AND id=$2
       AND (result IS NULL OR ($5::boolean AND result->>'statusCode'='409' AND NOT (result->'body' ? 'retryable'))
         OR ($6::boolean AND result->>'statusCode'='409'))
       AND attempt->>'signature'=$4`,
-      [this.namespace, job.id, JSON.stringify(result), job.attempt?.signature ?? null, legacyFailure, priorSuccess && result.statusCode === 200]);
+      [this.namespace, job.id, JSON.stringify(result), job.attempt?.signature ?? null, legacyFailure,
+        priorSuccess && result.statusCode === 200, JSON.stringify(job.plan)]);
     const saved = await this.get(job.plan.kind, job.plan.keyHash);
     if (saved.id !== job.id || !saved.result) throw new Error('Registration result was not saved');
     return saved.result;

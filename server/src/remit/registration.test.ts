@@ -570,3 +570,36 @@ test.each([false, true])('late original success overrides a cached replacement f
   expect((await f.store.get('payer', original.plan.keyHash)).explicitRetries).toBe(0);
   expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
 });
+
+test.each([false, true])('late original success persists its historical expiry so team renewal works (retryOf=%s)', async repost => {
+  const publicKey = key(); const hash = unsignedJob('payer', publicKey).plan.keyHash;
+  const f = await fixture([hash]); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  const failed = await f.service.submit('payer', { publicKey }); expect(failed.statusCode).toBe(409);
+  f.setNow(1800086400);
+  const retryFailed = await f.service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect(retryFailed.statusCode).toBe(409);
+  const retried = await f.store.get('payer', hash);
+  expect(retried.plan.expiry).toBeGreaterThan(f.options.now());
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true,
+    outcome: attempt.signature === original.attempt!.signature ? 'ok' : 'failed' }));
+  const recovered = await f.service.submit('payer', { publicKey, ...(repost ? { retryOf: retryFailed.body.retryOf } : {}) });
+  expect(recovered).toMatchObject({ statusCode: 200, body: { expiry: original.plan.expiry, openSignature: original.attempt!.signature } });
+  const saved = await f.store.get('payer', hash);
+  expect(saved.plan).toEqual(original.plan); expect(saved.result?.body.expiry).toBe(saved.plan.expiry);
+  f.chain.outcome = 'ok';
+  const renewed = await f.service.submit('payer', { publicKey });
+  expect(renewed.statusCode).toBe(201); expect(renewed.body.expiry).toBeGreaterThan(f.options.now());
+  expect(f.chain.sign).toHaveBeenCalledTimes(3);
+});
+
+test('a stale historical success cannot replace the plan after the saved signature changes', async () => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  await f.service.submit('payer', { publicKey });
+  const current = await f.store.get('payer', original.plan.keyHash);
+  const result = await f.store.finish(original, { statusCode: 200, body: { expiry: original.plan.expiry } }, true);
+  expect(result.statusCode).toBe(409);
+  const saved = await f.store.get('payer', original.plan.keyHash);
+  expect(saved.plan).toEqual(current.plan); expect(saved.result).toEqual(current.result);
+});
