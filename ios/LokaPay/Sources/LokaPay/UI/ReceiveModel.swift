@@ -788,13 +788,14 @@ public final class ReceiveModel {
     /// A pending ledger entry read back: the stored note must pass PAYMENT-V1 section 6 and be
     /// addressed to this merchant. A stored certificate must verify with the pinned key and name the
     /// note's allowance and payer; a stored ACK must verify with this merchant's key and bind this
-    /// note id. A part that is present but fails marks the record damaged; nothing stored is trusted
-    /// as stored. Nothing here is a merchant check: `recheck` runs those before the note is shown.
+    /// note id. A part that is present but fails marks the record damaged, and so does another entry
+    /// on the same allowance and serial; nothing stored is trusted as stored. Nothing here is a
+    /// merchant check: `recheck` runs those before the note is shown.
     private func unsettledPayment(from entry: OfflineLedger.Entry) -> UnsettledPayment? {
         guard let merchant, let serverPublicKey, let wire = Data(hex: entry.wireHex),
               let note = try? SignedNote.validate(wire: wire, deployment: deployment),
               note.note.payeeKeyHash == merchant.merchantKeyHash else { return nil }
-        var damaged = false
+        var damaged = entry.sharesSerial
         var certificate: AllowanceCertificate?
         if let hex = entry.allowanceWireHex {
             if let wire = Data(hex: hex),
@@ -829,7 +830,8 @@ public final class ReceiveModel {
     /// a signature that never finished), the note is treated as received now, like a fresh scan:
     /// the checks run at the phone's time now and the owner signs a new ACK for that time. A
     /// damaged record is refused and nothing is signed. Either way the note was reserved when it
-    /// was accepted, so it is not reserved again; the allowance's reserved total must still be
+    /// was accepted, so it is not reserved again: the ledger must hold exactly one reservation for
+    /// its allowance and serial, this note's, and the allowance's reserved total must still be
     /// within the certificate's offline limit.
     private func recheck(_ held: UnsettledPayment) -> Result<ReceivedPayment, MoneyIssueKind> {
         guard let merchant else { return .failure(.noMerchantCertificate) }
@@ -847,6 +849,9 @@ public final class ReceiveModel {
             zeroBars = internetState?().map { $0 == InternetState.none } ?? false
         }
         do {
+            // Merchant check 6, read again now: the one reservation on this serial is this note's.
+            // Two on one serial is a damaged ledger; both stay reserved and neither is shown or signed.
+            guard try ledger.holdsSoleReservation(noteId: held.note.noteId) else { return .failure(.damagedRecord) }
             // PAYMENT-V1 section 6 merchant checks 2 to 5: allowance, payer, payee and earmarks, expiry.
             try Acceptance.check(note: held.note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash,
                                  now: receivedAt)
