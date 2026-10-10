@@ -19,11 +19,14 @@ enum PreviewFixtures {
     static let ackHex = "4c4f4b412d5041592d41434b4e2d5631c7b0be30f29587bb1a89a178694ae7acf41a7583269eb128d845f5ad84dab69b000000006ac980007600c01833e85a1b6e4b616e6f2277923672bbe5ab0ac768bfcdbdd6caef4b3527581dfa17e3f95e284a4f1aaa3925a9f4a03cafb4c2484d0dd67459f15022ab02ff58973549d33cb4d43db675796924170bb44d409451e34cb227fbd1a8ccda4d"
     static let confSettledHex = "4c4f4b412d5041592d434f4e462d5631c7b0be30f29587bb1a89a178694ae7acf41a7583269eb128d845f5ad84dab69b3c6c473ad6f5a8fcb6923f636287f66508cca53364707d6a4dd76d36868ce79b91cf6339ef75708f64ecf6fe39c049ba25c4ccc1a2d658addf9ba284464dd067000000001893e54e000000006ac98003000000006ac98001010000b55a0b82607217f044849815433b90bcba90b8a08123bdc1d40c59fd412eb02cf1acea8334af55769c0e60548b49cf241023241b003a554e28c494550ac44302"
     static let confFailedHex = "4c4f4b412d5041592d434f4e462d5631c7b0be30f29587bb1a89a178694ae7acf41a7583269eb128d845f5ad84dab69b125ed937c2c2127f6e1d69be05617b4ab094dea3747196f1f0236f0af933f77772a2962bc6dada3038c71dd44f2956a98e906fe298dd03653aa45f5e32f395f8000000001893e68f000000006ac98064000000006ac98062021771042505e4cee06d2fec5d1caf7b2657ea0583931a022093947d4e38f59b59acec5217b78a5b2750068d0051a7648f6dfed2c7ecf744b1c2dcf5fa9ebaaff53b07"
+    /// Vector merchant "utf8_name": merchant B's key, the other merchant in the Try to cheat previews.
+    static let merchantBHex = "4c4f4b412d5041592d4d5243482d5631f0cf4534b0533c61fcb9d16f5dfb4ce3a7ac85b5b39a6e67bef0f862cb59d1f5003b442cb3912157f13a933d0134282d032b5ffecd01a2dbf1b7790608df002ea7f64e5dc9defe67156dfb1c328385a78d4cffab0d2fb3f4cc4a11fbc1112609cd000f426f757469717565204e64c3a87965c30f5f0f009856af00e843a78fc3675d57879849d4e15f419831238d6178e2530fe8aca07edceb50132e170cf8d8e8448b83ed020ce0f241e29c55115647a907"
 
     static let deployment = Deployment(programId: Data(hex: programIdHex)!, clusterId: 0, mint: Data(hex: mintHex)!)
     static let serverKey = Data(hex: serverEd25519Hex)!
     static let allowanceWire = Data(hex: allowanceHex)!
     static let merchantWire = Data(hex: merchantHex)!
+    static let merchantBWire = Data(hex: merchantBHex)!
     static let note0Wire = Data(hex: note0Hex)!
     static let note1Wire = Data(hex: note1Hex)!
     static let ackWire = Data(hex: ackHex)!
@@ -58,6 +61,21 @@ enum PreviewFixtures {
 
     static var merchant: MerchantCertificate {
         try! MerchantCertificate.verify(wire: merchantWire, deployment: deployment, serverPublicKey: serverKey)
+    }
+
+    static var merchantB: MerchantCertificate {
+        try! MerchantCertificate.verify(wire: merchantBWire, deployment: deployment, serverPublicKey: serverKey)
+    }
+
+    /// Vector note 0 signed again by the vector payer key for merchant B: same allowance, serial,
+    /// amount and expiry (Try to cheat, task 2.13).
+    static var cheat: CheatNote {
+        var body = note0.note
+        body.payeeKeyHash = merchantB.merchantKeyHash
+        let signed = try! SignedNote.sign(body, with: payerSigner)
+        return CheatNote(original: note0, merchant: merchantB,
+                         payment: SignedPayment(note: signed, allowanceText: PaymentTransport.encode(.allowance, allowanceWire),
+                                                noteText: PaymentTransport.encode(.note, signed.wire)))
     }
 
     static var note0: SignedNote { try! SignedNote.validate(wire: note0Wire, deployment: deployment) }

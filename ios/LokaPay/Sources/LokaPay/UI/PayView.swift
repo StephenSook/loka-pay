@@ -7,6 +7,7 @@ public struct PayView: View {
     let connectivity: ConnectivityMonitor?
     @State private var scanningMerchant = false
     @State private var scanningReturn = false
+    @State private var scanningCheatMerchant = false
 
     public init(model: PayModel, connectivity: ConnectivityMonitor? = nil) {
         self.model = model
@@ -46,6 +47,12 @@ public struct PayView: View {
                 if model.phase == .receipt { scanningReturn = false }
             }
         }
+        .sheet(isPresented: $scanningCheatMerchant) {
+            ScanSheet(title: "Scan merchant B's code", issue: model.issue) { text in
+                model.acceptCheatMerchant(text: text)
+                if model.cheatStep == .confirm { scanningCheatMerchant = false }
+            }
+        }
         // A haptic when a verified ack or receipt lands (Received or Paid), not when this phone signs.
         .sensoryFeedback(.success, trigger: model.phase) { _, new in new == .receipt }
         .announcesIssue(model.issue)
@@ -81,8 +88,10 @@ public struct PayView: View {
             .lokaCard()
         case .showNote:
             noteCard
+            cheatSection
         case .receipt:
             receiptSection
+            cheatSection
         }
     }
 
@@ -203,6 +212,120 @@ public struct PayView: View {
             .lokaCard()
         }
     }
+
+    // MARK: - Try to cheat (task 2.13, sandbox demo)
+
+    /// Under the payment's own card, which it never changes. The judge presses it after a payment
+    /// settles; the owner signs the same allowance and serial again for merchant B.
+    @ViewBuilder private var cheatSection: some View {
+        if model.canTryToCheat {
+            switch model.cheatStep {
+            case .off:
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Try to cheat (sandbox demo)").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+                    Text(PayView.cheatExplanation).font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+                    Button { model.startCheat() } label: {
+                        Label("Try to cheat (sandbox demo)", systemImage: "exclamationmark.triangle.fill")
+                    }
+                    .buttonStyle(LokaButtonStyle(fill: LokaColor.warningFill, text: LokaColor.inkFixed))
+                }
+                .lokaCard()
+            case .scanMerchant:
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Try to cheat: scan merchant B's code").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+                    Text("A different merchant from this payment's. This phone checks its certificate like any merchant's.")
+                        .font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+                    Button { scanningCheatMerchant = true } label: {
+                        Label("Scan merchant B's code", systemImage: "qrcode.viewfinder")
+                    }
+                    .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+                    CodeEntryField(prompt: "Or paste merchant B's code") { model.acceptCheatMerchant(text: $0) }
+                    cancelCheatButton
+                }
+                .lokaCard(border: LokaColor.warningBorder)
+            case .confirm:
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Try to cheat (sandbox demo)").font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+                    Text(model.cheatMerchant?.displayName ?? "").font(LokaStyle.title).foregroundStyle(LokaColor.ink)
+                    Label("Merchant certificate verified", systemImage: "checkmark.shield.fill")
+                        .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+                    if let original = model.cheatOriginal {
+                        Text(PayView.cheatConfirmText(original, merchantName: model.cheatMerchant?.displayName ?? "merchant B"))
+                            .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                    }
+                    Button { Task { await model.signCheat() } } label: {
+                        Label(isEnclave ? "Sign the cheat note with Face ID" : "Sign the cheat note (software key, no Face ID)",
+                              systemImage: isEnclave ? "faceid" : "signature")
+                    }
+                    .buttonStyle(LokaButtonStyle())
+                    cancelCheatButton
+                }
+                .lokaCard()
+            case .signing:
+                VStack(alignment: .leading, spacing: 12) {
+                    ProgressView()
+                    Text(PayModel.signingTitle(secureEnclave: isEnclave)).font(LokaStyle.title).foregroundStyle(LokaColor.ink)
+                    Text("Signing the cheat note. No serial is reserved for it.").font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+                }
+                .lokaCard()
+            case .showNote:
+                cheatNoteCard
+            }
+        }
+    }
+
+    @ViewBuilder private var cheatNoteCard: some View {
+        if let cheat = model.cheat {
+            VStack(alignment: .leading, spacing: 14) {
+                Label(cheat.banner, systemImage: "exclamationmark.triangle.fill")
+                    .font(LokaStyle.label).foregroundStyle(LokaColor.inkFixed)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(LokaColor.warningFill))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(LokaColor.warningBorder, lineWidth: LokaStyle.borderWidth))
+                Text("$\(Money.display(baseUnits: cheat.payment.note.note.amount)) sandbox to \(cheat.merchant.displayName)")
+                    .font(LokaStyle.title).foregroundStyle(LokaColor.ink)
+                Text("Show code 1, then code 2, to merchant B.").font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+                Picker("Cheat code", selection: Binding(get: { model.cheatCodeStep }, set: { model.showCheatCode($0) })) {
+                    Text("1. Allowance").tag(PayModel.CodeStep.allowance)
+                    Text("2. Cheat note").tag(PayModel.CodeStep.note)
+                }
+                .pickerStyle(.segmented)
+                if let text = model.currentCheatCodeText {
+                    PaymentQRView(text: text, caption: model.cheatCodeStep == .allowance
+                        ? "Code 1 of 2: your allowance certificate"
+                        : "Code 2 of 2: the cheat note (same serial, merchant B)")
+                }
+                if model.cheatCodeStep == .allowance {
+                    Button("Next: show the cheat note") { model.showCheatCode(.note) }.buttonStyle(LokaButtonStyle())
+                }
+                Button("Try another merchant") { model.startCheat() }
+                    .buttonStyle(LokaTextButtonStyle())
+                    .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                cancelCheatButton
+            }
+            .lokaCard(border: LokaColor.warningBorder)
+        }
+    }
+
+    private var cancelCheatButton: some View {
+        Button(model.cheatStep == .showNote ? "Close the cheat note" : "Cancel") { model.cancelCheat() }
+            .buttonStyle(LokaTextButtonStyle())
+            .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+    }
+
+    /// The one line under the control.
+    static let cheatExplanation =
+        "Signs this same allowance and serial again for another merchant. The chain should refuse it."
+
+    static func cheatConfirmText(_ original: SignedNote, merchantName: String) -> String {
+        // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
+        "This signs serial " + String(original.note.serial) + " of allowance #" + String(original.note.allowanceId)
+            + " again: the same $" + Money.display(baseUnits: original.note.amount) + " sandbox and expiry, to "
+            + merchantName + " instead. No new serial is reserved."
+    }
 }
 
 #if DEBUG
@@ -259,5 +382,30 @@ public struct PayView: View {
 
 #Preview("Pay: wrong code scanned") {
     PayView(model: .preview(.scanMerchant, issue: .wrongKind(expected: [.merchant], got: .note)))
+}
+
+#Preview("Pay: try to cheat, scan merchant B") {
+    PayView(model: .preview(.receipt, merchant: PreviewFixtures.merchant, payment: PreviewFixtures.payment,
+                            receipt: PreviewFixtures.receipt(conf: PreviewFixtures.confSettledWire),
+                            cheatStep: .scanMerchant))
+}
+
+#Preview("Pay: try to cheat, same merchant refused") {
+    PayView(model: .preview(.receipt, merchant: PreviewFixtures.merchant, payment: PreviewFixtures.payment,
+                            receipt: PreviewFixtures.receipt(conf: PreviewFixtures.confSettledWire),
+                            issue: .cheatSameMerchant, cheatStep: .scanMerchant))
+}
+
+#Preview("Pay: try to cheat, confirm") {
+    PayView(model: .preview(.receipt, merchant: PreviewFixtures.merchant, payment: PreviewFixtures.payment,
+                            receipt: PreviewFixtures.receipt(conf: PreviewFixtures.confSettledWire),
+                            cheatStep: .confirm, cheatMerchant: PreviewFixtures.merchantB))
+}
+
+#Preview("Pay: cheat note, dark") {
+    PayView(model: .preview(.receipt, merchant: PreviewFixtures.merchant, payment: PreviewFixtures.payment,
+                            receipt: PreviewFixtures.receipt(conf: PreviewFixtures.confSettledWire),
+                            cheatStep: .showNote, cheat: PreviewFixtures.cheat))
+        .preferredColorScheme(.dark)
 }
 #endif

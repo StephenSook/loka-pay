@@ -50,6 +50,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// The chain decided the note (a verified CONF), but this phone could not record that
     /// decision in its offline ledger. `paid` is true for a settled CONF.
     case ledgerNotUpdated(paid: Bool)
+    /// Try to cheat (task 2.13): the scanned merchant is the one the original note already pays,
+    /// so signing again would not be a double spend.
+    case cheatSameMerchant
 
     /// A normal next step on the way to a payment, not a failure: the screen shows it in a neutral
     /// banner instead of a red "Stopped" one.
@@ -83,6 +86,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
         case .ledgerNotUpdated: return "ledger_not_updated"
+        case .cheatSameMerchant: return "cheat_same_merchant"
         }
     }
 
@@ -125,6 +129,32 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
             return (paid ? "Paid on chain" : "Failed on chain")
                 + ", but this phone could not record it in its offline ledger, so the ledger may still count "
                 + "this note as unsettled. The signed receipt above is the record."
+        case .cheatSameMerchant:
+            return "That is the merchant the original note already pays, so signing again would not be a double "
+                + "spend. Scan a different merchant's code (merchant B)."
+        }
+    }
+
+    /// The layer that refused this step, for the refusals that have one (task 2.13: a refusal
+    /// before the chain names its layer). It speaks only for the step or request it answers, never
+    /// for the payment's history on chain. Nil for everything else: setup gaps, codes of the wrong
+    /// kind, steps, and outcomes the phone cannot know. A screen that knows more (a receipt check,
+    /// an earlier upload still undecided) says so through `MoneyIssue(_:at:refusedBy:)`.
+    public var refusedBy: RefusalLayer? {
+        switch self {
+        case .payment(.storage): return nil
+        case .payment, .overCap, .damagedRecord, .cheatSameMerchant: return .thisPhone
+        case .settlement(let e):
+            switch e {
+            case .refused, .badJSON, .badBase64url, .badPubkey, .nameLength, .rateLimited, .budgetExhausted:
+                return .settlementServer(earlierUploadUndecided: false)
+            case .afterUnansweredAttempt(let last):
+                // The server refused the last attempt; an earlier one may have settled the note.
+                guard MoneyIssueKind.settlement(last).refusedBy != nil else { return nil }
+                return .settlementServer(earlierUploadUndecided: true)
+            default: return nil
+            }
+        default: return nil
         }
     }
 
@@ -198,6 +228,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .merchantMismatch: return "merchant_mismatch"
         case .protocolViolation: return "protocol_violation"
         case .stillPending: return "still_pending"
+        case .afterUnansweredAttempt(let last): return settlementName(last) + "_after_unanswered_attempt"
         }
     }
 
@@ -235,6 +266,10 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 + "upload it; the note stays held on this phone."
         case .badJSON, .badBase64url, .badPubkey, .nameLength:
             return "The server rejected the request (\(settlementName(e))). \(held)"
+        case .afterUnansweredAttempt(let last):
+            return settlementMessage(last) + " An earlier attempt of this upload got no answer this phone can trust, "
+                + "so the server may have settled the note: the outcome is unknown, and Check again asks the server "
+                + "by note id."
         }
     }
 
@@ -250,14 +285,52 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     }
 }
 
+/// Which layer refused a step, and only what that refusal proves. None of these says anything
+/// about what reached Solana before this step.
+public enum RefusalLayer: Equatable, Sendable {
+    /// This phone's own checks on a payment step (PAYMENT-V1 section 6, the merchant checks, the
+    /// payer's checks): that step sends nothing.
+    case thisPhone
+    /// This phone's check of a receipt or ack handed back. A receipt that does not verify says
+    /// nothing about whether the payment settled.
+    case receiptCheck
+    /// The settlement server refused this one request (API-V1 section 1: a refusal is never signed
+    /// and binds nothing). `earlierUploadUndecided`: an earlier upload of the same note has no
+    /// decision on this phone (no answer it could trust, or still in flight), so it may settle or
+    /// may have settled.
+    case settlementServer(earlierUploadUndecided: Bool)
+
+    public var text: String {
+        switch self {
+        case .thisPhone:
+            return "Refused by this phone's own checks. This step sent nothing to Solana."
+        case .receiptCheck:
+            return "Refused by this phone's receipt check: the receipt did not verify, so it was not used. "
+                + "That says nothing about whether the payment settled on chain."
+        case .settlementServer(let undecided):
+            return "The settlement server refused this request, so this request sent nothing to Solana."
+                + (undecided ? " An earlier upload of this note has no decision on this phone yet and may settle "
+                    + "or may have settled; Check again asks the server by note id." : "")
+        }
+    }
+}
+
 /// An issue with the phone-clock time it happened, so the screen can say when.
 public struct MoneyIssue: Equatable, Sendable {
     public let kind: MoneyIssueKind
     public let at: Date
+    /// The layer the banner names: the kind's own (`MoneyIssueKind.refusedBy`) unless the screen
+    /// knows better (a receipt check, an earlier upload still undecided).
+    public let refusedBy: RefusalLayer?
 
     public init(_ kind: MoneyIssueKind, at: Date) {
+        self.init(kind, at: at, refusedBy: kind.refusedBy)
+    }
+
+    public init(_ kind: MoneyIssueKind, at: Date, refusedBy: RefusalLayer?) {
         self.kind = kind
         self.at = at
+        self.refusedBy = refusedBy
     }
 
     public var name: String { kind.name }
