@@ -8,6 +8,22 @@ private typealias F = ScreenFixtures
 @Suite("Stage-safe merchant screens (2.23)")
 @MainActor
 struct StageSafeScreenTests {
+    /// A defaults domain of its own, so nothing leaks between tests or into the app's settings.
+    func domain() -> (name: String, defaults: UserDefaults) {
+        let name = "LokaPayTests.tab." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return (name, defaults)
+    }
+
+    func dependencies() -> LokaPayDependencies {
+        LokaPayDependencies(deployment: F.deployment, serverPublicKey: F.serverKey, signer: SoftwareP256Signer(),
+                            allowanceWire: nil, merchantWire: nil,
+                            serials: SerialReservations(url: F.tempURL("serials.json")),
+                            ledger: OfflineLedger(url: F.tempURL("ledger.json")),
+                            settlementClient: nil, connectivity: ConnectivityMonitor())
+    }
+
     /// The rendered height in points when offered a 390 pt phone width.
     func height(_ view: some View) throws -> Int {
         let renderer = ImageRenderer(content: view)
@@ -15,6 +31,46 @@ struct StageSafeScreenTests {
         renderer.scale = 1
         let image = try #require(renderer.cgImage)
         return image.height
+    }
+
+    // MARK: (a) the Pay/Receive switch remembers the last tab
+
+    @Test("the switch comes back on the last tab after a relaunch, and on Pay the first time")
+    func remembersTheTab() {
+        let (name, defaults) = domain()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let first = LokaPayTabMemory(defaults: defaults)
+        #expect(first.initialTab(requested: nil) == .pay, "nothing saved yet: Pay, as before")
+        first.save(.receive)
+        // A relaunch: a new memory over the same stored domain.
+        let relaunched = LokaPayTabMemory(defaults: UserDefaults(suiteName: name)!)
+        #expect(relaunched.load() == .receive)
+        #expect(relaunched.initialTab(requested: nil) == .receive)
+        relaunched.save(.pay)
+        #expect(LokaPayTabMemory(defaults: UserDefaults(suiteName: name)!).initialTab(requested: nil) == .pay)
+    }
+
+    @Test("a tab the app asks for wins over the saved one; an unreadable saved value falls back to Pay")
+    func requestedTabAndUnreadableValue() {
+        let (name, defaults) = domain()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let memory = LokaPayTabMemory(defaults: defaults)
+        memory.save(.receive)
+        #expect(memory.initialTab(requested: .pay) == .pay)
+        defaults.set("Wallet", forKey: LokaPayTabMemory.key)
+        #expect(memory.load() == nil)
+        #expect(memory.initialTab(requested: nil) == .pay)
+    }
+
+    @Test("the home view opens on the remembered tab, or on the tab the app asks for")
+    func homeViewOpensOnTheRememberedTab() {
+        let (name, defaults) = domain()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let memory = LokaPayTabMemory(defaults: defaults)
+        #expect(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory).openingTab == .pay)
+        memory.save(.receive)
+        #expect(LokaPayHomeView(dependencies: dependencies(), tabMemory: memory).openingTab == .receive)
+        #expect(LokaPayHomeView(dependencies: dependencies(), startOn: .pay, tabMemory: memory).openingTab == .pay)
     }
 
     // MARK: (b) the screen stays awake on money screens

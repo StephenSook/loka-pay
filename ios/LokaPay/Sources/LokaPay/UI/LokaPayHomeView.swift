@@ -70,9 +70,37 @@ public struct LokaPayDependencies {
     }
 }
 
-/// The one view the app presents: Pay and Receive. It starts the connectivity monitor while shown.
-/// The models are built once from `dependencies`; when a certificate arrives later (for example
-/// after registration), give the view a new identity so it rebuilds:
+/// Remembers the last Pay or Receive tab across relaunches (task 2.23), so a merchant phone that
+/// relaunches, or rebuilds these screens after registration (`.id(...)`), comes back on Receive.
+/// Only a tap on the switch is saved.
+public struct LokaPayTabMemory {
+    public static let key = "LokaPay.lastTab"
+    /// The app's own settings.
+    public static var standard: LokaPayTabMemory { LokaPayTabMemory(defaults: .standard) }
+
+    let defaults: UserDefaults
+
+    public init(defaults: UserDefaults) { self.defaults = defaults }
+
+    /// The saved tab; nil when none was saved or the stored value is not a tab.
+    public func load() -> LokaPayHomeView.Tab? {
+        defaults.string(forKey: Self.key).flatMap(LokaPayHomeView.Tab.init(rawValue:))
+    }
+
+    public func save(_ tab: LokaPayHomeView.Tab) {
+        defaults.set(tab.rawValue, forKey: Self.key)
+    }
+
+    /// The tab to open on: the one the app asks for, else the saved one, else Pay.
+    public func initialTab(requested: LokaPayHomeView.Tab?) -> LokaPayHomeView.Tab {
+        requested ?? load() ?? .pay
+    }
+}
+
+/// The one view the app presents: Pay and Receive. It starts the connectivity monitor while shown,
+/// keeps the screen awake while a money screen is shown, and opens on the last tab used
+/// (`LokaPayTabMemory`). The models are built once from `dependencies`; when a certificate arrives
+/// later (for example after registration), give the view a new identity so it rebuilds:
 /// `LokaPayHomeView(dependencies: deps).id(deps.allowanceWire.map(\.hex) ?? "")`.
 public struct LokaPayHomeView: View {
     public enum Tab: String, CaseIterable, Sendable {
@@ -95,8 +123,16 @@ public struct LokaPayHomeView: View {
     /// Sends the merchant's replies on events, while shown, per payment presentation. nil without a
     /// `meshReply` (camera only).
     @State private var replies: MeshReplySender?
+    /// Saves each tap on the Pay/Receive switch.
+    private let tabMemory: LokaPayTabMemory
+    /// The tab these screens opened on (`LokaPayTabMemory.initialTab`).
+    let openingTab: Tab
 
-    public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay, isActive: Bool = true) {
+    /// - Parameters:
+    ///   - tab: the tab to open on; nil opens on the last tab used (Pay the first time).
+    ///   - tabMemory: where the last tab is kept (the app's settings by default).
+    public init(dependencies: LokaPayDependencies, startOn tab: Tab? = nil, isActive: Bool = true,
+                tabMemory: LokaPayTabMemory = .standard) {
         let d = dependencies
         let monitor = d.connectivity
         _payModel = State(wrappedValue: PayModel(allowanceWire: d.allowanceWire, signer: d.signer, serials: d.serials,
@@ -107,7 +143,9 @@ public struct LokaPayHomeView: View {
                                                          serverPublicKey: d.serverPublicKey,
                                                          internetState: { monitor.isRunning ? monitor.state : nil },
                                                          inbox: d.meshInbox))
-        _tab = State(initialValue: tab)
+        self.tabMemory = tabMemory
+        openingTab = tabMemory.initialTab(requested: tab)
+        _tab = State(initialValue: openingTab)
         connectivity = monitor
         bluetoothOn = d.bluetoothOn
         meshReturns = d.meshReturns
@@ -153,7 +191,10 @@ public struct LokaPayHomeView: View {
         }
         // Reply events: Receive shown, these screens shown again, a local link up, the radio on, an ack
         // or a receipt newly available. Each is gated on isActive inside MeshReplySender.
-        .onChange(of: tab) { if tab == .receive { replyEvent() } }
+        .onChange(of: tab) {
+            tabMemory.save(tab)
+            if tab == .receive { replyEvent() }
+        }
         .onChange(of: isActive) {
             if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
             replyEvent()
