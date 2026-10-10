@@ -93,3 +93,23 @@ test('empty or unsorted earmarks fail before any funding', async () => {
   expect(() => new RemittanceService({ ...options, policy: { ...policy, earmarks: ['ff'.repeat(32), '00'.repeat(32)] } })).toThrow();
   expect(f.chain.sign).not.toHaveBeenCalled();
 });
+
+test('unsigned recovery refreshes an expired plan durably and fences the old worker', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  const old = (await f.store.claim('1', plan))!;
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  f.chain.quote.mockImplementation(async recovered => {
+    expect(recovered.expiry).toBe(1800003600);
+    expect((await f.store.get('1')).plan).toEqual(recovered);
+    expect(recovered.allowanceId).toBe('123'); expect(recovered.policy.capUnits).toBe('7');
+    expect(await f.store.save(await f.store.get('1'), old, { signature: 'old', rawTransaction: 'test', blockhash: 'fixture', lastValidBlockHeight: 100 })).toBe(false);
+    return { message: 'unsigned', blockhash: 'fixture', lastValidBlockHeight: 100,
+      cost: { units: recovered.policy.capUnits, funderLamports: '1', feeLamports: '1' } };
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue');
+  expect(result.statusCode).toBe(201); expect(result.body.allowanceId).toBe('123');
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.claim('1', plan)).toBeNull();
+});

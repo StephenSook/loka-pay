@@ -40,7 +40,11 @@ export class RemittanceStore {
     const { rows } = await this.db.query(`INSERT INTO remittance_jobs(namespace,recipient,plan,claim_token,lease_expires_at)
       VALUES($1,$2,$3::jsonb,$4,COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30)
       ON CONFLICT(namespace,recipient) DO UPDATE SET claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at,
-        plan=CASE WHEN remittance_jobs.result IS NULL THEN remittance_jobs.plan ELSE EXCLUDED.plan END,attempt=NULL,result=NULL
+        plan=CASE WHEN remittance_jobs.result IS NOT NULL THEN EXCLUDED.plan
+          WHEN (remittance_jobs.plan->>'expiry')::bigint<=EXCLUDED.lease_expires_at-30
+          THEN jsonb_set(remittance_jobs.plan,'{expiry}',to_jsonb(floor(EXCLUDED.lease_expires_at-30)::bigint
+            +(remittance_jobs.plan->'policy'->>'lifetimeSeconds')::bigint))
+          ELSE remittance_jobs.plan END,attempt=NULL,result=NULL
       WHERE (remittance_jobs.attempt IS NULL AND remittance_jobs.result IS NULL AND remittance_jobs.lease_expires_at<=EXCLUDED.lease_expires_at-30)
         OR (remittance_jobs.result->>'statusCode' IN ('200','201') AND (remittance_jobs.plan->>'expiry')::bigint<EXCLUDED.lease_expires_at-30)
       RETURNING recipient`, [this.namespace, recipient, JSON.stringify(plan), token, this.clock?.() ?? null]);
