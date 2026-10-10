@@ -63,7 +63,7 @@ test.describe("Built this weekend: GitHub compare summary", () => {
         commit("pravinireri", "2026-10-10T02:00:00Z"),
         commit("StephenSook", "2026-10-10T05:23:51Z"),
       ],
-      files: [{ additions: 10 }, { additions: 5 }],
+      files: [{ additions: 10, patch: "@@ -0,0 +1,10 @@" }, { additions: 5, patch: "@@ -0,0 +1,5 @@" }],
     });
     expect(s).toEqual({
       totalCommits: 3,
@@ -72,6 +72,7 @@ test.describe("Built this weekend: GitHub compare summary", () => {
       commitsWithoutLogin: 0,
       filesChanged: 2,
       filesCapped: false,
+      filesWithoutLineCount: 0,
       additions: 15,
       firstCommitMs: Date.parse("2026-10-10T00:44:26Z"),
       latestCommitMs: Date.parse("2026-10-10T05:23:51Z"),
@@ -108,8 +109,27 @@ test.describe("Built this weekend: GitHub compare summary", () => {
       expect(() => summarizeCompare(answer([{ additions: 1 }], total)), String(total)).toThrow(/unexpected shape/);
     }
     expect(() => summarizeCompare({ total_commits: 1, commits: [null], files: [] })).toThrow(/commit of an unexpected shape/);
-    // A real zero is still a measurement.
-    expect(summarizeCompare(answer([{ additions: 0 }])).additions).toBe(0);
+    // A real zero (a patch with no added lines) is still a measurement.
+    const zero = summarizeCompare(answer([{ additions: 0, patch: "@@ -1 +0,0 @@\n-gone" }]));
+    expect(zero.additions).toBe(0);
+    expect(zero.filesWithoutLineCount).toBe(0);
+  });
+
+  test("a file GitHub listed with no patch and zero additions has no line count: never summed as zero", () => {
+    // The live answer for this repository: large and binary files come back as { additions: 0 } with no patch.
+    const s = summarizeCompare({
+      total_commits: 1,
+      commits: [commit("StephenSook", "2026-10-10T01:00:00Z")],
+      files: [
+        { additions: 120, patch: "@@ -0,0 +1,120 @@" },
+        { additions: 0 },
+        { additions: 0, patch: null },
+        { additions: 7 }, // a count with no patch is still a count
+      ],
+    });
+    expect(s.filesChanged).toBe(4);
+    expect(s.filesWithoutLineCount).toBe(2);
+    expect(s.additions).toBe(127);
   });
 });
 
