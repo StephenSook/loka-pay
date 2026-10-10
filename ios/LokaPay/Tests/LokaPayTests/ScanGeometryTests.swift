@@ -105,4 +105,19 @@ struct ScanGeometryTests {
         #expect(ScanGeometry.rectOfInterest(CGRect(x: 2, y: 2, width: 1, height: 1)) == nil)
         #expect(ScanGeometry.rectOfInterest(CGRect(x: CGFloat.nan, y: 0, width: 1, height: 1)) == nil)
     }
+
+    @Test("after a usable rect, an unusable one sets the whole frame again, never the earlier rect")
+    func scanAreaAfterUnusable() {
+        let visible = CGRect(x: 0.21875, y: 0, width: 0.5625, height: 1)
+        var area = ScanArea()
+        #expect(area.rect == ScanArea.wholeFrame)
+        let unusable: [CGRect?] = [nil, .zero, CGRect(x: 0.4, y: 0.4, width: 0.1, height: 0.1),
+                                   CGRect(x: CGFloat.nan, y: 0, width: 1, height: 1)]
+        for converted in unusable {
+            area.update(converted: visible)
+            #expect(area.rect == visible)
+            area.update(converted: converted)
+            #expect(area.rect == ScanArea.wholeFrame, "converted: \(String(describing: converted))")
+        }
+    }
 }

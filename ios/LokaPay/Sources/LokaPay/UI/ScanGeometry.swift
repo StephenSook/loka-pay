@@ -78,3 +78,19 @@ public enum ScanGeometry {
         return clipped
     }
 }
+
+/// The rect of interest the scanner gives its metadata output, decided here so it is tested
+/// without a camera. Each update takes the preview's converted rect when it is usable
+/// (`ScanGeometry.rectOfInterest`) and the whole frame otherwise (no rect, or an unusable one),
+/// never the rect from before: one made for an earlier layout or camera format can leave the code
+/// outside it.
+struct ScanArea {
+    static let wholeFrame = CGRect(x: 0, y: 0, width: 1, height: 1)
+
+    /// The metadata output's own default.
+    private(set) var rect = wholeFrame
+
+    mutating func update(converted: CGRect?) {
+        rect = converted.flatMap(ScanGeometry.rectOfInterest) ?? Self.wholeFrame
+    }
+}

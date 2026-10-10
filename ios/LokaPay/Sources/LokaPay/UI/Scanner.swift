@@ -62,6 +62,7 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     private let onScan: (String) -> Void
     private let output = AVCaptureMetadataOutput()
     private var preview: AVCaptureVideoPreviewLayer?
+    private var scanArea = ScanArea()
     private var formatObserver: NSObjectProtocol?
     private var lastValue: String?
     private let label = UILabel()
@@ -204,13 +205,13 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         }
     }
 
-    /// Reads codes only inside what the preview shows, the area the person aims with. Kept at the
-    /// whole frame until the layer gives a usable rect (`ScanGeometry.rectOfInterest`).
+    /// Reads codes only inside what the preview shows, the area the person aims with. The whole
+    /// frame whenever the layer does not give a usable rect, even after it gave one (`ScanArea`).
     private func updateRectOfInterest() {
-        guard let preview, !preview.bounds.isEmpty,
-              let rect = ScanGeometry.rectOfInterest(preview.metadataOutputRectConverted(fromLayerRect: preview.bounds))
-        else { return }
-        let output = self.output
+        guard let preview else { return }
+        let converted = preview.bounds.isEmpty ? nil : preview.metadataOutputRectConverted(fromLayerRect: preview.bounds)
+        scanArea.update(converted: converted)
+        let output = self.output, rect = scanArea.rect
         queue.async { output.rectOfInterest = rect }
     }
 
