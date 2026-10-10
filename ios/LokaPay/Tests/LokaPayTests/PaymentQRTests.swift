@@ -50,6 +50,26 @@ struct PaymentQRTests {
         #expect(try Self.read(merchant).messageString == merchant)
     }
 
+    @Test("the payer's codes stay at level M: level L saves at most two versions on each")
+    func correctionLevelChoice() throws {
+        let transport = { (key: String) in try #require(Vectors.list(key)[0]["transport"] as? String) }
+        let allowance = try transport("allowances"), note = try transport("notes"), merchant = try transport("merchants")
+        #expect(PaymentQR.correctionLevel == "M")
+        // Measured from Core Image: (text, version at M, version at L).
+        let measured: [(String, Int, Int)] = [(allowance, 14, 12), (note, 13, 12), (merchant, 12, 11)]
+        for (text, atM, atL) in measured {
+            #expect(PaymentQR.version(for: text) == atM, "\(text.prefix(9)) at M")
+            #expect(PaymentQR.version(for: text, correctionLevel: "L") == atL, "\(text.prefix(9)) at L")
+            // The decoder agrees with the width-based version.
+            #expect(try Self.read(text).symbolDescriptor?.symbolVersion == atM)
+        }
+        // The rule behind M: if a payer code grows until L would save three or more versions, revisit it.
+        for text in [allowance, note] {
+            let saved = try #require(PaymentQR.version(for: text)) - #require(PaymentQR.version(for: text, correctionLevel: "L"))
+            #expect(saved <= 2, "\(text.prefix(9)) saves \(saved) versions at L")
+        }
+    }
+
     @Test("the parser accepts only the kinds the step asks for")
     func kinds() throws {
         let wire = Vectors.hex(Vectors.list("notes")[0]["wireHex"])

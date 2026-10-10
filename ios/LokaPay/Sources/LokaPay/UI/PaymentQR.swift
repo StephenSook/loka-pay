@@ -5,16 +5,27 @@ import SwiftUI
 
 /// QR codes for the camera path (task 3.70). Every code is the plain transport text
 /// `L1|P|1|<kind>|<base64url>` (PAYMENT-V1 section 5), so a scanned code goes through the same
-/// decoder and the same checks as a Bluetooth packet. Error correction level M.
+/// decoder and the same checks as a Bluetooth packet. Error correction level M: level L would draw
+/// the payer's two codes one or two versions smaller (`PaymentQRTests` measures it), modules at most
+/// about 12 percent larger on the same screen, which is not worth half of M's recovery margin.
 public enum PaymentQR {
     public static let correctionLevel = "M"
 
     /// The unscaled code (one pixel per module, with the generator's one-module margin).
-    public static func ciImage(for text: String) -> CIImage? {
+    public static func ciImage(for text: String, correctionLevel level: String = correctionLevel) -> CIImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(text.utf8)
-        filter.correctionLevel = correctionLevel
+        filter.correctionLevel = level
         return filter.outputImage
+    }
+
+    /// The QR version (1 to 40) Core Image draws for `text` at a correction level. A version-v symbol
+    /// is 17 + 4v modules wide, and the generator adds one module of margin on each side.
+    public static func version(for text: String, correctionLevel level: String = correctionLevel) -> Int? {
+        guard let width = ciImage(for: text, correctionLevel: level)?.extent.width else { return nil }
+        let modules = Int(width) - 2
+        guard modules >= 21, (modules - 17) % 4 == 0 else { return nil }
+        return (modules - 17) / 4
     }
 
     /// A crisp bitmap: each module becomes `scale` x `scale` pixels (no smoothing).
