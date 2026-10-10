@@ -47,6 +47,9 @@ public struct ReceiveView: View {
         .sensoryFeedback(.error, trigger: model.phase) { (_: ReceiveModel.Phase, new: ReceiveModel.Phase) in
             isBadNews(new)
         }
+        // Bluetooth codes are taken only while this screen is shown; others wait in the inbox.
+        .onAppear { model.startInbox() }
+        .onDisappear { model.stopInbox() }
     }
 
     private func isGoodNews(_ phase: ReceiveModel.Phase) -> Bool {
@@ -203,8 +206,12 @@ public struct ReceiveView: View {
                 connectivity: ConnectivityMonitor())
 }
 
-#Preview("Receive: ready") {
-    ReceiveView(model: .preview(.ready), connectivity: ConnectivityMonitor(), bluetoothOn: true)
+#Preview("Receive: ready, Bluetooth inbox") {
+    ReceiveView(model: .preview(.ready, bluetoothInbox: true), connectivity: ConnectivityMonitor(), bluetoothOn: true)
+}
+
+#Preview("Receive: ready, camera only") {
+    ReceiveView(model: .preview(.ready), connectivity: ConnectivityMonitor())
 }
 
 #Preview("Receive: note before allowance") {

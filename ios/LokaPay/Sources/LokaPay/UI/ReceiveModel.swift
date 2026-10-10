@@ -30,8 +30,9 @@ public struct SettledPayment: Equatable, Sendable {
 }
 
 /// The Receive screen (tasks 3.71, 3.70, 3.27, 2.1 package side). The merchant shows its own
-/// certificate as a code; the payer's allowance (A) and note (N) arrive by camera or Bluetooth in
-/// either order. A note is accepted only after PAYMENT-V1 section 6 (`SignedNote.validate`), the
+/// certificate as a code; the payer's allowance (A) and note (N) arrive in either order by camera,
+/// as pasted text, or over Bluetooth when the app supplies a `PaymentInbox` that the mesh glue
+/// feeds. A note is accepted only after PAYMENT-V1 section 6 (`SignedNote.validate`), the
 /// merchant checks (`Acceptance.check`) and the durable offline-ledger reservation
 /// (`OfflineLedger.accept`: seen serials and the offline limit). Then the merchant key signs the ACK.
 /// Settling uses the injected `SettlementClient`; Paid or Failed comes only from the verified CONF.
@@ -79,14 +80,19 @@ public final class ReceiveModel {
     private let serverPublicKey: Data?
     private let internetState: (@MainActor () -> InternetState?)?
     private let now: @Sendable () -> Date
+    private let inbox: PaymentInbox?
+    /// Inbox texts are checked one after another, in arrival order.
+    @ObservationIgnored private var inboxTail: Task<Void, Never>?
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
     ///   - settlementClient: nil when no server is connected; Settle then says so.
     ///   - internetState: the phone's current path, for the phone-reported "zero bars" stamp.
+    ///   - inbox: payer codes received over Bluetooth; nil leaves Bluetooth unmentioned.
     public init(merchantWire: Data?, signer: (any PaymentSigner)?, ledger: OfflineLedger,
                 settlementClient: SettlementClient?, deployment: Deployment, serverPublicKey: Data?,
                 internetState: (@MainActor () -> InternetState?)? = nil,
+                inbox: PaymentInbox? = nil,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.deployment = deployment
         self.signer = signer
@@ -94,6 +100,7 @@ public final class ReceiveModel {
         self.settlementClient = settlementClient
         self.serverPublicKey = serverPublicKey
         self.internetState = internetState
+        self.inbox = inbox
         self.now = now
         if let problem = setUp(merchantWire: merchantWire) { report(problem) }
     }
@@ -130,7 +137,8 @@ public final class ReceiveModel {
 
     /// What the ready card says about the payer's two codes.
     public enum ReadyStep: Equatable, Sendable {
-        case waitingForBoth
+        /// `bluetooth` is true only when the app supplied a Bluetooth inbox.
+        case waitingForBoth(bluetooth: Bool)
         /// A note checked out and waits for its allowance. Checked before `lastAllowance`, which
         /// may belong to someone else.
         case noteWaitingForAllowance
@@ -138,8 +146,9 @@ public final class ReceiveModel {
 
         public var text: String {
             switch self {
-            case .waitingForBoth:
-                return "Waiting for the payer's allowance (code 1 of 2) and payment note (code 2 of 2), by camera."
+            case .waitingForBoth(let bluetooth):
+                return "Waiting for the payer's allowance (code 1 of 2) and payment note (code 2 of 2), by "
+                    + (bluetooth ? "camera or Bluetooth." : "camera.")
             case .noteWaitingForAllowance:
                 return "Payment note checked. Waiting for its allowance (code 1 of 2)."
             case .allowanceVerified(let id):
@@ -152,10 +161,41 @@ public final class ReceiveModel {
     public var readyStep: ReadyStep {
         if waitingNote != nil { return .noteWaitingForAllowance }
         if let allowance = lastAllowance { return .allowanceVerified(allowanceId: allowance.allowanceId) }
-        return .waitingForBoth
+        return .waitingForBoth(bluetooth: receivesOverBluetooth)
     }
 
     // MARK: - Incoming codes
+
+    /// True when the app supplied a Bluetooth inbox (`LokaPayDependencies.meshInbox`).
+    public var receivesOverBluetooth: Bool { inbox != nil }
+
+    /// Takes payer codes from the Bluetooth inbox, held ones first. ReceiveView calls this while it
+    /// is shown, so a code that lands on another tab waits in the inbox and is never accepted unseen.
+    public func startInbox() {
+        inbox?.attach(self) { [weak self] text in
+            guard let self else { return false }
+            self.enqueueFromInbox(text)
+            return true
+        }
+    }
+
+    /// Stops taking inbox texts (a newer Receive model that already attached keeps the inbox).
+    public func stopInbox() {
+        inbox?.detach(self)
+    }
+
+    private func enqueueFromInbox(_ text: String) {
+        let previous = inboxTail
+        inboxTail = Task { [weak self] in
+            await previous?.value
+            await self?.accept(text: text)
+        }
+    }
+
+    /// Waits until every inbox text handed over so far has been checked (for tests).
+    func inboxDrained() async {
+        await inboxTail?.value
+    }
 
     /// Scanned or received `L1|P|1|A|...` or `L1|P|1|N|...`. Nothing is dropped silently: an
     /// allowance is always kept, and a note that arrives during another payment is refused by name.
@@ -384,12 +424,13 @@ extension ReceiveModel {
     /// PREVIEW ONLY: places a model built from test vectors into one state for the Xcode canvas.
     static func preview(_ phase: Phase, payment: ReceivedPayment? = nil, settlement: SettledPayment? = nil,
                         pending: PendingSettlement? = nil, issue: MoneyIssueKind? = nil, conflict: Bool = false,
-                        unsettled: UInt64? = nil, waitingNote: SignedNote? = nil,
+                        unsettled: UInt64? = nil, waitingNote: SignedNote? = nil, bluetoothInbox: Bool = false,
                         serverKey: Data? = PreviewFixtures.serverKey) -> ReceiveModel {
         let model = ReceiveModel(merchantWire: PreviewFixtures.merchantWire, signer: PreviewFixtures.merchantSigner,
                                  ledger: OfflineLedger(url: PreviewFixtures.scratchURL("preview-ledger.json")),
                                  settlementClient: nil, deployment: PreviewFixtures.deployment,
-                                 serverPublicKey: serverKey, now: { PreviewFixtures.now })
+                                 serverPublicKey: serverKey, inbox: bluetoothInbox ? PaymentInbox() : nil,
+                                 now: { PreviewFixtures.now })
         guard model.phase != .unavailable else { return model }
         model.phase = phase
         model.payment = payment

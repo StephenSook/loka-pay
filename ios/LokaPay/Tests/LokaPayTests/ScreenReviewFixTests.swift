@@ -91,7 +91,7 @@ struct ReceiveTwoPayersTests {
     @Test("two payers in a row: Next payment drops the first allowance; each payer's numbers are their own")
     func twoPayersInARow() async throws {
         let model = makeModel(OfflineLedger(url: F.tempURL("ledger.json")))
-        #expect(model.readyStep == .waitingForBoth)
+        #expect(model.readyStep == .waitingForBoth(bluetooth: false))
 
         // Payer A pays 1.00 against allowance 77.
         await model.accept(text: text(.allowance, allowanceA))
@@ -115,7 +115,7 @@ struct ReceiveTwoPayersTests {
         #expect(model.unsettledTotal == nil)
         #expect(model.unsettledAllowanceId == nil)
         #expect(model.limitState == nil)
-        #expect(model.readyStep == .waitingForBoth)
+        #expect(model.readyStep == .waitingForBoth(bluetooth: false))
 
         // Payer B's note uses the kept certificate, and every figure is B's.
         let noteB = try F.note(payer: payerB, payee: merchant.keyHash, amount: 1_700_000, serial: 0, allowanceId: 88)
@@ -207,5 +207,122 @@ struct UnreadableLedgerTests {
         await model.accept(text: PaymentTransport.encode(.note, note.wire))
         #expect(model.issue?.kind == .payment(.storage))
         #expect(model.phase == .ready)
+    }
+}
+
+@Suite("Bluetooth codes reach Receive through the mesh inbox (review 1, finding 3)")
+@MainActor
+struct MeshInboxTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+    let merchantWire: Data
+
+    init() { merchantWire = F.merchantWire(merchant: merchant.keyHash) }
+
+    func makeModel(inbox: PaymentInbox?, ledger: OfflineLedger = OfflineLedger(url: F.tempURL("ledger.json"))) -> ReceiveModel {
+        ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: ledger, settlementClient: nil,
+                     deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+    }
+
+    var allowanceText: String { PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)) }
+
+    func noteText(serial: UInt8 = 0) throws -> (SignedNote, String) {
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: serial)
+        return (note, PaymentTransport.encode(.note, note.wire))
+    }
+
+    @Test("with an inbox the card says camera or Bluetooth, and inbox texts are checked like scans")
+    func inboxCarriesAPayment() async throws {
+        let inbox = PaymentInbox()
+        let model = makeModel(inbox: inbox)
+        #expect(model.receivesOverBluetooth)
+        #expect(model.readyStep == .waitingForBoth(bluetooth: true))
+        #expect(model.readyStep.text.hasSuffix("by camera or Bluetooth."))
+
+        // The note lands before the screen is shown: it is held, not accepted unseen.
+        let (note, text) = try noteText()
+        inbox.deliver(text)
+        #expect(inbox.held == [text])
+        #expect(model.phase == .ready)
+        #expect(model.waitingNote == nil)
+
+        model.startInbox()
+        #expect(inbox.isAttached)
+        #expect(inbox.held.isEmpty)
+        inbox.deliver(allowanceText)
+        await model.inboxDrained()
+        #expect(model.phase == .received)
+        #expect(model.payment?.note == note)
+        let ack = try #require(model.payment?.ack)
+        #expect(try Ack.verify(wire: ack.wire, for: note).noteId == note.noteId)
+
+        // Text that is not a payment code is refused by name, as from the camera.
+        model.nextPayment()
+        inbox.deliver("hello over Bluetooth")
+        await model.inboxDrained()
+        #expect(model.issue?.kind == .notPaymentCode)
+    }
+
+    @Test("without an inbox Receive is camera only and never mentions Bluetooth")
+    func noInbox() {
+        let model = makeModel(inbox: nil)
+        #expect(!model.receivesOverBluetooth)
+        #expect(model.readyStep == .waitingForBoth(bluetooth: false))
+        #expect(model.readyStep.text.hasSuffix("by camera."))
+        #expect(!model.readyStep.text.contains("Bluetooth"))
+        model.startInbox()
+        model.stopInbox()
+    }
+
+    @Test("a stopped screen holds texts again; a rebuilt model takes over and the old one cannot detach it")
+    func attachAndDetach() async throws {
+        let inbox = PaymentInbox()
+        let allowance = allowanceText
+        let old = makeModel(inbox: inbox)
+        old.startInbox()
+        old.stopInbox()
+        #expect(!inbox.isAttached)
+        inbox.deliver(allowance)
+        #expect(inbox.held == [allowance])
+
+        // The old screen shows again and takes the held allowance.
+        old.startInbox()
+        await old.inboxDrained()
+        #expect(old.lastAllowance?.allowanceId == F.allowanceId)
+
+        // A rebuilt screen appears, then the old one's late onDisappear must not detach it.
+        let fresh = makeModel(inbox: inbox)
+        fresh.startInbox()
+        old.stopInbox()
+        #expect(inbox.isAttached)
+        let (note, text) = try noteText()
+        inbox.deliver(allowance)
+        inbox.deliver(text)
+        await fresh.inboxDrained()
+        #expect(fresh.payment?.note == note)
+        #expect(old.payment == nil)
+        #expect(old.waitingNote == nil)
+    }
+
+    @Test("a model that is gone hands texts back to the inbox instead of dropping them")
+    func goneModel() throws {
+        let inbox = PaymentInbox()
+        do {
+            let model = makeModel(inbox: inbox)
+            model.startInbox()
+        }
+        let allowance = allowanceText
+        inbox.deliver(allowance)
+        #expect(!inbox.isAttached)
+        #expect(inbox.held == [allowance])
+    }
+
+    @Test("held texts are bounded and every drop is counted")
+    func bounded() {
+        let inbox = PaymentInbox()
+        for i in 0...PaymentInbox.capacity { inbox.deliver("text \(i)") }
+        #expect(inbox.held.count == PaymentInbox.capacity)
+        #expect(inbox.held.first == "text 1")
+        #expect(inbox.droppedWhileDetached == 1)
     }
 }

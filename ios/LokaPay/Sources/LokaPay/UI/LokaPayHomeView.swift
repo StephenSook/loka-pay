@@ -21,13 +21,18 @@ public struct LokaPayDependencies {
     public var connectivity: ConnectivityMonitor
     /// Bluetooth glue: sends one transport text over the LOKA mesh. nil hides the Bluetooth button.
     public var meshSend: (@MainActor (String) -> Void)?
+    /// Bluetooth glue, inbound: the LokaMesh glue calls `meshInbox.deliver(text)` with each
+    /// `L1|P|1|...` text it receives, and Receive checks it like a scanned code. nil keeps Receive
+    /// camera only (it then does not mention Bluetooth). Keep one inbox for the app's lifetime.
+    public var meshInbox: PaymentInbox?
     /// The mesh layer's Bluetooth state for the zero-bars meter; nil leaves Bluetooth unmentioned.
     public var bluetoothOn: Bool?
 
     public init(deployment: Deployment, serverPublicKey: Data?, signer: (any PaymentSigner)?,
                 allowanceWire: Data?, merchantWire: Data?, serials: SerialReservations, ledger: OfflineLedger,
                 settlementClient: SettlementClient?, connectivity: ConnectivityMonitor,
-                meshSend: (@MainActor (String) -> Void)? = nil, bluetoothOn: Bool? = nil) {
+                meshSend: (@MainActor (String) -> Void)? = nil, meshInbox: PaymentInbox? = nil,
+                bluetoothOn: Bool? = nil) {
         self.deployment = deployment
         self.serverPublicKey = serverPublicKey
         self.signer = signer
@@ -38,6 +43,7 @@ public struct LokaPayDependencies {
         self.settlementClient = settlementClient
         self.connectivity = connectivity
         self.meshSend = meshSend
+        self.meshInbox = meshInbox
         self.bluetoothOn = bluetoothOn
     }
 }
@@ -67,7 +73,8 @@ public struct LokaPayHomeView: View {
         _receiveModel = State(wrappedValue: ReceiveModel(merchantWire: d.merchantWire, signer: d.signer, ledger: d.ledger,
                                                          settlementClient: d.settlementClient, deployment: d.deployment,
                                                          serverPublicKey: d.serverPublicKey,
-                                                         internetState: { monitor.isRunning ? monitor.state : nil }))
+                                                         internetState: { monitor.isRunning ? monitor.state : nil },
+                                                         inbox: d.meshInbox))
         _tab = State(initialValue: tab)
         connectivity = monitor
         bluetoothOn = d.bluetoothOn
