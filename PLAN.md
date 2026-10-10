@@ -341,6 +341,8 @@ One owner per module; cross-module changes go by PR, reviewed by that owner. If 
 
 ## Shared Contracts
 
+⚠️ CONTRACT: A repost with matching retryOf may atomically take over its existing unsigned registration retry after the 30 second claim lease. The parent signature must match, the ownership token changes, and the original retry plan and consumed explicit retry count remain unchanged. A mismatched retryOf or a saved attempt cannot use this takeover.
+
 ⚠️ CONTRACT: GET recovery of an accepted unsigned note preserves its journal row when fee admission is denied or uncertain, and returns HTTP 202 pending with no signature. It never releases that accepted row as a budget refusal; the next GET can recover after its claim lease and budget reset, retaining the original note, ACK and upload time. Initial unsigned POST budget refusal still returns HTTP 429 and releases its new claim.
 
 ⚠️ CONTRACT: Registration resolves saved attempt history before a current replacement failure or collision, and before admitting an explicit retryOf repost. A verified prior success completes with its original plan and signature and can supersede a cached replacement 409; a found prior signature without final metadata stays pending. Result writes still compare the current saved signature to fence stale workers.
