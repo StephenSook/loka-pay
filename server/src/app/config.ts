@@ -13,6 +13,7 @@ export interface ShellConfig {
   teamKeys: string[]; policies: Record<PoolName, Policy>;
   /** Most lamports the note fee payer spends on settlement fees per UTC day (PR #19 fee admission). */
   noteFeeDailyLamports: string;
+  canaryKeyHashes: string[];
 }
 
 const DEFAULT_PINS = new URL('../../../config/pins.json', import.meta.url);
@@ -83,5 +84,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ShellConfig {
     teamKeys: list(env.TEAM_KEY_HASHES, ''),
     policies: policiesFrom(env),
     noteFeeDailyLamports: units(env, 'NOTE_DAILY_FEE_LAMPORTS', '200000000'),
+    canaryKeyHashes: list(env.CANARY_KEY_HASHES, ''),
   };
 }

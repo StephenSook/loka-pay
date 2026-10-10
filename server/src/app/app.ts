@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import * as P from '@lokapay/protocol';
 import type { Database } from '../settle/store.js';
 import { installSettlement } from '../settle/index.js';
+import { installEvents } from '../events/index.js';
 import { installRegistration, validateRegistrationPins, type Wallets, type Policy, type PoolName } from '../remit/index.js';
 import type { ShellPins } from './config.js';
 
@@ -12,6 +13,10 @@ export interface ShellOptions {
   database: Database; connection: Connection; pins: ShellPins; wallets: Wallets; certificateSeed: Uint8Array;
   teamKeys: string[]; policies: Record<PoolName, Policy>; noteFeeDailyLamports: string; commit: string; origins: string[];
   trustProxy?: string[]; logger?: FastifyServerOptions['logger'];
+  /** Payer key hashes whose payments are tagged `canary` and left out of /api/stats by default. */
+  canaryKeyHashes?: string[];
+  /** Event projection interval for /live; tests shorten it. */
+  eventIntervalMs?: number;
   /** Requests per client per minute before the burst guard answers 429. */
   burstLimit?: number;
 }
@@ -91,5 +96,8 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
   // database as pg.Pool but only calls query(), which PGlite in tests also provides.
   await installSettlement({ app, database: options.database as unknown as Pool, connection: options.connection, deployment,
     feePayer: options.wallets.team.feePayer, feeBudget: { dailyLamports: options.noteFeeDailyLamports }, signConfirmation: fields => P.signConfWire(fields, seed) });
+  // Task 2.10: reads the settlement journal written above.
+  await installEvents({ app, database: options.database, deployment, canaryKeyHashes: options.canaryKeyHashes,
+    intervalMs: options.eventIntervalMs });
   return app;
 }
