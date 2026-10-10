@@ -8,9 +8,39 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T08:33:00+00:00"
+    "updated_at": "2026-10-10T17:45:00+00:00"
   },
   "facts": {
+    "zero_bar_payments_settled": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats?run=EXP-PAY-001 (its first field): payments made with zero bars in the task 3.6 session that settled on Solana, each with an explorer link; deliberate cheats, canary, ci and load_test rows excluded. The headline numerator (0B.3)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "zero_bar_payments_tried": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 3.6: every payment tried with zero bars, failures included (the server cannot see a try that never reached the merchant). The headline denominator (0B.3)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
     "ble_direct_hop_seconds_median": {
       "value": null,
       "unit": "s",
@@ -281,16 +311,57 @@
       ]
     },
     "fee_per_redeem_lamports": {
-      "value": null,
+      "value": 10000,
       "unit": "lamports",
       "kind": "measured",
-      "status": "pending",
-      "source": "meta.fee of the same 20 devnet redeems in measurements/redeem.json, task 3.50; each must equal 5,000 lamports x signatures (the secp256r1 signature counts) + any priority fee; GET /api/volume recomputes it",
-      "as_of": null,
+      "status": "measured",
+      "source": "meta.fee of every redeem_note transaction on devnet so far (2 of 2, read with getTransaction): 5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa (settled) and 2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv (the refused cheat; a failed transaction still pays its fee). Each has 1 transaction signature, so 10,000 = 2 x 5,000: the phone signature checked by the secp256r1 precompile is charged like a transaction signature. Task 3.50 extends this to its 20-redeem run in measurements/redeem.json",
+      "as_of": "2026-10-10T17:45:00+00:00",
       "surfaces": [
         "/proof",
         "slides"
-      ]
+      ],
+      "display": "10,000 lamports"
+    },
+    "solana_base_fee_lamports_per_signature": {
+      "value": 5000,
+      "unit": "lamports",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "Solana docs https://solana.com/docs/core/fees: \"Base fee per signature | 5,000 lamports\", split 50% burned and 50% to the validator",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "/proof",
+        "slides",
+        "Devpost"
+      ],
+      "display": "5,000 lamports"
+    },
+    "sol_usd_price_snapshot": {
+      "value": 110.01,
+      "unit": "USD per SOL",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "CoinGecko https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true, last_updated_at 2026-10-10T17:41:42Z (mainnet SOL; devnet SOL has no value)",
+      "as_of": "2026-10-10T17:41:42+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "$110.01"
+    },
+    "redeem_fee_usd_estimate": {
+      "value": 0.0011001,
+      "unit": "USD",
+      "kind": "computed",
+      "status": "computed",
+      "source": "ESTIMATE: fee_per_redeem_lamports (10,000) / 1,000,000,000 x sol_usd_price_snapshot (110.01) = 0.0011001. Prices the devnet fee at the mainnet SOL price at that time; priority fees not included; our server pays it, not the merchant",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "about $0.0011 (about a tenth of a cent)"
     },
     "p256_verifies_per_second_vps_noble": {
       "value": null,
@@ -658,19 +729,75 @@
       "display": "$22.13 billion"
     },
     "senegal_mobile_money_adults_pct_2021": {
-      "value": null,
+      "value": 44.8898717927942,
       "unit": "% of adults",
       "kind": "sourced",
-      "status": "pending",
-      "source": "GSMA Senegal brief; re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d \"Mobile money account (% age 15+)\", Senegal 2021: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:05:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "45%"
+    },
+    "senegal_mobile_money_adults_pct_2024": {
+      "value": 66.912648954156,
+      "unit": "% of adults",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d \"Mobile money account (% age 15+)\", Senegal 2024, the latest survey year: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:05:00+00:00",
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ],
+      "display": "67%"
+    },
+    "senegal_rural_mobile_money_adults_pct_2024": {
+      "value": 61.753023168443,
+      "unit": "% of rural adults",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d.9 \"Mobile money account, rural (% age 15+)\", Senegal 2024: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d.9?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:40:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "62%"
+    },
+    "wave_send_fee_pct": {
+      "value": 1,
+      "unit": "% of the amount sent",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "Wave home page https://www.wave.com/en/: \"Send for only 1%.\" and \"Deposit & withdraw money for FREE\"; no merchant fee is published there",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "1%"
+    },
+    "senegal_remittance_cost_pct_2023": {
+      "value": 0.72,
+      "unit": "% of the amount sent",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank API https://api.worldbank.org/v2/country/SEN/indicator/SI.RMT.COST.IB.ZS?format=json (Average transaction cost of sending remittances to a specific country (%), Senegal 2023; 2021 was 3.61; dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T17:45:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "0.72%"
     },
     "senegal_adults_15plus_2025": {
       "value": 11786511,
@@ -685,19 +812,20 @@
       "display": "11.8 million"
     },
     "people_count_estimate": {
-      "value": null,
+      "value": 7886667,
       "unit": "people",
       "kind": "computed",
-      "status": "pending",
-      "source": "ESTIMATE: senegal_adults_15plus_2025 x senegal_mobile_money_adults_pct_2021, task 0.10; Senegalese adults with mobile money",
-      "as_of": null,
+      "status": "computed",
+      "source": "ESTIMATE: senegal_adults_15plus_2025 (11,786,511) x senegal_mobile_money_adults_pct_2024 (66.912648954156%) = 7,886,666.7, rounded; Senegalese adults with a mobile money account, task 0.10. Two survey years apart (2025 population, 2024 Findex survey)",
+      "as_of": "2026-10-10T17:05:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "about 7.9 million"
     },
     "helene_grocer_stores_cash_only": {
       "value": null,
