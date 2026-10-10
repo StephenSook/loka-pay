@@ -589,10 +589,11 @@ struct MeshPaymentTests {
         while let next = timers.pending { next.fire() }
         #expect(retries == 6)
 
-        // A new payment (presentation 2) starts fresh.
-        failing = ["2|Y"]
+        // A new payment (presentation 2) starts fresh, even for a reply key it shares with the last one.
+        failing = ["1|Y"]
         pass(2)
         #expect(timers.pending?.delay == 5)
+        #expect(retry.attempts == ["1|Y": 1])
     }
 
     @Test("hiding the screens stops the timer; a stale presentation or a success never retries")
