@@ -19,6 +19,9 @@ public struct URLSessionTransport: HTTPTransport {
 
     let session: URLSession
     let maxResponseBytes: Int
+    /// Sleeps out the deadline. Tests wrap it to see what deadline was asked for and when it
+    /// fired, so they can time the transport's own reaction apart from the host's scheduling.
+    var clock = SettlementClock.system
 
     public init(session: URLSession? = nil, maxResponseBytes: Int = URLSessionTransport.defaultMaxResponseBytes) {
         self.maxResponseBytes = maxResponseBytes
@@ -41,7 +44,7 @@ public struct URLSessionTransport: HTTPTransport {
         return try await withThrowingTaskGroup(of: (Data, HTTPURLResponse).self) { group in
             group.addTask { try await self.receive(request) }
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                try await self.clock.sleep(limit)
                 throw URLError(.timedOut)
             }
             // Whichever finishes first wins; the other is cancelled (a cancelled download stops).
