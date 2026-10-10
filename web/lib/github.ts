@@ -76,11 +76,21 @@ interface CompareCommit {
   commit: { author: { date?: unknown } | null };
 }
 
-/** Reduces a compare answer to the panel's numbers. Throws GitHubError on an unexpected shape. */
+/** A count GitHub reports: a non-negative safe integer, never a fraction, a negative or a missing value. */
+const isCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+/**
+ * Reduces a compare answer to the panel's numbers. Throws GitHubError on an unexpected shape,
+ * including any file record without a count of added lines: a missing measurement is never
+ * counted as zero.
+ */
 export function summarizeCompare(body: unknown): BuiltThisWeekend {
   const b = body as { total_commits?: unknown; commits?: unknown; files?: unknown } | null;
-  if (!b || typeof b.total_commits !== "number" || !Array.isArray(b.commits) || !Array.isArray(b.files)) {
+  if (!b || !isCount(b.total_commits) || !Array.isArray(b.commits) || !Array.isArray(b.files)) {
     throw new GitHubError("GitHub's compare answer had an unexpected shape");
+  }
+  if (!b.commits.every((c) => typeof c === "object" && c !== null)) {
+    throw new GitHubError("GitHub's compare answer listed a commit of an unexpected shape");
   }
   const commits = b.commits as CompareCommit[];
   const logins = new Set<string>();
@@ -94,9 +104,15 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
     const ms = typeof date === "string" ? Date.parse(date) : NaN;
     if (!Number.isNaN(ms)) times.push(ms);
   }
-  const files = b.files as Array<{ additions?: unknown }>;
+  const files = b.files as Array<{ additions?: unknown } | null>;
   let additions = 0;
-  for (const f of files) if (typeof f?.additions === "number") additions += f.additions;
+  for (const f of files) {
+    if (typeof f !== "object" || f === null || !isCount(f.additions)) {
+      throw new GitHubError("GitHub's compare answer listed a file without a count of added lines");
+    }
+    additions += f.additions;
+  }
+  if (!Number.isSafeInteger(additions)) throw new GitHubError("GitHub's compare answer added up to more lines than this page can count");
   // When GitHub cuts the commit list short, the listed commits are not the whole range,
   // so the earliest and latest listed times are not shown as the first and latest.
   const complete = commits.length === b.total_commits && times.length === commits.length;

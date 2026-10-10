@@ -96,6 +96,21 @@ test.describe("Built this weekend: GitHub compare summary", () => {
     expect(() => summarizeCompare({ message: "API rate limit exceeded" })).toThrow(/unexpected shape/);
     expect(() => summarizeCompare(null)).toThrow();
   });
+
+  test("a file record without a count of added lines is refused, never counted as zero", () => {
+    const answer = (files: unknown[], total: unknown = 1) => ({ total_commits: total, commits: [commit("StephenSook", "2026-10-10T01:00:00Z")], files });
+    for (const files of [[{}], [{ additions: 10 }, {}], [{ additions: "10" }], [{ additions: -1 }], [{ additions: 1.5 }], [null], [{ additions: Number.NaN }]]) {
+      expect(() => summarizeCompare(answer(files)), JSON.stringify(files)).toThrow(GitHubError);
+    }
+    expect(() => summarizeCompare(answer([{ additions: Number.MAX_SAFE_INTEGER }, { additions: 1 }]))).toThrow(/more lines than this page can count/);
+    // Counts must be whole and non-negative too.
+    for (const total of [-1, 2.5, "3", Number.POSITIVE_INFINITY]) {
+      expect(() => summarizeCompare(answer([{ additions: 1 }], total)), String(total)).toThrow(/unexpected shape/);
+    }
+    expect(() => summarizeCompare({ total_commits: 1, commits: [null], files: [] })).toThrow(/commit of an unexpected shape/);
+    // A real zero is still a measurement.
+    expect(summarizeCompare(answer([{ additions: 0 }])).additions).toBe(0);
+  });
 });
 
 // Local servers on 127.0.0.1 (TEST FIXTURES) stand in for api.github.com.
