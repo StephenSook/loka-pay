@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   description: "LOKA Pay privacy policy: no sign-up, no login, no profile.",
 };
 
-const UPDATED = "2026-10-09";
+const UPDATED = "2026-10-10";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -62,7 +62,18 @@ export default function PrivacyPage() {
       <Section title="This website">
         <p>
           This website sets no cookies and runs no analytics or tracking. Its fonts are served from
-          this site&apos;s own address, so loading a page makes no request to any other website.
+          this site&apos;s own address.
+        </p>
+        <p>
+          Two pages make your browser contact another website, and only to show public data: /live
+          connects to Solana&apos;s public devnet server (api.devnet.solana.com) to read the
+          program&apos;s transactions, and /judge shows workflow status badges loaded from
+          github.com. Those sites see your browser&apos;s request, as any website does; this site
+          sends them nothing about you. Every other page makes no request to any other website.
+        </p>
+        <p>
+          The /judge, /proof and /trust pages read public data from Solana devnet and GitHub on our
+          server, not from your browser, and those reads carry nothing about you.
         </p>
         <p>
           It is hosted on Vercel. We have not turned on Vercel Web Analytics or Speed Insights.
