@@ -304,6 +304,7 @@ internal fun LokaApp(state: LabState, model: LabViewModel, start: () -> Unit,
                 profilePage == "Background messaging" -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) { BackgroundBatteryCard() }
                 profilePage == "Local connection" -> NearbyScreen(state, model, start, { addFriend = true }, { tools = true })
                 profilePage == "Community sharing" -> CommunitySharingScreen(saved = { profilePage = "" })
+                profilePage == "Pay (sandbox)" -> PayScreen()
                 profilePage == "My LOKA" -> ContactCodeScreen(state, model,
                     { openCamera() },
                     { scan.launch("image/*") }, { addFriend = true })
@@ -1001,6 +1002,8 @@ private fun ProfileScreen(state: LabState, model: LabViewModel, open: (String) -
                 SettingsRow("nearby", "Router-free Wi-Fi", "Phone-to-phone messaging. No Internet needed.", { open("Router-free Wi-Fi") })
                 SettingsDivider()
                 SettingsRow("nearby", "Background messaging", "Keep messages arriving when you leave LOKA", { open("Background messaging") })
+                SettingsDivider()
+                SettingsRow("lock", "Pay (sandbox)", "Sign a devnet note with this phone's Keystore key", { open("Pay (sandbox)") })
                 SettingsDivider()
                 SettingsRow("info", "Help & app info", "Getting started and about LOKA", { open("Help & app info") })
             }

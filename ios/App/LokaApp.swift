@@ -334,6 +334,8 @@ struct LokaRootView: View {
     @State private var selectedTab = 0
     @State private var gameInvitation = false
     @State private var partyInvitation = false
+    /// The games, reached from the Pay tab (tag 3) through its Offline corner link.
+    @State private var showOfflineCorner = false
     @State private var hideTabs = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     init(contacts: ContactStore, chat: ChatStore) {
@@ -347,7 +349,11 @@ struct LokaRootView: View {
         TabView(selection:$selectedTab) {
             ChatsWorkspace().environment(\.lokaTabActive, selectedTab == 0).tag(0).toolbar(.hidden,for:.tabBar)
             NavigationStack { ChatsView(nearbyOnly: true) }.environment(\.lokaTabActive, selectedTab == 2).tag(2).toolbar(.hidden,for:.tabBar)
-            NavigationStack { LokaPlayShelf(chat: chat, contacts: contacts) }.environment(\.lokaTabActive, selectedTab == 3).tag(3).toolbar(.hidden,for:.tabBar)
+            NavigationStack {
+                LokaPayTab(store: .shared, showOfflineCorner: $showOfflineCorner) {
+                    LokaPlayShelf(chat: chat, contacts: contacts).environment(\.lokaTabActive, selectedTab == 3 && showOfflineCorner)
+                }
+            }.environment(\.lokaTabActive, selectedTab == 3).tag(3).toolbar(.hidden,for:.tabBar)
             NavigationStack { SettingsView().frame(maxWidth:720).frame(maxWidth:.infinity) }.environment(\.lokaTabActive, selectedTab == 1).tag(1).toolbar(.hidden,for:.tabBar)
         }.toolbar(.hidden,for:.tabBar)
         }
@@ -363,14 +369,14 @@ struct LokaRootView: View {
         .environmentObject(contacts)
         .environmentObject(chat)
         .task { chat.link.resume() }
-        .onChange(of: chat.partySession?.phase) { _, phase in if phase == "invited", selectedTab != 3 { partyInvitation = true } }
+        .onChange(of: chat.partySession?.phase) { _, phase in if phase == "invited", !(selectedTab == 3 && showOfflineCorner) { partyInvitation = true } }
         .alert("Party cards invitation", isPresented: $partyInvitation) {
-            Button("View invitation") { selectedTab = 3 }
+            Button("View invitation") { selectedTab = 3; showOfflineCorner = true }
             Button("Decline", role: .cancel) { chat.endCards() }
         } message: { Text("Someone nearby invited you to play. View the game and its settings before joining.") }
-        .onChange(of: chat.quizSession?.phase) { _, phase in if phase == "invited", selectedTab != 3 { gameInvitation = true } }
+        .onChange(of: chat.quizSession?.phase) { _, phase in if phase == "invited", !(selectedTab == 3 && showOfflineCorner) { gameInvitation = true } }
         .alert("Quick Quiz invitation", isPresented: $gameInvitation) {
-            Button("Accept and play") { selectedTab = 3; chat.acceptQuiz() }
+            Button("Accept and play") { selectedTab = 3; showOfflineCorner = true; chat.acceptQuiz() }
             Button("Decline", role: .cancel) { chat.endQuiz() }
         } message: { Text("A verified friend invited you to an untimed quiz.") }
         .onChange(of: chat.openFriend) { _, id in if id != nil { selectedTab = 0 } }
@@ -1127,7 +1133,7 @@ private struct LokaBottomTabs: View {
     @Binding var selection: Int
     @Namespace private var indicator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let tabs = [(0, "Chats", "bubble.left"), (2, "Nearby", "person.2"), (3, "Play", "gamecontroller"), (1, "You", "person")]
+    private let tabs = [(0, "Chats", "bubble.left"), (2, "Nearby", "person.2"), (3, "Pay", "wallet.bifold"), (1, "You", "person")]
     var body: some View {
         HStack(spacing: 0) {
             ForEach(tabs, id: \.0) { tab in

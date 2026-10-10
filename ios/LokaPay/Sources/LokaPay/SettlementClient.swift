@@ -156,6 +156,35 @@ extension SettlementError {
         .timedOut, .networkConnectionLost, .notConnectedToInternet,
         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
+
+    /// True when a note upload or read got no answer this phone can trust: the request may have
+    /// reached the server, which may have settled the note before the answer was lost (or sent one
+    /// that did not verify). Only a verified CONF says what happened, so the note stays reserved and
+    /// the screen offers Check again (`GET /v1/notes/{noteId}`). False for the answers API v1
+    /// defines as reaching no decision for this request: a 422 refusal, the 400 errors,
+    /// `unknown_note`, the 429s and `chain_unavailable` (nothing was signed), and for `stillPending`
+    /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` speaks for earlier uploads.
+    public var leavesOutcomeUnknown: Bool {
+        switch self {
+        case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
+             .payerMismatch, .merchantMismatch, .protocolViolation:
+            return true
+        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
+             .budgetExhausted, .chainUnavailable, .stillPending:
+            return false
+        }
+    }
+
+    /// True for an answer about the note id itself that settles what an earlier lost answer left
+    /// open: only `unknown_note` from the note-id lookup (the server never attempted this note id).
+    /// A verified CONF and a 202 also settle it; they are not errors. Everything else describes only
+    /// the latest request: a 422 is unsigned, remembered by nobody and binds nothing (API-V1
+    /// section 1), so it says nothing about an earlier upload, and nor do the 400s, the 429s or
+    /// `chain_unavailable`.
+    public var resolvesUnknownOutcome: Bool {
+        if case .unknownNote = self { return true }
+        return false
+    }
 }
 
 /// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`.

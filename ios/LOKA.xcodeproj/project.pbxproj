@@ -61,6 +61,7 @@ A00000000000000000000047 = {isa = PBXBuildFile; fileRef = A000000000000000000000
 A00000000000000000000049 = {isa = PBXBuildFile; fileRef = A00000000000000000000048; };
 		D00000000000000000000003 /* LokaPay in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000002 /* LokaPay */; };
 		D00000000000000000000006 /* App/LokaPayBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* App/LokaPayBridge.swift */; };
+		D00000000000000000000008 /* pins.json in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000007 /* pins.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -95,6 +96,7 @@ A00000000000000000000046 = {isa = PBXFileReference; lastKnownFileType = sourceco
 A00000000000000000000048 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core/ChatMessage.swift; sourceTree = "<group>"; };
 		D00000000000000000000001 /* LokaPay */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = LokaPay; sourceTree = "<group>"; };
 		D00000000000000000000005 /* App/LokaPayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/LokaPayBridge.swift; sourceTree = "<group>"; };
+		D00000000000000000000007 /* pins.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = pins.json; path = "../config/pins.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -133,6 +135,7 @@ A00000000000000000000040,
 				A00000000000000000000006 /* App/LokaApp.swift */,
 				D00000000000000000000005 /* App/LokaPayBridge.swift */,
 				D00000000000000000000001 /* LokaPay */,
+				D00000000000000000000007 /* pins.json */,
 				A00000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -206,7 +209,7 @@ A00000000000000000000040,
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
- A00000000000000000000063 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000076, A00000000000000000000061, A00000000000000000000064, A00000000000000000000066,); runOnlyForDeploymentPostprocessing = 0; };
+ A00000000000000000000063 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000076, A00000000000000000000061, A00000000000000000000064, A00000000000000000000066, D00000000000000000000008,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -275,7 +278,7 @@ A00000000000000000000060,
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LOKA Pay";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and scan contact codes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and to scan contact codes and sandbox payment codes.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "LOKA uses Bluetooth to connect to nearby LOKA devices without Internet.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -303,7 +306,7 @@ A00000000000000000000060,
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LOKA Pay";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and scan contact codes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and to scan contact codes and sandbox payment codes.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "LOKA uses Bluetooth to connect to nearby LOKA devices without Internet.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
