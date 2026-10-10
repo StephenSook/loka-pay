@@ -1,0 +1,23 @@
+{
+  "cluster": "devnet",
+  "programId": "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG",
+  "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "serverEd25519PublicKey": null,
+  "settlementNodeFingerprint": null,
+  "upgradeAuthority": "4RaquyuY9zseQTP5cTBoh8bmvMRvUyJzaHeMqKcbSksS",
+  "accounts": {
+    "config": "BJwtFZHH5sieHV4doCyWwYgrdgrJt5H29Bft1z9ZAMu9",
+    "vault": "8kkCLgL1L4pHCdU5A4YGzYaumTvLBJWytL17S3EJ9XyU",
+    "vaultUsdcAccount": "4oXuRDG3KixQpMYFMrJH6g9yM9YViDDwanzXdtkZWneu"
+  },
+  "feePayers": {
+    "demo": "29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ",
+    "public": "Fs3ZVNsqyogFRLwY4eZ3wjrvUHd5UCH13iobYdjY6Zhq"
+  },
+  "wallets": {
+    "tableDemo": "8Y8P1qp7oMJUmSSXkYRmDuhPhfypjU5sLMjMWQ5qB8c",
+    "publicOnboarding": "3bq6hvC585Mu8L6gJVtnPuDkWr6mJnxXij3qrdBQRuje",
+    "send": "7fa39mvGnRMPmBsaS12zQUDxCqDVef8C8PdndjqE1LhJ",
+    "canary": "H9E3fHxLPUqenvQ7Rd1LhrKPvbGCn98z4fqHwZDgzy6v"
+  }
+}
