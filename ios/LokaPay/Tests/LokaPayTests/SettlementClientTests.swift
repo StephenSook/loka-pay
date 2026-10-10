@@ -123,6 +123,30 @@ final class HeldTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// A transport deadline the test fires itself: `sleep` records the deadline the transport asked
+/// for, waits `fireAfter` real seconds instead, and records when it woke.
+final class DeadlineProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let fireAfter: TimeInterval
+    private var asked: [TimeInterval] = []
+    private var woke: TimeInterval?
+
+    init(fireAfter: TimeInterval) { self.fireAfter = fireAfter }
+
+    var requested: [TimeInterval] { lock.withLock { asked } }
+    /// When the deadline fired, on the `SettlementClock.system` monotonic clock.
+    var firedAt: TimeInterval? { lock.withLock { woke } }
+
+    var clock: SettlementClock {
+        SettlementClock(now: SettlementClock.system.now, sleep: { d in
+            self.lock.withLock { self.asked.append(d) }
+            try await SettlementClock.system.sleep(self.fireAfter)
+            let now = SettlementClock.system.now()
+            self.lock.withLock { self.woke = now }
+        })
+    }
+}
+
 /// Serves scripted responses to a real URLSession, so `URLSessionTransport` is tested without a
 /// network. Each script has its own URL, so tests running in parallel do not share one.
 final class ScriptedURLProtocol: URLProtocol, @unchecked Sendable {
@@ -817,15 +841,26 @@ struct URLSessionTransportTests {
 
     @Test("timeoutInterval limits the whole exchange, even when bytes keep arriving")
     func totalTimeout() async throws {
-        // One byte every 0.1 s for 3 s: URLSession's own timer restarts on every byte.
-        let script = ScriptedURLProtocol.Script(chunks: Array(repeating: Data([0x41]), count: 30), interval: 0.1)
-        let started = Date()
-        // Compare the code, not the whole error: whichever timer fires first (ours or URLSession's
-        // own request timer) reports .timedOut, but URLSession's carries extra userInfo.
-        let error = await #expect(throws: URLError.self) { try await send(script, timeout: 0.5) }
-        #expect(error?.code == .timedOut)
-        let elapsed = Date().timeIntervalSince(started)
-        #expect(elapsed < 2.5, "took \(elapsed) s on a 0.5 s timeout")
+        // One byte every 0.1 s for 30 s under a 5 s timeoutInterval. URLSession's own timer
+        // restarts on every byte, so only the transport's deadline can end this exchange early.
+        let script = ScriptedURLProtocol.Script(chunks: Array(repeating: Data([0x41]), count: 300), interval: 0.1)
+        // The probe fires that deadline after 0.5 s, well inside URLSession's 5 s.
+        let deadline = DeadlineProbe(fireAfter: 0.5)
+        var transport = URLSessionTransport(session: ScriptedURLProtocol.session())
+        transport.clock = deadline.clock
+        let request = URLRequest(url: ScriptedURLProtocol.register(script), timeoutInterval: 5)
+        var thrown: Error?
+        do { _ = try await transport.send(request) } catch { thrown = error }
+        let returned = SettlementClock.system.now()
+
+        #expect(deadline.requested == [5])
+        // The transport's own error, which carries no userInfo; URLSession's timeout carries some.
+        #expect(thrown as? URLError == URLError(.timedOut), "ended by \(String(describing: thrown))")
+        // Timed from the moment the deadline fired, not from the start: on a loaded runner the
+        // sleep itself can wake late, which is the scheduler, not the transport. Cancelling the
+        // download must not wait for the rest of the stream.
+        let fired = try #require(deadline.firedAt, "the exchange ended before the deadline fired")
+        #expect(returned - fired < 0.3, "returned \(returned - fired) s after the deadline fired")
     }
 
     @Test("the default session bounds each exchange at 60 s and each body at 64 KiB")
