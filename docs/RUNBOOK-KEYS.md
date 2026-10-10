@@ -9,7 +9,7 @@ Every private key below was generated on the machine that uses it and never left
 - Caddy terminates HTTPS (Let's Encrypt) and proxies to `127.0.0.1:3001`. The Caddyfile has no `log` directive (D16).
 - Docker log driver: `json-file`, `max-size 5m`, `max-file 3`, so container logs keep at most about 15 MB per container.
 - Firewall: Vultr group and `ufw` allow 22 (SSH), 80 and 443. The API port (3001) is bound to `127.0.0.1` only.
-- SSH: key login works for root. Password login and root password login are still enabled in `sshd_config` (open item: turn both off).
+- SSH: key login only. Password login is off (verified Sat Oct 10 by a refused password login).
 
 ## Keys on the VPS
 
