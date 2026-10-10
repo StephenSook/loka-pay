@@ -731,7 +731,10 @@ struct URLSessionTransportTests {
         // One byte every 0.1 s for 3 s: URLSession's own timer restarts on every byte.
         let script = ScriptedURLProtocol.Script(chunks: Array(repeating: Data([0x41]), count: 30), interval: 0.1)
         let started = Date()
-        await #expect(throws: URLError(.timedOut)) { try await send(script, timeout: 0.5) }
+        // Compare the code, not the whole error: whichever timer fires first (ours or URLSession's
+        // own request timer) reports .timedOut, but URLSession's carries extra userInfo.
+        let error = await #expect(throws: URLError.self) { try await send(script, timeout: 0.5) }
+        #expect(error?.code == .timedOut)
         let elapsed = Date().timeIntervalSince(started)
         #expect(elapsed < 2.5, "took \(elapsed) s on a 0.5 s timeout")
     }
