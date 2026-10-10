@@ -2,7 +2,7 @@
 // build time (imported by the server page, so only these few strings reach the browser).
 // Every key in that file is derived from a public label: anyone can sign with them.
 
-import { equalBytes, fromHex } from "@lokapay/protocol";
+import { equalBytes, fromHex, keyHash } from "@lokapay/protocol";
 import vectors from "../../protocol/vectors/payment-v1.json";
 import { decodeBase58, encodeBase58 } from "./base58";
 import type { SerializedDeployment } from "./receipt";
@@ -10,12 +10,22 @@ import type { SerializedDeployment } from "./receipt";
 export const VECTORS_FILE = "protocol/vectors/payment-v1.json";
 const RECEIPT_NAME = "note_0_with_confirmation";
 
+/** A merchant key from the vectors file, offered as a labelled payee on "Play the attacker". */
+export interface TestMerchant {
+  /** What the page calls it, for example "Test merchant B". */
+  name: string;
+  /** The public label the key is derived from, as the vectors file prints it. */
+  label: string;
+  keyHashHex: string;
+}
+
 export interface TestVector {
   /** The vector's name in the file's `receipts` list. */
   name: string;
   /** The transport form, `L1|P|1|X|<base64url>`. */
   transport: string;
   deployment: SerializedDeployment;
+  testMerchants: TestMerchant[];
 }
 
 function buildFailure(message: string): never {
@@ -45,6 +55,18 @@ for (const [label, ok] of base58Checks) {
   if (!ok) buildFailure(`base58 known answer failed: ${label}`);
 }
 
+// Each test merchant's key hash is recomputed from its public key on every build, so the
+// page never labels a hash with a name the file does not back.
+const testMerchants: TestMerchant[] = [
+  { name: "Test merchant A", key: vectors.keys.merchantA },
+  { name: "Test merchant B", key: vectors.keys.merchantB },
+].map(({ name, key }) => {
+  if (!equalBytes(keyHash(fromHex(key.publicKeyHex)), fromHex(key.keyHashHex))) {
+    buildFailure(`${name}: keyHashHex is not sha256 of publicKeyHex`);
+  }
+  return { name, label: key.label, keyHashHex: key.keyHashHex };
+});
+
 export const TEST_VECTOR: TestVector = {
   name: receipt.name,
   transport: receipt.transport,
@@ -56,4 +78,5 @@ export const TEST_VECTOR: TestVector = {
     mintBase58: constants.mintBase58,
     serverPublicKeyHex: vectors.keys.serverEd25519.publicKeyHex,
   },
+  testMerchants,
 };

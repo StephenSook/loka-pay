@@ -21,6 +21,16 @@ export const INIT_TX_SIGNATURE =
 export const FIRST_REDEEM_TX_SIGNATURE =
   "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
 
+/**
+ * The refused cheat on devnet, Sat Oct 10 2:01 AM ET: the "refused cheat" link in the same
+ * README row as FIRST_REDEEM_TX_SIGNATURE. Checked against devnet with getTransaction on
+ * Oct 10: meta.err is InstructionError [2, Custom 6011] and loka_vault logged "Error Code:
+ * SerialUsed". It is a reused serial, not an edited note, and /verify's "Play the attacker"
+ * panel says so where it links it.
+ */
+export const REFUSED_CHEAT_TX_SIGNATURE =
+  "2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv";
+
 /** iOS status (PLAN.md 1.11): App Store Connect read betaReviewState WAITING_FOR_REVIEW, submitted 12:05:42 AM ET. */
 export const TESTFLIGHT_STATUS =
   "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves";
