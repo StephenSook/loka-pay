@@ -20,8 +20,9 @@ import androidx.compose.ui.text.style.TextAlign
 import org.loka.core.PartyCard
 
 internal fun cardCategory(card:PartyCard)=if("dirty" in card.tags)"dirty" else if(card.alcohol || "drinking" in card.tags)"drinking" else "clean"
-internal fun mascotArt(category:String)=when(category){"dirty"->R.drawable.loka_mascot_dirty;"drinking"->R.drawable.loka_mascot_drinking;else->R.drawable.loka_mascot_clean}
-internal fun cardArt(category:String)=when(category){"dirty"->R.drawable.loka_card_dirty;"drinking"->R.drawable.loka_card_drinking;else->R.drawable.loka_card_clean}
+// The public catalog is clean-only and ships only the clean card art.
+internal fun mascotArt(@Suppress("UNUSED_PARAMETER") category:String)=R.drawable.loka_mascot_clean
+internal fun cardArt(@Suppress("UNUSED_PARAMETER") category:String)=R.drawable.loka_card_clean
 
 /** Shared artwork and bounds for dealing, swiping, and the revealed card. */
 @Composable internal fun CardArtwork(category:String,height:Dp) {

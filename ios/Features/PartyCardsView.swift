@@ -644,7 +644,8 @@ private struct CardShufflePose {
     let angle=Double.random(in:-25...25)
 }
 
-private func cardCategory(_ card:PartyCard)->String {card.tags.contains("dirty") ? "dirty" : card.alcohol || card.tags.contains("drinking") ? "drinking" : "clean"}
+// The public catalog is clean-only and ships only the clean card art.
+private func cardCategory(_ card:PartyCard)->String {"clean"}
 private struct CardGraphicView:View {
     let card:PartyCard;let height:CGFloat;var mode="group";var preview=false
     private func promptSize(width:CGFloat,height:CGFloat)->CGFloat {
