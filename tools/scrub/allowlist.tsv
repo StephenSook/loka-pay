@@ -165,3 +165,8 @@ uuid	ios/Design.xcassets/loka_mascot_clean.imageset/art.png	e90272b55b6deeaaabaa
 # Added by import-and-scrub.sh for this import (values named in the tree itself).
 hex40	docs/IMPORT-SCRUB.md	15f4278b9c9b0e9f6d9c7c109f24b3eeeda7803f6edfe3ac7c91323d03177cc0
 hex40	docs/IMPORT-SCRUB.md	ae0a051cb136a6d9ef457d3e27f9e53d5fb434f93f56fb9b09ea1b85ba4a8c64
+#
+# Fake 40-hex commit SHAs in the judge-page tests and e2e fixtures (labelled test values, not real commits or device ids).
+hex40	web/e2e/fixtures/upstream.ts	c06774b7961f1e1cac048fd115a70de043e04f693ccd8cc63846d122e201a73d
+hex40	web/unit/claims.test.ts	fdc38b768042f9419c323705caec17f9abfd7e33ae6e5ab5cf70991b7722fbed
+hex40	web/unit/evidence.test.ts	fdc38b768042f9419c323705caec17f9abfd7e33ae6e5ab5cf70991b7722fbed

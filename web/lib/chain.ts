@@ -1,0 +1,461 @@
+// Devnet reads for /judge, /proof and /trust, cached for 30 seconds and bounded per server
+// process (CHAIN_READS, lib/cached-read.ts).
+// Server only. Every value here comes from the chain; config/pins.json only names the
+// addresses to read and the values to compare against. Every call goes to the server's
+// endpoint with the options from lib/server-rpc.ts (SOLANA_RPC_URL, never inlined into a page).
+//
+// Public devnet limits each method per IP (getProgramAccounts and getTransaction to 10
+// calls per 10 seconds), refuses getProgramAccounts inside a JSON-RPC batch, and refuses a
+// batch that repeats getAccountInfo or getTokenAccountBalance (measured 2026-10-10). So:
+// the program's accounts are listed with ONE unfiltered getProgramAccounts call that
+// returns only each account's first 8 bytes, its Anchor discriminator, and are counted by
+// discriminator here; the fixed accounts are read together with getMultipleAccounts; a
+// batch never names the same method twice.
+
+import { cachedRead, sourceTag, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
+import { INIT_TX_SIGNATURE } from "./facts";
+import { summarizeTransaction, type TxResult } from "./logs";
+import { isUnixSeconds } from "./time";
+import { PINS } from "./pins";
+import { SERVER_RPC_URL, serverReadOptions } from "./server-rpc";
+import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOptions, type RpcOutcome } from "./solana";
+import {
+  ACCOUNT_DISCRIMINATORS,
+  ACCOUNT_NAMES,
+  BPF_UPGRADEABLE_LOADER,
+  FEATURE_PROGRAM,
+  MINT_DECIMALS,
+  PROGRAM_DATA_HEADER_LEN,
+  SECP256R1_FEATURE,
+  TOKEN_PROGRAM,
+  computeReserves,
+  decodeAllowance,
+  decodeFeature,
+  decodeMerchant,
+  decodeProgramAccount,
+  decodeProgramDataHeader,
+  decodeTokenAccount,
+  decodeVaultConfig,
+  startsWith,
+  type AccountName,
+} from "./vault";
+
+export type { FailedRead, Read } from "./cached-read";
+
+/**
+ * Devnet reads: cached 30 s; current (a claim may be Live from it) for 10 s, reused by /proof
+ * for 7 s so a reused read is still current when the page renders; at most 3 reads
+ * of each kind per 10 s in one server process; 10 s without that read after a rate-limited
+ * answer (public devnet answers 429 with Retry-After: 10). Each facts read makes one
+ * getProgramAccounts call and each reserves read two, against devnet's 10 per 10 s.
+ */
+export const CHAIN_READS: ReadPolicy = {
+  revalidateSeconds: 30,
+  currentForMs: 10_000,
+  reuseForMs: 7_000,
+  limits: { reads: 3, perMs: 10_000, rateLimitPauseMs: 10_000 },
+};
+
+/** One part of a read that may fail on its own; the page says which part and why. */
+export type Part<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+function part<T>(outcome: RpcOutcome, decode: (result: unknown) => T): Part<T> {
+  try {
+    return { ok: true, value: decode(unwrap(outcome)) };
+  } catch (e) {
+    return { ok: false, reason: describeFailure(e) };
+  }
+}
+
+interface AccountInfo {
+  executable: boolean;
+  owner: string;
+  data: Uint8Array;
+  space: number | null;
+}
+
+function accountInfo(value: unknown): AccountInfo | null {
+  if (value === null) return null;
+  const v = value as { executable?: unknown; owner?: unknown; data?: unknown; space?: unknown };
+  if (typeof v.executable !== "boolean" || typeof v.owner !== "string") {
+    throw new RpcError("shape", "an account answer had no owner or executable flag");
+  }
+  return { executable: v.executable, owner: v.owner, data: accountData(v.data), space: typeof v.space === "number" ? v.space : null };
+}
+
+export interface ProgramAccountList {
+  slot: number;
+  /** Addresses by account type, each list sorted. */
+  byType: Record<AccountName, string[]>;
+  /** Program-owned accounts whose discriminator is none of the program's account types. */
+  other: string[];
+}
+
+/** Every account the program owns, grouped by Anchor discriminator, from one call. */
+export async function listProgramAccounts(options: RpcOptions, minContextSlot?: number): Promise<ProgramAccountList> {
+  const result = await rpc(
+    "getProgramAccounts",
+    [
+      PINS.programId,
+      {
+        encoding: "base64",
+        dataSlice: { offset: 0, length: 8 },
+        withContext: true,
+        ...(minContextSlot === undefined ? {} : { minContextSlot }),
+      },
+    ],
+    options,
+  );
+  const { slot, value } = withContext(result);
+  if (!Array.isArray(value)) throw new RpcError("shape", "getProgramAccounts did not answer a list");
+  const byType = Object.fromEntries(ACCOUNT_NAMES.map((n) => [n, [] as string[]])) as Record<AccountName, string[]>;
+  const other: string[] = [];
+  for (const item of value as Array<{ pubkey?: unknown; account?: { data?: unknown } }>) {
+    if (typeof item?.pubkey !== "string") throw new RpcError("shape", "a program account had no address");
+    const head = accountData(item.account?.data);
+    const name = ACCOUNT_NAMES.find((n) => startsWith(head, ACCOUNT_DISCRIMINATORS[n]));
+    if (name) byType[name].push(item.pubkey);
+    else other.push(item.pubkey);
+  }
+  for (const name of ACCOUNT_NAMES) byType[name].sort();
+  return { slot, byType, other: other.sort() };
+}
+
+// ---------- program facts (/judge, /trust, /proof claims) ----------
+
+export interface VaultTokenFacts {
+  amountUnits: string;
+  decimals: number;
+  mint: string;
+  owner: string;
+  mintMatchesPins: boolean;
+  ownerIsVault: boolean;
+}
+
+export interface ProgramFacts {
+  /** The lowest and highest context slots among the answers. */
+  slots: { min: number; max: number };
+  program: { exists: boolean; executable: boolean; owner: string | null; programData: string | null };
+  programData: Part<{
+    deploySlot: number;
+    deployTimeMs: number | null;
+    upgradeAuthority: string | null;
+    /** The program's ELF size: the account size minus the 45-byte header. */
+    programBytes: number | null;
+  }>;
+  config: Part<{ exists: boolean; mint: string | null; cluster: number | null; mintMatchesPins: boolean }>;
+  vault: Part<VaultTokenFacts>;
+  counts: Part<{ byType: Record<AccountName, number>; other: number }>;
+  init: Part<{ found: boolean; slot: number | null; blockTimeMs: number | null; result: TxResult | null; actions: string[] }>;
+  /**
+   * The runtime feature behind Solana's secp256r1 precompile, read at the same slot as the
+   * program: active when it was activated at or before that slot.
+   */
+  secp256r1: Part<{ exists: boolean; activatedAt: number | null; active: boolean; slot: number }>;
+}
+
+/** The secp256r1 feature account's answer, at the slot it was read; a part that failed when it is not a feature account. */
+export function secp256r1FeaturePart(info: { owner: string; data: Uint8Array } | null, slot: number): ProgramFacts["secp256r1"] {
+  try {
+    if (info === null) return { ok: true, value: { exists: false, activatedAt: null, active: false, slot } };
+    if (info.owner !== FEATURE_PROGRAM) throw new RpcError("shape", "the secp256r1 feature account is not owned by the feature program");
+    const { activatedAt } = decodeFeature(info.data);
+    const at = activatedAt === null ? null : Number(activatedAt);
+    if (at !== null && !Number.isSafeInteger(at)) throw new RpcError("shape", "the secp256r1 feature account names an impossible slot");
+    return { ok: true, value: { exists: true, activatedAt: at, active: at !== null && at <= slot, slot } };
+  } catch (e) {
+    return { ok: false, reason: describeFailure(e) };
+  }
+}
+
+/**
+ * getTokenAccountBalance's value: a base-unit amount and the mint's decimals, checked here so
+ * a page never formats a value it cannot show. Decimals are a mint's u8 (0 to 255), a whole
+ * number; anything else is refused as an unexpected answer.
+ */
+export function parseTokenBalance(value: unknown): { amountUnits: string; decimals: number } {
+  const v = value as { amount?: unknown; decimals?: unknown } | null;
+  if (typeof v !== "object" || v === null || typeof v.amount !== "string" || !/^\d+$/.test(v.amount)) {
+    throw new RpcError("shape", "getTokenAccountBalance answered no amount");
+  }
+  if (typeof v.decimals !== "number" || !Number.isInteger(v.decimals) || v.decimals < 0 || v.decimals > 255) {
+    throw new RpcError("shape", "getTokenAccountBalance answered decimals that are not a whole number from 0 to 255");
+  }
+  return { amountUnits: v.amount, decimals: v.decimals };
+}
+
+export async function readProgramFactsUncached(options: RpcOptions = serverReadOptions()): Promise<ProgramFacts> {
+  const slots: number[] = [];
+  const [batch, listed] = await Promise.all([
+    rpcBatch(
+      [
+        {
+          method: "getMultipleAccounts",
+          params: [[PINS.programId, PINS.accounts.config, PINS.accounts.vaultUsdcAccount, SECP256R1_FEATURE], { encoding: "base64" }],
+        },
+        { method: "getTokenAccountBalance", params: [PINS.accounts.vaultUsdcAccount] },
+        {
+          method: "getTransaction",
+          params: [INIT_TX_SIGNATURE, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
+        },
+      ],
+      options,
+    ),
+    listProgramAccounts(options).then(
+      (value): Part<ProgramAccountList> => ({ ok: true, value }),
+      (e): Part<ProgramAccountList> => ({ ok: false, reason: describeFailure(e) }),
+    ),
+  ]);
+  const [accounts, balance, init] = batch;
+
+  // The program account is the one read the page cannot do without.
+  const accountsRead = withContext(unwrap(accounts));
+  slots.push(accountsRead.slot);
+  if (!Array.isArray(accountsRead.value) || accountsRead.value.length !== 4) {
+    throw new RpcError("shape", "getMultipleAccounts answered the wrong number of accounts");
+  }
+  const [programInfo, configInfo, vaultInfo] = accountsRead.value.slice(0, 3).map(accountInfo);
+  let featurePart: ProgramFacts["secp256r1"];
+  try {
+    featurePart = secp256r1FeaturePart(accountInfo(accountsRead.value[3]), accountsRead.slot);
+  } catch (e) {
+    featurePart = { ok: false, reason: describeFailure(e) };
+  }
+  const programData =
+    programInfo && programInfo.owner === BPF_UPGRADEABLE_LOADER ? decodeProgramAccount(programInfo.data).programData : null;
+
+  let configPart: ProgramFacts["config"];
+  try {
+    if (!configInfo) {
+      configPart = { ok: true, value: { exists: false, mint: null, cluster: null, mintMatchesPins: false } };
+    } else {
+      if (configInfo.owner !== PINS.programId) throw new RpcError("shape", "the config account is not owned by the program");
+      const decoded = decodeVaultConfig(configInfo.data);
+      configPart = {
+        ok: true,
+        value: { exists: true, mint: decoded.mint, cluster: decoded.cluster, mintMatchesPins: decoded.mint === PINS.mint },
+      };
+    }
+  } catch (e) {
+    configPart = { ok: false, reason: describeFailure(e) };
+  }
+
+  const vaultPart = part(balance, (result) => {
+    const { slot, value } = withContext(result);
+    slots.push(slot);
+    const { amountUnits, decimals } = parseTokenBalance(value);
+    if (!vaultInfo) throw new RpcError("shape", "the vault token account does not exist");
+    const token = decodeTokenAccount(vaultInfo.data);
+    return {
+      amountUnits,
+      decimals,
+      mint: token.mint,
+      owner: token.owner,
+      mintMatchesPins: token.mint === PINS.mint,
+      ownerIsVault: token.owner === PINS.accounts.vault,
+    };
+  });
+
+  let countsPart: ProgramFacts["counts"];
+  if (listed.ok) {
+    slots.push(listed.value.slot);
+    const byType = Object.fromEntries(ACCOUNT_NAMES.map((n) => [n, listed.value.byType[n].length])) as Record<AccountName, number>;
+    countsPart = { ok: true, value: { byType, other: listed.value.other.length } };
+  } else {
+    countsPart = listed;
+  }
+
+  const initPart = part(init, (result) => {
+    if (result === null) return { found: false, slot: null, blockTimeMs: null, result: null, actions: [] };
+    const summary = summarizeTransaction(result, PINS.programId);
+    if (!summary) throw new RpcError("shape", "the initialize transaction answer had an unexpected shape");
+    return {
+      found: true,
+      slot: summary.slot,
+      blockTimeMs: summary.blockTime === null ? null : summary.blockTime * 1000,
+      result: summary.result,
+      actions: summary.actions,
+    };
+  });
+
+  let programDataPart: ProgramFacts["programData"] = { ok: false, reason: "the program account names no program data" };
+  if (programData) {
+    try {
+      const read = withContext(
+        await rpc("getAccountInfo", [programData, { encoding: "base64", dataSlice: { offset: 0, length: PROGRAM_DATA_HEADER_LEN } }], options),
+      );
+      slots.push(read.slot);
+      const info = accountInfo(read.value);
+      if (!info) throw new RpcError("shape", "the program data account does not exist");
+      const decoded = decodeProgramDataHeader(info.data);
+      const deploySlot = Number(decoded.slot);
+      let deployTimeMs: number | null = null;
+      try {
+        const blockTime = await rpc("getBlockTime", [deploySlot], options);
+        // An impossible time is shown as "block time not read", never handed to the page.
+        if (isUnixSeconds(blockTime)) deployTimeMs = blockTime * 1000;
+      } catch {
+        // Shown as "block time not read".
+      }
+      programDataPart = {
+        ok: true,
+        value: {
+          deploySlot,
+          deployTimeMs,
+          upgradeAuthority: decoded.upgradeAuthority,
+          programBytes: info.space === null ? null : info.space - PROGRAM_DATA_HEADER_LEN,
+        },
+      };
+    } catch (e) {
+      programDataPart = { ok: false, reason: describeFailure(e) };
+    }
+  }
+
+  return {
+    slots: { min: Math.min(...slots), max: Math.max(...slots) },
+    program: {
+      exists: programInfo !== null,
+      executable: programInfo?.executable ?? false,
+      owner: programInfo?.owner ?? null,
+      programData,
+    },
+    programData: programDataPart,
+    config: configPart,
+    vault: vaultPart,
+    counts: countsPart,
+    init: initPart,
+    secp256r1: featurePart,
+  };
+}
+
+/** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
+export function readProgramFacts(options: CachedReadOptions = {}): Promise<Read<ProgramFacts>> {
+  return cachedRead(`program-facts:${sourceTag(SERVER_RPC_URL)}:${PINS.programId}`, CHAIN_READS, () => readProgramFactsUncached(), options);
+}
+
+// ---------- proof of reserves (/proof, PLAN.md 3.24) ----------
+
+export interface ReservesRead {
+  /** Every balance below was read in one getMultipleAccounts call at this slot. */
+  slot: number;
+  /** The slots at which the account list was taken and then checked again. */
+  listedAt: { first: number; check: number };
+  vault: VaultTokenFacts;
+  allowances: Array<{ address: string; id: string; capUnits: string; redeemedUnits: string; bondUnits: string; expiry: string }>;
+  merchants: Array<{ address: string; keyHashHex: string; balanceUnits: string }>;
+  totals: {
+    assets: string;
+    allowanceRemaining: string;
+    bonds: string;
+    merchantBalances: string;
+    liabilities: string;
+    difference: string;
+  };
+  anomalies: string[];
+}
+
+/** getMultipleAccounts takes at most 100 addresses; one is the vault token account. */
+const MAX_ONE_SLOT = 99;
+
+const sameList = (x: string[], y: string[]) => x.length === y.length && x.every((v, i) => v === y[i]);
+
+export async function readReservesUncached(options: RpcOptions = serverReadOptions()): Promise<ReservesRead> {
+  let listed = await listProgramAccounts(options);
+  // Program accounts are never closed (the program has no close instruction), so if the
+  // list taken again at or after the balances' slot is unchanged, the balances cover
+  // every account that existed at that slot. One retry if an account appeared in between.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const allowanceAddresses = listed.byType.Allowance;
+    const merchantAddresses = listed.byType.Merchant;
+    const addresses = [PINS.accounts.vaultUsdcAccount, ...allowanceAddresses, ...merchantAddresses];
+    if (addresses.length - 1 > MAX_ONE_SLOT) {
+      throw new Error(
+        `the program has ${addresses.length - 1} allowance and merchant accounts; this page reads at most ${MAX_ONE_SLOT} at one slot`,
+      );
+    }
+    const { slot, value } = withContext(await rpc("getMultipleAccounts", [addresses, { encoding: "base64" }], options));
+    if (!Array.isArray(value) || value.length !== addresses.length) {
+      throw new RpcError("shape", "getMultipleAccounts answered the wrong number of accounts");
+    }
+    let check: ProgramAccountList;
+    try {
+      check = await listProgramAccounts(options, slot);
+    } catch (e) {
+      // A node still behind the balances' slot refuses minContextSlot; ask once more. A
+      // rate-limited answer is never asked again (lib/read-state.ts pauses the read).
+      if (!(e instanceof RpcError && e.kind === "rpc") || e.code === 429) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      check = await listProgramAccounts(options, slot);
+    }
+    if (!sameList(check.byType.Allowance, allowanceAddresses) || !sameList(check.byType.Merchant, merchantAddresses)) {
+      listed = check;
+      continue;
+    }
+
+    const infos = value.map(accountInfo);
+    const vaultInfo = infos[0];
+    if (!vaultInfo) throw new RpcError("shape", "the vault token account does not exist");
+    // No verdict for an asset that is not the pinned sandbox USDC held by the program's vault:
+    // an account the SPL Token program does not own, another mint, or another authority is
+    // refused before anything is counted.
+    if (vaultInfo.owner !== TOKEN_PROGRAM) {
+      throw new RpcError("shape", `the vault token account is owned by ${vaultInfo.owner}, not the SPL Token program; no reserves verdict`);
+    }
+    const token = decodeTokenAccount(vaultInfo.data);
+    if (token.mint !== PINS.mint) {
+      throw new RpcError("shape", `the vault token account holds mint ${token.mint}, not the pinned devnet USDC mint; no reserves verdict`);
+    }
+    if (token.owner !== PINS.accounts.vault) {
+      throw new RpcError("shape", `the vault token account's authority is ${token.owner}, not the program's vault account; no reserves verdict`);
+    }
+    const allowances = infos.slice(1, 1 + allowanceAddresses.length).map((info, i) => {
+      if (!info || info.owner !== PINS.programId) throw new RpcError("shape", `allowance ${allowanceAddresses[i]} is missing`);
+      return decodeAllowance(info.data);
+    });
+    const merchants = infos.slice(1 + allowanceAddresses.length).map((info, i) => {
+      if (!info || info.owner !== PINS.programId) throw new RpcError("shape", `merchant ${merchantAddresses[i]} is missing`);
+      return decodeMerchant(info.data);
+    });
+    const r = computeReserves(token.amount, allowances, merchants);
+    return {
+      slot,
+      listedAt: { first: listed.slot, check: check.slot },
+      vault: {
+        amountUnits: token.amount.toString(),
+        decimals: MINT_DECIMALS,
+        mint: token.mint,
+        owner: token.owner,
+        mintMatchesPins: token.mint === PINS.mint,
+        ownerIsVault: token.owner === PINS.accounts.vault,
+      },
+      allowances: allowances.map((a, i) => ({
+        address: allowanceAddresses[i],
+        id: a.id.toString(),
+        capUnits: a.cap.toString(),
+        redeemedUnits: a.redeemed.toString(),
+        bondUnits: a.bond.toString(),
+        expiry: a.expiry.toString(),
+      })),
+      merchants: merchants.map((m, i) => ({
+        address: merchantAddresses[i],
+        keyHashHex: m.keyHashHex,
+        balanceUnits: m.balance.toString(),
+      })),
+      totals: {
+        assets: r.assets.toString(),
+        allowanceRemaining: r.allowanceRemaining.toString(),
+        bonds: r.bonds.toString(),
+        merchantBalances: r.merchantBalances.toString(),
+        liabilities: r.liabilities.toString(),
+        difference: r.difference.toString(),
+      },
+      anomalies: r.anomalies,
+    };
+  }
+  throw new Error("program accounts kept changing during the read; reload to try again");
+}
+
+/** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
+export function readReserves(options: CachedReadOptions = {}): Promise<Read<ReservesRead>> {
+  return cachedRead(`reserves:${sourceTag(SERVER_RPC_URL)}:${PINS.programId}`, CHAIN_READS, () => readReservesUncached(), options);
+}

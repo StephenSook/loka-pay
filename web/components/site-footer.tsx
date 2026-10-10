@@ -11,8 +11,20 @@ export function SiteFooter() {
         <Link href="/" className="underline">
           Home
         </Link>
+        <Link href="/judge" className="underline">
+          Judge door
+        </Link>
+        <Link href="/live" className="underline">
+          Live
+        </Link>
         <Link href="/verify" className="underline">
           Verify a receipt
+        </Link>
+        <Link href="/proof" className="underline">
+          Proof
+        </Link>
+        <Link href="/trust" className="underline">
+          Trust
         </Link>
         <Link href="/privacy" className="underline">
           Privacy
