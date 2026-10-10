@@ -9,6 +9,15 @@ struct StubReply: Sendable {
     var headers: [String: String] = [:]
     var body = Data()
     var failure: URLError?
+    /// Virtual seconds the exchange takes. Like a real transport, the stub stops at the
+    /// request's `timeoutInterval` and throws `URLError(.timedOut)`.
+    var delay: TimeInterval = 0
+
+    func delayed(_ seconds: TimeInterval) -> StubReply {
+        var copy = self
+        copy.delay = seconds
+        return copy
+    }
 }
 
 /// Answers requests from a queue and records them. No request reaches the network.
@@ -16,19 +25,32 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var replies: [StubReply]
     private var recorded: [URLRequest] = []
+    private var started: [(at: TimeInterval, timeout: TimeInterval)] = []
+    private let clock: FakeClock?
 
-    init(_ replies: [StubReply]) { self.replies = replies }
+    init(_ replies: [StubReply], clock: FakeClock? = nil) {
+        self.replies = replies
+        self.clock = clock
+    }
 
     var requests: [URLRequest] { lock.withLock { recorded } }
+    /// When each request started (virtual time) and the timeout it was given.
+    var starts: [(at: TimeInterval, timeout: TimeInterval)] { lock.withLock { started } }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let now = clock?.now ?? 0
         let reply: StubReply? = lock.withLock {
             recorded.append(request)
+            started.append((now, request.timeoutInterval))
             return replies.isEmpty ? nil : replies.removeFirst()
         }
         guard let reply else {
             Issue.record("unexpected extra request to \(request.url!)")
             throw URLError(.unknown)
+        }
+        if reply.delay > 0, let clock {
+            clock.advance(min(reply.delay, request.timeoutInterval))
+            if reply.delay > request.timeoutInterval { throw URLError(.timedOut) }
         }
         if let failure = reply.failure { throw failure }
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1",
@@ -37,18 +59,82 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
-/// Virtual time: `sleep` records the wait and advances `now` without waiting.
+/// Virtual time: `sleep` records the wait and advances `now` without waiting. `advance` moves
+/// time for transport latency without counting as a client sleep.
 final class FakeClock: @unchecked Sendable {
     private let lock = NSLock()
     private var time: TimeInterval = 0
     private var waits: [TimeInterval] = []
 
     var sleeps: [TimeInterval] { lock.withLock { waits } }
+    var now: TimeInterval { lock.withLock { time } }
+
+    func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
 
     var clock: SettlementClock {
         SettlementClock(now: { self.lock.withLock { self.time } },
                         sleep: { d in self.lock.withLock { self.time += d; self.waits.append(d) } })
     }
+}
+
+/// Serves scripted responses to a real URLSession, so `URLSessionTransport` is tested without a
+/// network. Each script has its own URL, so tests running in parallel do not share one.
+final class ScriptedURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Script: Sendable {
+        var status = 200
+        var headers: [String: String] = [:]
+        var chunks: [Data] = []
+        /// Seconds between chunks; 0 sends them all at once.
+        var interval: TimeInterval = 0
+    }
+
+    private static let registry = NSLock()
+    private static var scripts: [String: Script] = [:]
+    private let state = NSLock()
+    private var stopped = false
+
+    static func register(_ script: Script) -> URL {
+        let url = URL(string: "https://transport.test.invalid/\(UUID().uuidString)")!
+        registry.withLock { scripts[url.absoluteString] = script }
+        return url
+    }
+
+    static func session() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ScriptedURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url, let script = Self.registry.withLock({ Self.scripts[url.absoluteString] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let response = HTTPURLResponse(url: url, statusCode: script.status, httpVersion: "HTTP/1.1",
+                                       headerFields: script.headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        deliver(script.chunks[...], interval: script.interval)
+    }
+
+    private func deliver(_ chunks: ArraySlice<Data>, interval: TimeInterval) {
+        if state.withLock({ stopped }) { return }
+        guard let chunk = chunks.first else {
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        client?.urlProtocol(self, didLoad: chunk)
+        let rest = chunks.dropFirst()
+        if interval == 0 {
+            deliver(rest, interval: 0)
+        } else {
+            DispatchQueue.global().asyncAfter(deadline: .now() + interval) { self.deliver(rest, interval: interval) }
+        }
+    }
+
+    override func stopLoading() { state.withLock { stopped = true } }
 }
 
 struct NotDecided: Error {}
@@ -481,9 +567,9 @@ struct SettlementPendingTests {
         #expect(clock.sleeps == [1, 2, 4, 8, 10, 10])
     }
 
-    @Test("polling stops at the timeout with the last pending body")
+    @Test("polling stops when no further poll fits in the timeout, with the last pending body")
     func pollTimesOut() async throws {
-        let stub = StubTransport(Array(repeating: APIFixtures.pending(retryAfter: 2), count: 4))
+        let stub = StubTransport(Array(repeating: APIFixtures.pending(retryAfter: 2), count: 3))
         let clock = FakeClock()
         let note = APIFixtures.note(0)
         do {
@@ -493,9 +579,10 @@ struct SettlementPendingTests {
             #expect(last.noteId == note.noteId)
             #expect(last.signature == APIFixtures.settledSignatureBase58)
         }
-        #expect(clock.sleeps == [2, 2, 1])
-        #expect(clock.sleeps.reduce(0, +) == 5)
-        #expect(stub.requests.count == 4)
+        // Polls at 0, 2 and 4; a fourth would need 2 s of wait plus 1 s of budget after 4.
+        #expect(clock.sleeps == [2, 2])
+        #expect(clock.now <= 5)
+        #expect(stub.requests.count == 3)
     }
 
     @Test("settleAndWait uploads once, then polls the in-flight note to its decision")
@@ -506,6 +593,145 @@ struct SettlementPendingTests {
         #expect(decision.status == .settled)
         #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
         #expect(clock.sleeps == [1])
+    }
+}
+
+@Suite("settlement client: one time budget")
+struct SettlementBudgetTests {
+    /// Every request started before the deadline and was given no more time than was left.
+    func expectInsideBudget(_ stub: StubTransport, deadline: TimeInterval) {
+        for start in stub.starts {
+            #expect(start.at < deadline, "a request started at \(start.at), deadline \(deadline)")
+            #expect(start.at + start.timeout <= deadline, "a request could run to \(start.at + start.timeout)")
+            #expect(start.timeout <= SettlementClient.requestTimeout)
+        }
+    }
+
+    @Test("settleAndWait spends one budget across the upload, the polls and their timeouts")
+    func oneBudgetAcrossUploadAndPolls() async throws {
+        let clock = FakeClock()
+        // The upload takes 12 s and answers pending; the poll at 14 s would take 25 s.
+        let stub = StubTransport([APIFixtures.pending(retryAfter: 2).delayed(12), APIFixtures.settled().delayed(25)],
+                                 clock: clock)
+        do {
+            _ = try await APIFixtures.client(stub, clock: clock).settleAndWait(note: APIFixtures.note(0), timeout: 30)
+            Issue.record("expected stillPending")
+        } catch let SettlementError.stillPending(last) {
+            #expect(last.signature == APIFixtures.settledSignatureBase58, "the last pending body is reported")
+        }
+        #expect(clock.now <= 30, "the call ran \(clock.now) s on a 30 s budget")
+        #expect(stub.starts.map(\.timeout) == [20, 16])
+        #expect(stub.requests.count == 2)
+        expectInsideBudget(stub, deadline: 30)
+    }
+
+    @Test("a budget that runs out during the upload ends in stillPending without a signature")
+    func budgetEndsDuringUpload() async throws {
+        let clock = FakeClock()
+        let stub = StubTransport([APIFixtures.settled().delayed(25)], clock: clock)
+        let note = APIFixtures.note(0)
+        await #expect(throws: SettlementError.stillPending(SettlementClient.unknownPending(note.noteId))) {
+            try await APIFixtures.client(stub, clock: clock).settleAndWait(note: note, timeout: 10)
+        }
+        #expect(clock.now == 10)
+        #expect(stub.starts.map(\.timeout) == [10])
+    }
+
+    @Test("a retry that cannot fit in the budget is not attempted; the failure is returned")
+    func retryOutsideBudget() async throws {
+        let clock = FakeClock()
+        let stub = StubTransport([APIFixtures.errorReply(503, "chain_unavailable").delayed(4)], clock: clock)
+        await #expect(throws: SettlementError.chainUnavailable(message: "m")) {
+            try await APIFixtures.client(stub, clock: clock).settleAndWait(note: APIFixtures.note(0), timeout: 5)
+        }
+        #expect(stub.requests.count == 1)
+        #expect(clock.now <= 5)
+    }
+
+    @Test("a retry inside the budget gets only the time that is left")
+    func retryInsideBudget() async throws {
+        let clock = FakeClock()
+        let stub = StubTransport([StubReply(failure: URLError(.networkConnectionLost)).delayed(3),
+                                  APIFixtures.settled().delayed(2)], clock: clock)
+        let decision = try await APIFixtures.client(stub, clock: clock).settleAndWait(note: APIFixtures.note(0), timeout: 10)
+        #expect(decision.status == .settled)
+        // Upload fails at 3 s, waits 1 s, retries at 4 s with 6 s left.
+        #expect(stub.starts.map(\.at) == [0, 4])
+        #expect(stub.starts.map(\.timeout) == [10, 6])
+        expectInsideBudget(stub, deadline: 10)
+    }
+
+    @Test("no request is started with no budget left")
+    func noBudgetNoRequest() async throws {
+        let stub = StubTransport([])
+        let note = APIFixtures.note(0)
+        await #expect(throws: SettlementError.stillPending(SettlementClient.unknownPending(note.noteId))) {
+            try await APIFixtures.client(stub).waitForDecision(noteId: note.noteId, timeout: 0)
+        }
+        #expect(stub.requests.isEmpty)
+    }
+}
+
+@Suite("URLSessionTransport: size cap and total timeout")
+struct URLSessionTransportTests {
+    func send(_ script: ScriptedURLProtocol.Script, timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
+        let transport = URLSessionTransport(session: ScriptedURLProtocol.session())
+        let request = URLRequest(url: ScriptedURLProtocol.register(script), timeoutInterval: timeout)
+        return try await transport.send(request)
+    }
+
+    static let tooLarge = SettlementError.invalidResponse("response too large")
+    static let kib = Data(repeating: 0x41, count: 1024)
+
+    @Test("a normal body comes through whole")
+    func smallBody() async throws {
+        let (data, response) = try await send(.init(status: 200, headers: ["Content-Length": "5"],
+                                                    chunks: [Data("hel".utf8), Data("lo".utf8)]))
+        #expect(data == Data("hello".utf8))
+        #expect(response.statusCode == 200)
+    }
+
+    @Test("a body over 64 KiB with no Content-Length is cut off")
+    func noContentLength() async throws {
+        await #expect(throws: Self.tooLarge) { try await send(.init(chunks: Array(repeating: Self.kib, count: 100))) }
+    }
+
+    @Test("a body over 64 KiB is cut off even when Content-Length claims it is small")
+    func lyingContentLength() async throws {
+        await #expect(throws: Self.tooLarge) {
+            try await send(.init(headers: ["Content-Length": "10"], chunks: Array(repeating: Self.kib, count: 100)))
+        }
+    }
+
+    @Test("a declared Content-Length over 64 KiB fails before the body is read")
+    func declaredTooLarge() async throws {
+        await #expect(throws: Self.tooLarge) {
+            try await send(.init(headers: ["Content-Length": "1048576"], chunks: [Data("tiny".utf8)]))
+        }
+    }
+
+    @Test("exactly 64 KiB is accepted")
+    func atTheCap() async throws {
+        let (data, _) = try await send(.init(chunks: Array(repeating: Self.kib, count: 64)))
+        #expect(data.count == URLSessionTransport.defaultMaxResponseBytes)
+    }
+
+    @Test("timeoutInterval limits the whole exchange, even when bytes keep arriving")
+    func totalTimeout() async throws {
+        // One byte every 0.1 s for 3 s: URLSession's own timer restarts on every byte.
+        let script = ScriptedURLProtocol.Script(chunks: Array(repeating: Data([0x41]), count: 30), interval: 0.1)
+        let started = Date()
+        await #expect(throws: URLError(.timedOut)) { try await send(script, timeout: 0.5) }
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(elapsed < 2.5, "took \(elapsed) s on a 0.5 s timeout")
+    }
+
+    @Test("the default session bounds each exchange at 60 s and each body at 64 KiB")
+    func defaults() {
+        let transport = URLSessionTransport()
+        #expect(transport.session.configuration.timeoutIntervalForResource == 60)
+        #expect(transport.session.configuration.timeoutIntervalForRequest == 20)
+        #expect(transport.maxResponseBytes == 64 * 1024)
     }
 }
 
@@ -532,6 +758,20 @@ struct SettlementErrorTests {
         for (reply, expected) in cases {
             let client = APIFixtures.client(StubTransport([reply]), retry: .never)
             await #expect(throws: expected) { try await client.outcome(noteId: APIFixtures.note(0).noteId) }
+        }
+    }
+
+    @Test("a known error name on the wrong HTTP status is a protocol violation")
+    func statusAndNameMustAgree() async throws {
+        let cases: [(Int, String)] = [
+            (429, "chain_unavailable"), (503, "rate_limited"), (400, "unknown_note"), (404, "bad_json"),
+            (500, "budget_exhausted"), (422, "chain_unavailable"), (422, "name_length"),
+        ]
+        for (status, name) in cases {
+            let client = APIFixtures.client(StubTransport([APIFixtures.errorReply(status, name)]), retry: .never)
+            await #expect(throws: SettlementError.protocolViolation("HTTP \(status) with error \(name)")) {
+                try await client.outcome(noteId: APIFixtures.note(0).noteId)
+            }
         }
     }
 
@@ -582,6 +822,9 @@ struct SettlementErrorTests {
             APIFixtures.errorReply(400, "bad_json"),
             StubReply(status: 502, body: Data()),
             StubReply(failure: URLError(.cancelled)),
+            // A retryable name on the wrong status is not trusted, so not retried.
+            APIFixtures.errorReply(429, "chain_unavailable", headers: ["Retry-After": "1"]),
+            APIFixtures.errorReply(500, "chain_unavailable"),
         ]
         for reply in singles {
             let stub = StubTransport([reply])
@@ -604,12 +847,50 @@ struct Base58Tests {
             let f = c["fields"] as! [String: Any]
             let raw = Vectors.hex(f["txSignatureHex"])
             #expect(Base58.encode(raw) == f["txSignatureBase58"] as! String)
-            #expect(Base58.decode(f["txSignatureBase58"] as! String) == raw)
+            #expect(Base58.decode(f["txSignatureBase58"] as! String, maxBytes: 64) == raw)
         }
         let k = Vectors.constants
         #expect(Base58.encode(Vectors.hex(k["programIdHex"])) == k["programIdBase58"] as! String)
         #expect(Base58.encode(Vectors.hex(k["mintHex"])) == k["mintBase58"] as! String)
-        #expect(Base58.decode("0OIl") == nil)
+        #expect(Base58.decode("0OIl", maxBytes: 64) == nil)
+    }
+
+    @Test("the largest 64-byte value takes exactly 88 characters and still decodes")
+    func longestSignature() throws {
+        #expect(Base58.maxLength(bytes: 64) == 88)
+        #expect(Base58.maxLength(bytes: 32) == 44)
+        let max = Data(repeating: 0xff, count: 64)
+        let text = Base58.encode(max)
+        #expect(text.utf8.count == 88)
+        #expect(Base58.decode(text, maxBytes: 64) == max)
+        let zeros = Data(repeating: 0, count: 64)
+        #expect(Base58.decode(Base58.encode(zeros), maxBytes: 64) == zeros)
+    }
+
+    @Test("decoding is bounded: over-long text and over-size values are refused")
+    func boundedDecode() {
+        // 88 characters (within the length cap) whose value needs 65 bytes: the conversion bound.
+        #expect(Base58.decode(String(repeating: "z", count: 88), maxBytes: 64) == nil)
+        // 89 characters, and a large alphabet-valid string a hostile 202 body could carry.
+        #expect(Base58.decode(String(repeating: "2", count: 89), maxBytes: 64) == nil)
+        #expect(Base58.decode(String(repeating: "1", count: 89), maxBytes: 64) == nil)
+        let huge = String(repeating: "z", count: 60_000)
+        let started = Date()
+        #expect(Base58.decode(huge, maxBytes: 64) == nil)
+        #expect(SettlementClient.explorerURL(signature: huge, clusterId: 0) == nil)
+        #expect(Date().timeIntervalSince(started) < 1)
+    }
+
+    @Test("an over-long signature in a 202 body is dropped, not decoded")
+    func hostilePendingSignature() async throws {
+        let body = APIFixtures.json(["status": "pending", "signature": String(repeating: "z", count: 60_000), "retryAfter": 1])
+        let stub = StubTransport([StubReply(status: 202, body: body)])
+        guard case .pending(let p) = try await APIFixtures.client(stub).outcome(noteId: APIFixtures.note(0).noteId) else {
+            Issue.record("expected pending")
+            return
+        }
+        #expect(p.signature == nil)
+        #expect(p.explorer == nil)
     }
 
     @Test("explorer links are built only from a canonical 64-byte signature")

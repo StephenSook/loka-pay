@@ -1,22 +1,34 @@
 import Foundation
 
 /// The HTTP seam. The app uses `URLSessionTransport`; tests pass a stub, so they never touch
-/// the network.
+/// the network. A transport must finish, or throw `URLError(.timedOut)`, within
+/// `request.timeoutInterval` seconds: the client puts its remaining time budget there.
 public protocol HTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
 }
 
 /// URLSession with no cookies and no cache: the API has no login (protocol/API-V1.md section 1).
+/// It caps every response body and treats `timeoutInterval` as a limit on the whole exchange,
+/// which URLSession alone does not (its request timeout restarts with every packet).
 public struct URLSessionTransport: HTTPTransport {
-    private let session: URLSession
+    /// The largest response body accepted. The largest legitimate body (a registration with 16
+    /// earmarks) is under 2 KB.
+    public static let defaultMaxResponseBytes = 64 * 1024
+    /// Bound on any one exchange in the default session (URLSession's own default is 7 days).
+    public static let resourceTimeout: TimeInterval = 60
 
-    public init(session: URLSession? = nil) {
+    let session: URLSession
+    let maxResponseBytes: Int
+
+    public init(session: URLSession? = nil, maxResponseBytes: Int = URLSessionTransport.defaultMaxResponseBytes) {
+        self.maxResponseBytes = maxResponseBytes
         if let session {
             self.session = session
             return
         }
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = SettlementClient.requestTimeout
+        config.timeoutIntervalForResource = Self.resourceTimeout
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.urlCache = nil
@@ -25,15 +37,47 @@ public struct URLSessionTransport: HTTPTransport {
     }
 
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+        let limit = min(max(request.timeoutInterval, 0), 86_400)
+        return try await withThrowingTaskGroup(of: (Data, HTTPURLResponse).self) { group in
+            group.addTask { try await self.receive(request) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                throw URLError(.timedOut)
+            }
+            // Whichever finishes first wins; the other is cancelled (a cancelled download stops).
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw URLError(.timedOut) }
+            return first
+        }
+    }
+
+    /// Reads the body with a running count, so a missing or false Content-Length cannot make it
+    /// buffer more than `maxResponseBytes`.
+    func receive(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
             throw SettlementError.invalidResponse("not an HTTP response")
+        }
+        // A declared length over the cap fails early; -1 (unknown) passes to the running count.
+        guard http.expectedContentLength <= Int64(maxResponseBytes) else {
+            bytes.task.cancel()
+            throw SettlementError.invalidResponse("response too large")
+        }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < maxResponseBytes else {
+                bytes.task.cancel()
+                throw SettlementError.invalidResponse("response too large")
+            }
+            data.append(byte)
         }
         return (data, http)
     }
 }
 
-/// Monotonic time and sleep for retries and polling, injectable so tests run instantly.
+/// Monotonic time and sleep for retries, polling and the overall budget, injectable so tests
+/// run instantly.
 public struct SettlementClock: Sendable {
     public let now: @Sendable () -> TimeInterval
     public let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -52,7 +96,7 @@ public struct SettlementClock: Sendable {
 /// Every way a settlement call can fail. API errors keep the server's `message` for logs;
 /// screens show their own copy.
 public enum SettlementError: Error, Equatable, Sendable {
-    // The `error` names of protocol/API-V1.md section 1.
+    // The `error` names of protocol/API-V1.md section 1, each with the HTTP status it requires.
     case badJSON(message: String)
     case badBase64url(message: String)
     case badPubkey(message: String)
@@ -72,7 +116,7 @@ public enum SettlementError: Error, Equatable, Sendable {
     // Transport.
     case network(URLError.Code)
     case transport(String)
-    /// A 2xx body that is not the JSON the contract describes.
+    /// A 2xx body that is not the JSON the contract describes, or a body over the size cap.
     case invalidResponse(String)
 
     // Signed bytes in a 2xx body that do not check out.
@@ -84,10 +128,14 @@ public enum SettlementError: Error, Equatable, Sendable {
     case payerMismatch
     /// The merchant certificate is genuinely signed but for a different merchant key.
     case merchantMismatch
-    /// A signed response API v1 never sends, such as a 200 carrying a status-3 CONF.
+    /// A response API v1 never sends: a 200 carrying a status-3 CONF, or an error name with
+    /// the wrong HTTP status. Never retried.
     case protocolViolation(String)
 
-    /// `waitForDecision` reached its timeout with the note still in flight.
+    /// The time budget of `waitForDecision` or `settleAndWait` ran out with no decision. The
+    /// pending body is the last one the server sent; without one (the budget ended during the
+    /// upload) its signature is nil and the server may not have the note, so uploading the same
+    /// note again is the way to find out (it is idempotent by note id).
     case stillPending(PendingSettlement)
 }
 
@@ -108,6 +156,9 @@ extension SettlementError {
         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
 }
+
+/// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`.
+struct BudgetSpent: Error {}
 
 /// How `settle` and the note reads resend after a retryable failure. Registration is never
 /// retried automatically.
@@ -200,6 +251,8 @@ public struct SettlementClient: Sendable {
     public static let requestTimeout: TimeInterval = 20
     /// The longest wait between polls (API-V1 section 5).
     public static let maxPollInterval: TimeInterval = 10
+    /// The least time a request inside an overall budget is started with.
+    public static let minRequestBudget: TimeInterval = 1
 
     public let baseURL: URL
     public let deployment: Deployment
@@ -265,60 +318,84 @@ public struct SettlementClient: Sendable {
     /// (`replayed: true`), and the chain refuses a used serial anyway. Never retry with re-signed
     /// or different note bytes. Adding an ack to a decided note changes neither decision nor CONF.
     public func settle(note: SignedNote, ack: Ack? = nil) async throws -> SettlementOutcome {
-        let body = SettlementAPI.NoteRequest(note: Base64URL.encode(note.wire), ack: ack.map { Base64URL.encode($0.wire) })
-        let request = try post("v1/notes", body)
-        let (data, response) = try await performWithRetry(request)
-        return try outcome(data: data, response: response, noteId: note.noteId)
+        try await settle(note: note, ack: ack, deadline: nil)
     }
 
     /// `GET /v1/notes/{noteId}`: one read, to recover a decision after a dropped connection.
     public func outcome(noteId: Data) async throws -> SettlementOutcome {
+        try await outcome(noteId: noteId, deadline: nil)
+    }
+
+    /// Polls `GET /v1/notes/{noteId}` until the chain decides, within `timeout` seconds in all,
+    /// retries included. Waits the server's `retryAfter`, backing off (1, 2, 4, 8 s) to at most
+    /// 10 s between polls, and throws `.stillPending` once no further poll fits in the budget.
+    public func waitForDecision(noteId: Data, timeout: TimeInterval,
+                                first: PendingSettlement? = nil) async throws -> SettlementDecision {
+        try await poll(noteId: noteId, deadline: clock.now() + timeout, first: first)
+    }
+
+    /// Uploads a note and, while it is in flight, polls until the chain decides. `timeout` is one
+    /// budget for the upload, every poll and every retry; `.stillPending` when it runs out.
+    public func settleAndWait(note: SignedNote, ack: Ack? = nil, timeout: TimeInterval) async throws -> SettlementDecision {
+        let deadline = clock.now() + timeout
+        let first: PendingSettlement
+        do {
+            switch try await settle(note: note, ack: ack, deadline: deadline) {
+            case .decided(let decision): return decision
+            case .pending(let pending): first = pending
+            }
+        } catch is BudgetSpent {
+            throw SettlementError.stillPending(Self.unknownPending(note.noteId))
+        }
+        return try await poll(noteId: note.noteId, deadline: deadline, first: first)
+    }
+
+    // MARK: - Budgeted calls
+
+    private func settle(note: SignedNote, ack: Ack?, deadline: TimeInterval?) async throws -> SettlementOutcome {
+        let body = SettlementAPI.NoteRequest(note: Base64URL.encode(note.wire), ack: ack.map { Base64URL.encode($0.wire) })
+        let request = try post("v1/notes", body)
+        let (data, response) = try await performWithRetry(request, deadline: deadline)
+        return try outcome(data: data, response: response, noteId: note.noteId)
+    }
+
+    private func outcome(noteId: Data, deadline: TimeInterval?) async throws -> SettlementOutcome {
         precondition(noteId.count == 32, "a note id is 32 bytes")
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/notes/\(noteId.hex)"),
                                  cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Self.requestTimeout)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await performWithRetry(request)
+        let (data, response) = try await performWithRetry(request, deadline: deadline)
         return try outcome(data: data, response: response, noteId: noteId)
     }
 
-    /// Polls `GET /v1/notes/{noteId}` until the chain decides. Waits the server's `retryAfter`,
-    /// backing off (1, 2, 4, 8 s) to at most 10 s between polls, and throws `.stillPending` with
-    /// the last pending body once `timeout` seconds have passed.
-    public func waitForDecision(noteId: Data, timeout: TimeInterval,
-                                first: PendingSettlement? = nil) async throws -> SettlementDecision {
-        let deadline = clock.now() + timeout
-        var pending: PendingSettlement
-        if let first {
-            pending = first
-        } else {
-            switch try await outcome(noteId: noteId) {
-            case .decided(let decision): return decision
-            case .pending(let p): pending = p
-            }
-        }
+    private func poll(noteId: Data, deadline: TimeInterval, first: PendingSettlement?) async throws -> SettlementDecision {
+        var pending = first
         var backoff: TimeInterval = 1
         while true {
-            // The last poll lands on the deadline; after it, give up with what the server said.
-            let remaining = deadline - clock.now()
-            guard remaining > 0 else { throw SettlementError.stillPending(pending) }
-            let hint = TimeInterval(pending.retryAfter ?? 0)
-            try await clock.sleep(min(Self.maxPollInterval, max(hint, backoff), remaining))
-            backoff = min(backoff * 2, Self.maxPollInterval)
-            switch try await outcome(noteId: noteId) {
-            case .decided(let decision): return decision
-            case .pending(let p): pending = p
+            if let current = pending {
+                // Wait before the next poll, never shorter than the server asked and never so long
+                // that the poll would start with less than `minRequestBudget` left.
+                let hint = min(max(0, TimeInterval(current.retryAfter ?? 0)), Self.maxPollInterval)
+                let wait = min(Self.maxPollInterval, max(hint, backoff))
+                let next = min(wait, deadline - clock.now() - Self.minRequestBudget)
+                guard next >= hint else { throw SettlementError.stillPending(current) }
+                if next > 0 { try await clock.sleep(next) }
+                backoff = min(backoff * 2, Self.maxPollInterval)
+            }
+            do {
+                switch try await outcome(noteId: noteId, deadline: deadline) {
+                case .decided(let decision): return decision
+                case .pending(let p): pending = p
+                }
+            } catch is BudgetSpent {
+                throw SettlementError.stillPending(pending ?? Self.unknownPending(noteId))
             }
         }
     }
 
-    /// Uploads a note and, while it is in flight, polls until the chain decides or `timeout`
-    /// seconds pass (see `waitForDecision`).
-    public func settleAndWait(note: SignedNote, ack: Ack? = nil, timeout: TimeInterval) async throws -> SettlementDecision {
-        switch try await settle(note: note, ack: ack) {
-        case .decided(let decision): return decision
-        case .pending(let pending): return try await waitForDecision(noteId: note.noteId, timeout: timeout, first: pending)
-        }
+    static func unknownPending(_ noteId: Data) -> PendingSettlement {
+        PendingSettlement(noteId: noteId, signature: nil, explorer: nil, retryAfter: nil)
     }
 
     // MARK: - Verification
@@ -382,8 +459,10 @@ public struct SettlementClient: Sendable {
 
     /// `https://explorer.solana.com/tx/<base58>?cluster=devnet` (API-V1 section 1), only for a
     /// canonical base58 string of a 64-byte signature, so no server text becomes a link as is.
+    /// This is the one place base58 is decoded from server text, and the decode is bounded.
     static func explorerURL(signature: String, clusterId: UInt8) -> URL? {
-        guard let raw = Base58.decode(signature), raw.count == 64, Base58.encode(raw) == signature else { return nil }
+        guard let raw = Base58.decode(signature, maxBytes: 64), raw.count == 64,
+              Base58.encode(raw) == signature else { return nil }
         return URL(string: "https://explorer.solana.com/tx/\(signature)" + (clusterId == 0 ? "?cluster=devnet" : ""))
     }
 
@@ -399,20 +478,32 @@ public struct SettlementClient: Sendable {
         return request
     }
 
-    private func performWithRetry(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private func performWithRetry(_ request: URLRequest, deadline: TimeInterval?) async throws -> (Data, HTTPURLResponse) {
         var attempt = 1
         while true {
             do {
-                return try await perform(request)
-            } catch let error as SettlementError where error.isRetryable && attempt < retryPolicy.maxAttempts {
+                return try await perform(request, deadline: deadline)
+            } catch let error as SettlementError where error.isRetryable {
+                // The budget ran out during the request: report that, not the timeout it caused.
+                if let deadline, clock.now() >= deadline { throw BudgetSpent() }
+                guard attempt < retryPolicy.maxAttempts else { throw error }
                 let delay = retryPolicy.baseDelaySeconds * pow(2, Double(attempt - 1))
+                // No room for the delay and one more request: the failure itself is the answer.
+                if let deadline, clock.now() + delay + Self.minRequestBudget > deadline { throw error }
                 if delay > 0 { try await clock.sleep(delay) }
                 attempt += 1
             }
         }
     }
 
-    private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private func perform(_ request: URLRequest, deadline: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        if let deadline {
+            // Never start a request with no budget left, and never let one outlive the budget.
+            let remaining = deadline - clock.now()
+            guard remaining > 0 else { throw BudgetSpent() }
+            request.timeoutInterval = min(Self.requestTimeout, remaining)
+        }
         let data: Data
         let response: HTTPURLResponse
         do {
@@ -432,14 +523,33 @@ public struct SettlementClient: Sendable {
         return (data, response)
     }
 
+    /// The HTTP status each error name must come with (API-V1 section 1).
+    static let errorStatus: [String: Int] = [
+        "bad_json": 400, "bad_base64url": 400, "bad_pubkey": 400, "name_length": 400,
+        "unknown_note": 404, "rate_limited": 429, "budget_exhausted": 429, "chain_unavailable": 503,
+    ]
+
+    /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, and `bad_ack`.
+    static let refusalChecks: Set<String> = [
+        "length", "prefix", "cluster", "currency", "amount_zero", "wrong_program", "wrong_mint",
+        "bad_pubkey", "high_s", "bad_signature", "bad_ack",
+    ]
+
     static func apiError(status: Int, data: Data, response: HTTPURLResponse) -> SettlementError {
         guard let body = try? JSONDecoder().decode(SettlementAPI.ErrorBody.self, from: data) else {
             return .http(status: status, error: nil, message: nil)
         }
+        let name = body.error
         let message = body.message
-        // 422 first: `bad_pubkey` is a 400 on registration but a 422 refusal of a note.
-        if status == 422 { return .refused(check: body.error, message: message) }
-        switch body.error {
+        // Status and name are matched together, so a known name on the wrong status (a 429 that
+        // says chain_unavailable) is never trusted and never retried.
+        if status == 422 {
+            guard refusalChecks.contains(name) else { return .protocolViolation("HTTP 422 with error \(name)") }
+            return .refused(check: name, message: message)
+        }
+        guard let expected = errorStatus[name] else { return .http(status: status, error: name, message: message) }
+        guard expected == status else { return .protocolViolation("HTTP \(status) with error \(name)") }
+        switch name {
         case "bad_json": return .badJSON(message: message)
         case "bad_base64url": return .badBase64url(message: message)
         case "bad_pubkey": return .badPubkey(message: message)
@@ -448,7 +558,7 @@ public struct SettlementClient: Sendable {
         case "rate_limited": return .rateLimited(retryAfter: retryAfter(response), message: message)
         case "budget_exhausted": return .budgetExhausted(message: message)
         case "chain_unavailable": return .chainUnavailable(message: message)
-        default: return .http(status: status, error: body.error, message: message)
+        default: return .http(status: status, error: name, message: message)
         }
     }
 
@@ -570,8 +680,15 @@ enum Base58 {
         return String(decoding: out, as: UTF8.self)
     }
 
-    /// Nil for any character outside the alphabet.
-    static func decode(_ text: String) -> Data? {
+    /// The longest base58 text `byteCount` bytes encode to: ceil(byteCount x log 256 / log 58),
+    /// so 88 characters for a 64-byte signature.
+    static func maxLength(bytes byteCount: Int) -> Int { (byteCount * 1366 + 999) / 1000 }
+
+    /// Nil for a character outside the alphabet or a value over `maxBytes` bytes. Text longer
+    /// than `maxBytes` can encode to is refused before any work, and the output is bounded during
+    /// the conversion, so server text cannot make this slow.
+    static func decode(_ text: String, maxBytes: Int) -> Data? {
+        guard text.utf8.count <= maxLength(bytes: maxBytes) else { return nil }
         let chars = Array(text.utf8)
         let zeros = chars.prefix(while: { $0 == alphabet[0] }).count
         var bytes: [UInt8] = []  // base 256, least significant first
@@ -587,6 +704,7 @@ enum Base58 {
                 bytes.append(UInt8(carry & 0xff))
                 carry >>= 8
             }
+            guard zeros + bytes.count <= maxBytes else { return nil }
         }
         return Data([UInt8](repeating: 0, count: zeros) + bytes.reversed())
     }
