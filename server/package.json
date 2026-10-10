@@ -6,6 +6,9 @@
   "engines": { "node": ">=22 <23" },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "check:esm": "tsc -p tsconfig.build.json && node scripts/check-esm.mjs",
     "test": "vitest run",
     "test:devnet": "tsx src/settle/devnet.ts"
   },
