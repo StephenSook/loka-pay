@@ -33,7 +33,7 @@ public final class OfflineLedger: @unchecked Sendable {
     /// Every instance on the same file shares one lock (FileLocks), so two ledger objects can
     /// never both approve capacity or overwrite each other's accepted notes.
     public init(url: URL) {
-        self.url = url
+        self.url = FileLocks.canonical(url)
         self.lock = FileLocks.lock(for: url)
     }
 
