@@ -335,16 +335,21 @@ test('expired and not found rebuilds exactly once, including concurrent polls', 
   const f = await fixture(); f.chain.decision = null;
   const first = await f.service.submit({ note }); const original = first.body.signature;
   f.chain.blockHeight.mockResolvedValue(101);
-  f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
-    blockhash: base58.encode(new Uint8Array(32).fill(8)), lastValidBlockHeight: 200 });
+  f.chain.prepare.mockImplementation(async () => {
+    const candidate = 8 + f.chain.prepare.mock.calls.length;
+    return { signature: base58.encode(new Uint8Array(64).fill(candidate)), rawTransaction: `replacement-${candidate}`,
+      blockhash: base58.encode(new Uint8Array(32).fill(candidate)), lastValidBlockHeight: 200 };
+  });
   const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
   await Promise.all([f.service.get(noteId), other.get(noteId), f.service.get(noteId)]);
-  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect(f.chain.prepare.mock.calls.length).toBeGreaterThanOrEqual(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
   const saved = await f.store.get(noteId); expect(saved?.attempt?.signature).toBe(original);
   expect(saved?.replacement?.signature).not.toBe(original); expect(saved?.rebuildClaimed).toBe(true);
+  const preparations = f.chain.prepare.mock.calls.length;
+  expect(f.chain.send.mock.calls[1][0].signature).toBe(saved?.replacement?.signature);
   f.chain.blockHeight.mockResolvedValue(201);
   expect((await other.get(noteId)).statusCode).toBe(202);
-  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(preparations); expect(f.chain.send).toHaveBeenCalledTimes(2);
 });
 
 test('expired but found uses the original result without rebuilding', async () => {
@@ -390,13 +395,36 @@ test('the original is looked up again after height lookup before admitting a reb
   expect((await f.service.get(noteId)).statusCode).toBe(200); expect(f.chain.prepare).toHaveBeenCalledTimes(1);
 });
 
-test('uncertain rebuild preparation consumes the one rebuild claim across restarts', async () => {
+test('failed rebuild preparation leaves the replacement available across restarts', async () => {
   const f = await fixture(); f.chain.decision = null; await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
-  f.chain.prepare.mockRejectedValue(new Error('timeout'));
+  f.chain.prepare.mockRejectedValueOnce(new Error('timeout'));
   expect((await f.service.get(noteId)).statusCode).toBe(202);
+  expect((await f.store.get(noteId))!.rebuildClaimed).toBe(false);
+  f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
+    blockhash: 'fresh', lastValidBlockHeight: 200 });
   const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
-  expect((await other.get(noteId)).statusCode).toBe(202); expect(f.chain.prepare).toHaveBeenCalledTimes(2);
+  expect((await other.get(noteId)).statusCode).toBe(202); expect(f.chain.prepare).toHaveBeenCalledTimes(3);
+  expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('a failed replacement save can recover without consuming the rebuild', async () => {
+  const f = await fixture(); f.chain.decision = null; await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
+    blockhash: 'fresh', lastValidBlockHeight: 200 });
+  vi.spyOn(f.store, 'saveReplacement').mockRejectedValueOnce(new Error('database unavailable'));
+  expect((await f.service.get(noteId)).statusCode).toBe(202);
+  expect((await f.store.get(noteId))!.rebuildClaimed).toBe(false);
   expect(f.chain.send).toHaveBeenCalledTimes(1);
+  await f.service.get(noteId); expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('legacy rebuild claims without saved replacement recover through the atomic save', async () => {
+  const f = await fixture(); f.chain.decision = null; await f.service.submit({ note });
+  await f.db.query('UPDATE settlement_attempts SET rebuild_claimed=true WHERE note_id=$1', [noteId]);
+  f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
+    blockhash: 'fresh', lastValidBlockHeight: 200 });
+  await f.service.get(noteId); expect(f.chain.send).toHaveBeenCalledTimes(2);
 });
 
 test.each(['prepare', 'save_attempt', 'send', 'lookup', 'height_lookup', 'sign_confirmation', 'save_decision'] as const)(

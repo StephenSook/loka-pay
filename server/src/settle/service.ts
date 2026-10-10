@@ -88,7 +88,6 @@ export class SettlementService {
         if (again.found) return this.pending(row);
         return await this.finalize(row, row.replacement.signature, current.decision, replayed);
       }
-      if (row.rebuildClaimed) return this.pending(row, 'rebuild_consumed');
       stage = 'height_lookup';
       const height = await this.options.chain.blockHeight();
       if (!Number.isSafeInteger(height) || height <= row.attempt.lastValidBlockHeight) return this.pending(row);
@@ -97,9 +96,6 @@ export class SettlementService {
       const atExpiry = await this.options.chain.lookup(row.attempt.signature);
       if (atExpiry.decision) return await this.finalize(row, row.attempt.signature, atExpiry.decision, replayed);
       if (atExpiry.found) return this.pending(row);
-      stage = 'rebuild_claim';
-      if (!await this.options.store.claimRebuild(row.noteId, row.attempt.signature)) return this.pending(row);
-      row = { ...row, rebuildClaimed: true };
       stage = 'lookup';
       const beforeSign = await this.options.chain.lookup(row.attempt!.signature);
       if (beforeSign.decision) return await this.finalize(row, row.attempt!.signature, beforeSign.decision, replayed);
@@ -110,8 +106,10 @@ export class SettlementService {
       if (replacement.signature === row.attempt!.signature || replacement.blockhash === row.attempt!.blockhash
         || replacement.lastValidBlockHeight <= height) throw new Error('Replacement requires a fresh blockhash');
       stage = 'rebuild_save';
-      await this.options.store.saveReplacement(row.noteId, replacement);
-      row = { ...row, replacement };
+      if (!await this.options.store.saveReplacement(row.noteId, row.attempt.signature, replacement)) {
+        return this.pending((await this.options.store.get(row.noteId))!);
+      }
+      row = { ...row, replacement, rebuildClaimed: true };
       stage = 'rebuild_send';
       await this.options.chain.send(replacement);
       return this.resolve(row, replayed);

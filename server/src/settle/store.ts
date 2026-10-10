@@ -77,18 +77,13 @@ export class SettlementStore {
     return row.decision;
   }
 
-  async claimRebuild(noteId: string, originalSignature: string): Promise<boolean> {
-    const result = await this.db.query(`UPDATE settlement_attempts SET rebuild_claimed=true
-      WHERE note_id=$1 AND attempt->>'signature'=$2 AND NOT rebuild_claimed AND decision IS NULL RETURNING note_id`,
-    [noteId, originalSignature]);
+  async saveReplacement(noteId: string, originalSignature: string, replacement: PreparedAttempt): Promise<boolean> {
+    // Claim and save in one write. Legacy claims without a saved replacement can recover too.
+    const result = await this.db.query(`UPDATE settlement_attempts SET replacement=$3::jsonb,rebuild_claimed=true
+      WHERE note_id=$1 AND attempt->>'signature'=$2 AND replacement IS NULL AND decision IS NULL
+        AND attempt->>'signature'<>$3::jsonb->>'signature' RETURNING note_id`,
+    [noteId, originalSignature, JSON.stringify(replacement)]);
     return result.rows.length === 1;
-  }
-
-  async saveReplacement(noteId: string, attempt: PreparedAttempt): Promise<void> {
-    const result = await this.db.query(`UPDATE settlement_attempts SET replacement=$2::jsonb
-      WHERE note_id=$1 AND rebuild_claimed AND replacement IS NULL AND decision IS NULL
-        AND attempt->>'signature'<>$2::jsonb->>'signature' RETURNING note_id`, [noteId, JSON.stringify(attempt)]);
-    if (result.rows.length !== 1) throw new Error('Replacement was not saved');
   }
 
   async markPending(noteId: string, stage: PendingStage, failed: boolean): Promise<void> {
