@@ -10,11 +10,11 @@ Sandbox tokens only: devnet USDC has no value. Moving real dollars would require
 
 | What | Where | Status |
 |---|---|---|
-| Judge guide: a 3-minute itinerary | https://zerobars.us/judge | TODO(3.2): live after deploy |
-| Live ledger with explorer links | https://zerobars.us/live | TODO(2.19) |
+| Judge guide: a 3-minute itinerary | https://zerobars.us/judge | Live: program facts read from devnet and CI results read from GitHub when the page loads, each with its read time |
+| Live ledger with explorer links | https://zerobars.us/live | Live: your browser streams the program's transactions from devnet; the chip says Live only while the connection carries traffic |
 | Verify a signed receipt | https://zerobars.us/verify | Live: your browser checks every signature; try the labelled test receipt |
 | Web lab: pay with your own passkey | https://zerobars.us/lab | TODO(3.10, 3.23), T2 |
-| Proof page: claims table, reserves, measured numbers | https://zerobars.us/proof | TODO(3.24), T2 |
+| Proof page: claims table, reserves, built this weekend | https://zerobars.us/proof | Live: each claim says Live only from a current read and shows its age; proof of reserves reads every balance at one slot; the commit count since hacking started comes from GitHub |
 | Settlement API | https://api.zerobars.us | Live on devnet: `curl -s https://api.zerobars.us/api/health` returns the cluster, the program id and the current slot |
 | iPhone app (TestFlight) | TODO(4.7): public link + QR once Apple approves | Build 1 submitted to Apple beta review Sat Oct 10, 12:05 AM ET |
 | The Solana program (devnet) | https://explorer.solana.com/address/HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG?cluster=devnet | Live: deployed Sat Oct 10, 1:01 AM ET; vault initialized 1:05 AM ([transaction](https://explorer.solana.com/tx/2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R?cluster=devnet)); every public address is in `config/pins.json` |
@@ -40,7 +40,7 @@ Sandbox tokens only: devnet USDC has no value. Moving real dollars would require
 - **Offline risk is bounded and visible:** a merchant who accepts offline carries a limited, attributable risk, capped by the allowance's offline limit. A reused serial fails on-chain.
 - **Architecture diagram:** TODO(3.11).
 
-Trust assumptions and the threat model, in plain words: https://zerobars.us/trust (TODO(3.2)).
+Trust assumptions and the threat model, in plain words: https://zerobars.us/trust (who holds the program's upgrade authority is read from devnet when the page loads).
 
 ## Built before Hacklanta (disclosure)
 
