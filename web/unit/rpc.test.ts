@@ -203,7 +203,14 @@ test.describe("a rate-limited answer is not retried", () => {
   });
 
   test("GitHub's used-up limit is a rate-limited GitHubError, from one request", async () => {
-    const error = await readCompareUncached(`${url}/github/compare`, 5000).catch((e: unknown) => e);
+    // The message names requests without a token, so the test runs without one.
+    const token = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    const error = await readCompareUncached(`${url}/github/compare`, 5000)
+      .catch((e: unknown) => e)
+      .finally(() => {
+        if (token !== undefined) process.env.GITHUB_TOKEN = token;
+      });
     expect(error).toBeInstanceOf(GitHubError);
     expect((error as GitHubError).message).toBe("GitHub's limit for requests without a token is used up until 2026-10-11T07:26:40.000Z");
     expect(isRateLimited(error)).toBe(true);

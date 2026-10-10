@@ -130,16 +130,35 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
   };
 }
 
+/**
+ * GITHUB_TOKEN: optional, server only (no NEXT_PUBLIC prefix, so Next never inlines it into a
+ * browser bundle; this module is imported by server code only, which unit/server-only.test.ts
+ * checks). With it, GitHub's limit is the token's (5,000 an hour) instead of 60 an hour per
+ * IP, which shared hosting addresses can use up. Read when each request is made; never
+ * logged, never put in an error message, never rendered.
+ */
+function githubToken(): string | null {
+  const token = process.env.GITHUB_TOKEN?.trim();
+  return token ? token : null;
+}
+
+/** The headers of every GitHub API request: the token's Authorization only when GITHUB_TOKEN is set. */
+export function githubHeaders(): Record<string, string> {
+  const token = githubToken();
+  return {
+    accept: "application/vnd.github+json",
+    "x-github-api-version": "2022-11-28",
+    "user-agent": "loka-pay-web (https://zerobars.us)",
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 /** A GitHub API answer as JSON, or a GitHubError that says what failed (a timeout, the rate limit, an HTTP status). */
 async function getGitHubJson(url: string, timeoutMs: number): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: {
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-        "user-agent": "loka-pay-web (https://zerobars.us)",
-      },
+      headers: githubHeaders(),
       // lib/cached-read.ts caches the decoded summary with its read time, never the raw answer.
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
@@ -157,7 +176,8 @@ async function getGitHubJson(url: string, timeoutMs: number): Promise<unknown> {
     const reset = Number(response.headers.get("x-ratelimit-reset"));
     if (remaining === "0" || response.status === 429) {
       const when = Number.isFinite(reset) && reset > 0 ? ` until ${new Date(reset * 1000).toISOString()}` : "";
-      throw new GitHubError(`GitHub's limit for requests without a token is used up${when}`, true);
+      const whose = githubToken() ? "GitHub's limit for this site's token" : "GitHub's limit for requests without a token";
+      throw new GitHubError(`${whose} is used up${when}`, true);
     }
   }
   if (!response.ok) throw new GitHubError(`GitHub answered HTTP ${response.status}`);
