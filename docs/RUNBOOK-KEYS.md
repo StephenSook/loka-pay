@@ -44,7 +44,8 @@ The API also refuses to start if the Ed25519 key or any registration wallet does
 - Encrypted with `gpg --symmetric --cipher-algo AES256` over a tar of `/etc/loka-pay/keys`.
 - `keys-20261010.tar.gpg` holds all ten files above (it supersedes `wallets-20261009.tar.gpg`, which holds only the six wallets).
 - Copies: `/root/loka-pay-backups/` on the VPS and Jordan's laptop, checksums matched after copy. Restore was tested with `gpg --decrypt | tar --compare`, exit code 0.
-- The passphrase is in the Apple Passwords shared group "OWLS keys". The archive and the passphrase are never stored together, and neither goes in Discord or this repository.
+- The passphrase belongs in the Apple Passwords shared group "OWLS keys". Open item: not yet confirmed saved there, and the archive has no team-accessible copy yet.
+- The archive and the passphrase are never stored together, and neither goes in Discord or this repository.
 
 ## Restore onto a new VPS
 
