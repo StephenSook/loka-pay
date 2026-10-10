@@ -1,12 +1,13 @@
 import * as P from '@lokapay/protocol';
 
 export class HttpError extends Error {
-  constructor(readonly statusCode: number, readonly code: string) {
+  constructor(readonly statusCode: number, readonly code: string, readonly retryAfter?: number) {
     super(messages[code] ?? 'The request could not be completed.');
   }
 }
 
 const messages: Record<string, string> = {
+  rate_limited: 'This allowance has reached its upload limit for this window. Retry after the indicated delay.',
   bad_json: 'The JSON body is missing a required field or contains an unsupported field.',
   bad_base64url: 'Bytes must use canonical base64url without padding.',
   bad_pubkey: 'The public key must be a valid compressed P-256 point.',

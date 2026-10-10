@@ -3,6 +3,7 @@ import * as P from '@lokapay/protocol';
 import type { AttemptRow, ChainDecision, ChainGateway, ConfirmationSigner, Decision, Outcome, PendingStage } from './types.js';
 import { SettlementStore } from './store.js';
 import { HttpError, validateUpload } from './validation.js';
+import { DEFAULT_NOTE_RATE_LIMIT, validateRateLimit, type AllowanceRateLimit } from './rate-limit.js';
 
 export interface SettlementOptions {
   deployment: P.Deployment;
@@ -10,11 +11,15 @@ export interface SettlementOptions {
   chain: ChainGateway;
   signConfirmation: ConfirmationSigner;
   now?: () => number;
+  allowanceRateLimit?: AllowanceRateLimit;
 }
 
 export class SettlementService {
+  private readonly rateLimit: AllowanceRateLimit;
   constructor(private readonly options: SettlementOptions) {
     if (options.deployment.clusterId !== 0) throw new Error('This settlement module is devnet sandbox only');
+    this.rateLimit = { ...(options.allowanceRateLimit ?? DEFAULT_NOTE_RATE_LIMIT) };
+    validateRateLimit(this.rateLimit);
   }
 
   async submit(input: unknown): Promise<Outcome> {
@@ -24,6 +29,9 @@ export class SettlementService {
     try { refusal = await this.options.chain.checkIdentity(upload.validated); }
     catch { throw new HttpError(503, 'chain_unavailable'); }
     if (refusal !== null) throw new HttpError(422, refusal);
+    const key = `${P.toHex(this.options.deployment.programId)}:${this.options.deployment.clusterId}:${P.toHex(this.options.deployment.mint)}:${upload.validated.note.allowanceId}`;
+    const retryAfter = await this.options.store.limitSubmission(key, this.rateLimit);
+    if (retryAfter !== null) throw new HttpError(429, 'rate_limited', retryAfter);
     const uploadedAt = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
     const claim = { noteId: upload.noteId, note: upload.note, ack: upload.ack, uploadedAt };
     const token = await this.options.store.claim(claim);

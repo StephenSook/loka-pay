@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { admitSubmission, migrateRateLimit, type AllowanceRateLimit } from './rate-limit.js';
 import type { AttemptRow, Claim, Decision, PendingStage, PreparedAttempt } from './types.js';
 
 // Both pg.Pool and PGlite implement this interface. Production must use durable PostgreSQL.
@@ -10,6 +11,7 @@ export class SettlementStore {
   constructor(private readonly db: Database, private readonly clock?: () => number) {}
 
   async migrate(): Promise<void> {
+    await migrateRateLimit(this.db);
     await this.db.query(`CREATE TABLE IF NOT EXISTS settlement_attempts (
       note_id text PRIMARY KEY CHECK (note_id ~ '^[0-9a-f]{64}$'),
       note text NOT NULL, ack text, uploaded_at bigint NOT NULL,
@@ -22,6 +24,10 @@ export class SettlementStore {
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS failure_stage text');
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS claim_token text');
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS lease_expires_at double precision');
+  }
+
+  async limitSubmission(key: string, policy: AllowanceRateLimit): Promise<number | null> {
+    return admitSubmission(this.db, key, policy, this.clock?.());
   }
 
   async claim(row: Claim): Promise<string | null> {

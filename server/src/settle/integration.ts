@@ -7,6 +7,7 @@ import { SettlementService } from './service.js';
 import { SettlementStore } from './store.js';
 import { SolanaGateway } from './transaction.js';
 import { registerSettlementRoutes } from './routes.js';
+import type { AllowanceRateLimit } from './rate-limit.js';
 
 // Jordan supplies pins, VPS signers, database, CORS and atomic fee-budget admission.
 // Do not enable request/body/IP logging. No secrets are read or generated in this module.
@@ -18,11 +19,13 @@ export async function installSettlement(options: {
   deployment: Deployment;
   feePayer: Signer;
   signConfirmation: ConfirmationSigner;
+  allowanceRateLimit?: AllowanceRateLimit;
 }): Promise<SettlementService> {
   const store = new SettlementStore(options.database);
   await store.migrate();
   const service = new SettlementService({ deployment: options.deployment, store,
-    chain: new SolanaGateway(options.connection, options.feePayer), signConfirmation: options.signConfirmation });
+    chain: new SolanaGateway(options.connection, options.feePayer), signConfirmation: options.signConfirmation,
+    allowanceRateLimit: options.allowanceRateLimit });
   registerSettlementRoutes(options.app, service);
   return service;
 }

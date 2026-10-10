@@ -6,7 +6,10 @@ import { HttpError } from '../settle/validation.js';
 export function registerNoteRoutes(app: FastifyInstance, service: SettlementService): void {
   app.register(async scope => {
     scope.setErrorHandler((error, _request, reply) => {
-      if (error instanceof HttpError) return reply.code(error.statusCode).send({ error: error.code, message: error.message });
+      if (error instanceof HttpError) {
+        if (error.retryAfter !== undefined) reply.header('Retry-After', error.retryAfter);
+        return reply.code(error.statusCode).send({ error: error.code, message: error.message });
+      }
       const detail = error as { code?: string; statusCode?: number };
       if (detail?.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: 'bad_json', message: 'Body exceeds 4 KB.' });
       if (detail?.statusCode === 400) return reply.code(400).send({ error: 'bad_json', message: 'Invalid JSON body.' });
