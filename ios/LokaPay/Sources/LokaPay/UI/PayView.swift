@@ -55,7 +55,7 @@ public struct PayView: View {
         .sheet(isPresented: $scanningReturn) {
             ScanSheet(title: "Scan the merchant's receipt", issue: model.issue) { text in
                 model.acceptReturn(text: text)
-                if model.phase == .receipt { scanningReturn = false }
+                if Self.returnScanTaken(model) { scanningReturn = false }
             }
         }
         .sheet(isPresented: $scanningCheatMerchant) {
@@ -73,6 +73,15 @@ public struct PayView: View {
         // A haptic when a verified ack or receipt lands (Received or Paid), not when this phone signs.
         .sensoryFeedback(.success, trigger: model.phase) { _, new in new == .receipt }
         .announcesIssue(model.issue)
+    }
+
+    /// True once the scan just given to `acceptReturn` was taken: the receipt is on screen and no
+    /// issue is set (`acceptReturn` clears the issue whenever it takes a scan and sets one whenever it
+    /// refuses). The return sheet closes only then. The phase alone is not enough: once a first ack
+    /// has shown the receipt, the phase stays there, and the merchant's Paid screen also shows the
+    /// verify link, so a refused scan of that link must leave the sheet open for the receipt code.
+    static func returnScanTaken(_ model: PayModel) -> Bool {
+        model.phase == .receipt && model.issue == nil
     }
 
     @ViewBuilder private var phaseContent: some View {
