@@ -54,6 +54,25 @@ public struct AllowanceCard: View {
 
 // MARK: - Receipt facts and card
 
+/// The difference of two signed clock readings. Any `Int64` can carry a valid signature, so a
+/// plain subtraction can trap; a span that is negative or does not fit in 64 bits means the
+/// clocks disagree, and the card shows no figure for it.
+public enum ClockSpan: Equatable, Sendable {
+    case seconds(Int64)
+    case clocksDisagree
+
+    public static func between(later: Int64, earlier: Int64) -> ClockSpan {
+        let (difference, overflow) = later.subtractingReportingOverflow(earlier)
+        return overflow || difference < 0 ? .clocksDisagree : .seconds(difference)
+    }
+
+    /// The figure, or nil when the clocks disagree.
+    public var seconds: Int64? {
+        if case .seconds(let value) = self { return value }
+        return nil
+    }
+}
+
 /// Everything a receipt card shows, computed from verified parts only.
 public struct ReceiptFacts: Equatable, Sendable {
     public let amount: UInt64
@@ -65,10 +84,16 @@ public struct ReceiptFacts: Equatable, Sendable {
     public let explorer: URL?
     /// The program's error code from a failed CONF (signed).
     public let errorCode: UInt16?
-    /// CONF uploaded at minus ACK received at (server clock minus the merchant phone's clock).
-    public let heldOfflineSeconds: Int64?
+    /// CONF uploaded at minus ACK received at (server clock minus the merchant phone's clock);
+    /// nil without a CONF.
+    public let heldOffline: ClockSpan?
     /// CONF block time minus CONF uploaded at (chain time minus server clock), settled only.
-    public let settledAfterUploadSeconds: Int64?
+    public let settledAfterUpload: ClockSpan?
+
+    /// The held-offline figure, or nil without a CONF or when the clocks disagree.
+    public var heldOfflineSeconds: Int64? { heldOffline?.seconds }
+    /// The settled-after-upload figure, or nil when not settled or when the clocks disagree.
+    public var settledAfterUploadSeconds: Int64? { settledAfterUpload?.seconds }
 
     public init(receipt: VerifiedReceipt, merchant: MerchantCertificate?, clusterId: UInt8) {
         amount = receipt.note.note.amount
@@ -85,23 +110,31 @@ public struct ReceiptFacts: Equatable, Sendable {
             explorer = nil
         }
         errorCode = conf?.status == .failedOnChain ? conf?.errorCode : nil
-        heldOfflineSeconds = conf.map { $0.uploadedAt - receipt.ack.receivedAt }
-        settledAfterUploadSeconds = conf?.status == .settled ? conf.map { $0.blockTime - $0.uploadedAt } : nil
+        heldOffline = conf.map { ClockSpan.between(later: $0.uploadedAt, earlier: receipt.ack.receivedAt) }
+        settledAfterUpload = conf?.status == .settled
+            ? conf.map { ClockSpan.between(later: $0.blockTime, earlier: $0.uploadedAt) } : nil
     }
 
-    /// The two signed timing lines (PAYMENT-V1 section 4.3 names the clocks). A negative figure
-    /// means the clocks disagree, and it is not shown as a number.
+    /// The two signed timing lines (PAYMENT-V1 section 4.3 names the clocks). A negative or
+    /// out-of-range span means the clocks disagree, and it is not shown as a number.
     public var timingLines: [String] {
         var lines: [String] = []
-        if let held = heldOfflineSeconds {
-            lines.append(held >= 0
-                ? "Held offline \(HoldingClock.format(seconds: Int(held))) (server clock minus the merchant phone's clock)"
-                : "Held offline: the clocks disagree, so no figure is shown")
+        switch heldOffline {
+        case .seconds(let held)?:
+            lines.append("Held offline \(HoldingClock.format(seconds: Int(clamping: held))) "
+                + "(server clock minus the merchant phone's clock)")
+        case .clocksDisagree?:
+            lines.append("Held offline: the clocks disagree, so no figure is shown")
+        case nil:
+            break
         }
-        if let settled = settledAfterUploadSeconds {
-            lines.append(settled >= 0
-                ? "Settled \(settled) s after upload (chain time minus server clock)"
-                : "Settled after upload: the clocks disagree, so no figure is shown")
+        switch settledAfterUpload {
+        case .seconds(let settled)?:
+            lines.append("Settled \(settled) s after upload (chain time minus server clock)")
+        case .clocksDisagree?:
+            lines.append("Settled after upload: the clocks disagree, so no figure is shown")
+        case nil:
+            break
         }
         return lines
     }

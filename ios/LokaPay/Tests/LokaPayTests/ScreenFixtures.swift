@@ -53,14 +53,15 @@ enum ScreenFixtures {
 
     /// A CONF for `noteId`: status 1 settled, 2 failed on chain.
     static func confWire(noteId: Data, status: UInt8, errorCode: UInt16 = 0,
+                         blockTime: Int64 = 1_800_000_065, uploadedAt: Int64 = 1_800_000_060,
                          signedBy other: Curve25519.Signing.PrivateKey? = nil) -> Data {
         var w = ByteWriter()
         w.ascii(Confirmation.prefix, count: 16)
         w.bytes(noteId, count: 32)
         w.bytes(Data(repeating: 7, count: 64), count: 64)
         w.u64(412_000_000)
-        w.i64(1_800_000_065)
-        w.i64(1_800_000_060)
+        w.i64(blockTime)
+        w.i64(uploadedAt)
         w.u8(status)
         w.u16(errorCode)
         return w.data + sign(w.data, other)
