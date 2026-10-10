@@ -415,6 +415,53 @@ test('a second confirmed failure reports the retry bound and signs no third tran
   expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.allow).not.toHaveBeenCalled();
 });
 
+test.each(['payer', 'merchant'] as const)('a crashed unsigned explicit retry resumes once after its lease for %s', async kind => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const input = { publicKey, ...(kind === 'merchant' ? { name: 'First shop' } : {}) };
+  const failed = await f.service.submit(kind, input);
+  const job = await f.store.get(kind, unsignedJob(kind, publicKey).plan.keyHash);
+  expect(await f.store.claimFailedRetry(job, failed.body.retryOf as string)).not.toBeNull();
+  const retry = { ...input, retryOf: failed.body.retryOf };
+  f.setNow(1800000029);
+  expect((await f.service.submit(kind, retry)).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.setNow(1800000030);
+  expect((await f.service.submit(kind, { ...input, retryOf: 'another-signature' })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.chain.outcome = 'ok';
+  const results = await Promise.all([f.service.submit(kind, retry), f.service.submit(kind, retry)]);
+  expect(results.some(result => result.statusCode === 201)).toBe(true);
+  const saved = await f.store.get(kind, job.plan.keyHash);
+  expect(saved.id).toBe(job.id); expect(saved.plan.expiry).toBe(job.plan.expiry);
+  expect(saved.explicitRetries).toBe(1);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect((await f.service.submit(kind, retry)).statusCode).toBe(200);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2);
+});
+
+test('an unsigned explicit retry takeover fences the old token before reservation and save', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  const job = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  const oldToken = (await f.store.claimFailedRetry(job, failed.body.retryOf as string))!;
+  const unsigned = await f.store.get('payer', job.plan.keyHash);
+  f.setNow(1800000030); f.chain.outcome = 'ok';
+  let release!: (quote: Quote) => void;
+  f.chain.quote.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const winner = f.service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  await vi.waitFor(() => expect(f.chain.quote).toHaveBeenCalledTimes(2));
+  const cost = { units: '105', funderLamports: '10', feeLamports: '10' };
+  expect(await f.store.reserve('public', '2027-01-15', cost, policy.daily, { id: job.id, token: oldToken })).toBe(false);
+  expect(await f.store.saveAttempt(unsigned, unsigned.plan, { signature: 'stale-retry', rawTransaction: 'stale',
+    blockhash: 'test', lastValidBlockHeight: 100 }, oldToken)).toBe(false);
+  expect(await f.store.cancelUnsignedRetry(job.id, oldToken)).toBe(false);
+  release({ message: 'unsigned', blockhash: 'test', lastValidBlockHeight: 100, cost });
+  expect((await winner).statusCode).toBe(201);
+  expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect(f.chain.send.mock.calls.every(([attempt]) => attempt.signature !== 'stale-retry')).toBe(true);
+  expect((await f.store.get('payer', job.plan.keyHash)).explicitRetries).toBe(1);
+});
+
 test('confirmed collision with denied budget returns a repost signal and can recover after reset', async () => {
   const f = await fixture(); const publicKey = key(); f.chain.outcome = 'collision';
   f.options.policies.public = { ...policy, daily: { ...policy.daily, units: '105' } };

@@ -49,6 +49,7 @@ export class RegistrationService {
         if (prior) return prior;
       } catch { return this.pending(previous); }
       token = await this.options.store.claimFailedRetry(previous, retryOf);
+      if (!token) token = await this.options.store.claimUnsignedRetry(previous, retryOf);
     } else token = await this.options.store.claim(job, now);
     if (!token) {
       const existing = await this.options.store.get(kind, request.keyHash);

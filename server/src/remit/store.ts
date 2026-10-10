@@ -126,6 +126,17 @@ export class RegistrationStore {
     [this.namespace, job.id, signature, token, this.clock?.() ?? null, Math.floor(this.clock?.() ?? Date.now()/1000)]);
     return rows.length ? token : null;
   }
+  async claimUnsignedRetry(job: Job, signature: string): Promise<string | null> {
+    const token = randomUUID();
+    const { rows } = await this.db.query(`UPDATE registration_jobs SET claim_token=$4,
+      lease_expires_at=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30
+      WHERE namespace=$1 AND id=$2 AND attempt IS NULL AND result IS NULL
+        AND retry_parent->'attempt'->>'signature'=$3 AND retry_parent->'result'->'body'->>'retryOf'=$3
+        AND explicit_retries=1
+        AND lease_expires_at<=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))
+      RETURNING id`, [this.namespace, job.id, signature, token, this.clock?.() ?? null]);
+    return rows.length === 1 ? token : null;
+  }
   async history(job: Job): Promise<{ plan: RegistrationPlan; attempt: PreparedAttempt }[]> {
     const { rows } = await this.db.query('SELECT plan,attempt FROM registration_attempts WHERE job_id=$1', [job.id]);
     return rows as unknown as { plan: RegistrationPlan; attempt: PreparedAttempt }[];
