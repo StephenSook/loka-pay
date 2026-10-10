@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { unitProject } from "./playwright.unit.config";
 
 const PORT = 3100;
 const baseURL = `http://127.0.0.1:${PORT}`;
@@ -15,8 +16,10 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+    // Decoder and parser unit tests (no browser); see playwright.unit.config.ts.
+    unitProject,
+    { name: "chromium", testDir: "./e2e", use: { ...devices["Desktop Chrome"] } },
+    { name: "webkit", testDir: "./e2e", use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
     // Serves a production build. CI runs `pnpm run build` as its own step just
