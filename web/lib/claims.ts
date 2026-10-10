@@ -236,34 +236,57 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
 /** What /trust says up front about whether the program can still be changed (lib/chain.ts programData). */
 export interface Upgradeability {
   kind: "upgradeable" | "frozen" | "unknown";
+  /** "current": said in the present (a current read); "dated": said as of an older read, with its age; "none": unknown. */
+  asOf: "current" | "dated" | "none";
   heading: string;
   body: string;
 }
 
 /**
  * Decided by the program data account's upgrade authority, from the same read the custody
- * section shows (with its time and age there). A failed or stale read says unknown: the
- * page never asserts either way without it.
+ * section shows (with its time and age there). Only a current read is said in the present;
+ * an older cached read is said as of that read, with its age; a failed or stale read says
+ * unknown. The page never asserts either way without a read.
  */
 export function upgradeability(read: Read<ProgramFacts>): Upgradeability {
   const audit = "Nobody outside the team has audited this program.";
   const programData = read.ok && !read.staleBecause ? read.data.programData : null;
-  if (programData === null || !programData.ok) {
+  if (!read.ok || programData === null || !programData.ok) {
     return {
       kind: "unknown",
+      asOf: "none",
       heading: "Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.",
       body: `${audit} The latest read of its upgrade authority failed (the reason is below), so this page does not say whether the program can still be changed.`,
     };
   }
-  if (programData.value.upgradeAuthority === null) {
+  const frozen = programData.value.upgradeAuthority === null;
+  if (!read.current) {
+    const age = formatAge(read.shownAtMs - read.readAtMs);
+    return frozen
+      ? {
+          kind: "frozen",
+          asOf: "dated",
+          heading: `Devnet pilot, unaudited. Frozen as of a devnet read ${age} ago: it could no longer be changed.`,
+          body: `${audit} That read, ${age} old when this page loaded, showed no upgrade authority. It is shown below with its time.`,
+        }
+      : {
+          kind: "upgradeable",
+          asOf: "dated",
+          heading: `Devnet pilot, unaudited. Not frozen on purpose, as of a devnet read ${age} ago.`,
+          body: `${audit} That read, ${age} old when this page loaded, showed an upgrade authority: the program is kept upgradeable so a fix can ship during the event, since freezing a Solana program cannot be undone. Whoever holds that key can change the program; it is shown below with the read's time.`,
+        };
+  }
+  if (frozen) {
     return {
       kind: "frozen",
+      asOf: "current",
       heading: "Devnet pilot, unaudited, and frozen: the program can no longer be changed.",
       body: `${audit} The chain shows no upgrade authority, so nobody can change the program any more, not even to ship a fix. The read is shown below with its time.`,
     };
   }
   return {
     kind: "upgradeable",
+    asOf: "current",
     heading: "Devnet pilot, unaudited, not frozen on purpose.",
     body: `${audit} It stays upgradeable so a fix can ship during the event: freezing a Solana program cannot be undone. That also means whoever holds the upgrade authority can change the program, so that key is shown below, read from the chain with its time.`,
   };

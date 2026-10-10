@@ -95,7 +95,7 @@ export default async function TrustPage() {
 
       <section aria-labelledby="pilot" className="flex min-w-0 gap-3 rounded-card border-3 border-warning-line bg-warning p-5 text-on-state">
         <div className="flex min-w-0 flex-col gap-2">
-          <h2 id="pilot" className="text-2xl" data-testid="pilot-status" data-upgradeability={pilot.kind}>
+          <h2 id="pilot" className="text-2xl" data-testid="pilot-status" data-upgradeability={pilot.kind} data-as-of={pilot.asOf}>
             {pilot.heading}
           </h2>
           <p className="leading-relaxed">{pilot.body}</p>

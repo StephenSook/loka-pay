@@ -228,19 +228,36 @@ test.describe("claims decided by named evidence, never Live unconditionally", ()
   });
 });
 
-// The /trust heading (lib/claims.ts upgradeability) follows the upgrade authority read.
+// The /trust heading (lib/claims.ts upgradeability) follows the upgrade authority read, and
+// says it in the present only from a current read.
 test.describe("the /trust upgradeability heading", () => {
-  const withProgramData = (programData: ProgramFacts["programData"]) => cached({ ...facts(), programData }, 20_000);
+  const frozenData: ProgramFacts["programData"] = { ok: true, value: { deploySlot: 1, deployTimeMs: null, upgradeAuthority: null, programBytes: null } };
+  const withProgramData = (programData: ProgramFacts["programData"], ageMs = 0) => (ageMs === 0 ? fresh({ ...facts(), programData }) : cached({ ...facts(), programData }, ageMs));
 
-  test("an upgrade authority on chain: not frozen on purpose", () => {
-    expect(upgradeability(cached(facts(), 20_000))).toMatchObject({ kind: "upgradeable", heading: "Devnet pilot, unaudited, not frozen on purpose." });
+  test("a current read with an upgrade authority: not frozen on purpose, in the present", () => {
+    expect(upgradeability(fresh(facts(), 3_000))).toMatchObject({
+      kind: "upgradeable",
+      asOf: "current",
+      heading: "Devnet pilot, unaudited, not frozen on purpose.",
+    });
   });
 
-  test("no upgrade authority: frozen, never 'not frozen'", () => {
-    const u = upgradeability(withProgramData({ ok: true, value: { deploySlot: 1, deployTimeMs: null, upgradeAuthority: null, programBytes: null } }));
-    expect(u.kind).toBe("frozen");
+  test("a current read with no upgrade authority: frozen, never 'not frozen'", () => {
+    const u = upgradeability(withProgramData(frozenData));
+    expect(u).toMatchObject({ kind: "frozen", asOf: "current" });
     expect(u.heading).not.toContain("not frozen");
-    expect(u.heading).toContain("frozen");
+  });
+
+  test("a cached read 20 s old is never said in the present: it is said as of that read, with its age", () => {
+    const u = upgradeability(cached(facts(), 20_000));
+    expect(u.kind).toBe("upgradeable");
+    expect(u.asOf).toBe("dated");
+    expect(u.heading).toBe("Devnet pilot, unaudited. Not frozen on purpose, as of a devnet read 20 s ago.");
+    expect(u.heading).not.toBe("Devnet pilot, unaudited, not frozen on purpose.");
+    expect(u.body).toContain("20 s old when this page loaded");
+    const f = upgradeability(withProgramData(frozenData, 45_000));
+    expect(f).toMatchObject({ kind: "frozen", asOf: "dated" });
+    expect(f.heading).toBe("Devnet pilot, unaudited. Frozen as of a devnet read 45 s ago: it could no longer be changed.");
   });
 
   test("an unread authority, a stale read or a failed read: unknown, asserting neither", () => {
@@ -249,8 +266,8 @@ test.describe("the /trust upgradeability heading", () => {
     const failedRead = upgradeability(failed("could not reach api.devnet.solana.com"));
     for (const u of [unread, staleRead, failedRead]) {
       expect(u.kind).toBe("unknown");
-      expect(u.heading).not.toContain("not frozen");
-      expect(u.heading).not.toContain("and frozen");
+      expect(u.asOf).toBe("none");
+      expect(u.heading).not.toMatch(/frozen/i);
     }
   });
 });

@@ -181,7 +181,10 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
   // never contradict the custody section below it.
   const pilot = page.getByTestId("pilot-status");
   const pilotKind = await pilot.getAttribute("data-upgradeability");
+  const pilotAsOf = await pilot.getAttribute("data-as-of");
   expect(["upgradeable", "frozen", "unknown"]).toContain(pilotKind);
+  // Said in the present only from a current read; otherwise as of a dated read, or unknown.
+  expect(["current", "dated", "none"]).toContain(pilotAsOf);
   for (const name of ["Who holds what", "What the program checks before it moves money", "What the protocol does not promise"]) {
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
@@ -206,10 +209,18 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
     await expect(page.getByTestId("custody-authority")).toContainText("A 2-of-3 multisig is planned (task 3.46), not done.");
   }
   if (pilotKind === "upgradeable") {
-    await expect(pilot).toHaveText("Devnet pilot, unaudited, not frozen on purpose.");
+    await expect(pilot).toHaveText(
+      pilotAsOf === "current"
+        ? "Devnet pilot, unaudited, not frozen on purpose."
+        : /^Devnet pilot, unaudited\. Not frozen on purpose, as of a devnet read \d+ (s|min|h) ago\.$/,
+    );
     await expect(authority).toBeVisible();
   } else if (pilotKind === "frozen") {
-    await expect(pilot).toHaveText("Devnet pilot, unaudited, and frozen: the program can no longer be changed.");
+    await expect(pilot).toHaveText(
+      pilotAsOf === "current"
+        ? "Devnet pilot, unaudited, and frozen: the program can no longer be changed."
+        : /^Devnet pilot, unaudited\. Frozen as of a devnet read \d+ (s|min|h) ago: it could no longer be changed\.$/,
+    );
     await expect(page.getByTestId("custody-authority")).toContainText("the program is frozen");
   } else {
     await expect(pilot).toHaveText("Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.");
