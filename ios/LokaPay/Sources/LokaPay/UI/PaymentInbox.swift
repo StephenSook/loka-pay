@@ -52,9 +52,10 @@ public final class PaymentInbox {
     /// the oldest go first) or because they waited longer than `maxAge`. The Receive screen shows
     /// this count when it is not zero.
     public private(set) var droppedWhileDetached = 0
-    /// The sequence numbers of the most recent dropped texts (the last 64), so the mesh glue can
-    /// tell a dropped delivery, which a retry may bring back, from one still waiting or taken.
-    @ObservationIgnored private var droppedSequences: [UInt64] = []
+    /// Told the sequence number of every text this inbox drops (full, or past `maxAge`), so the mesh
+    /// glue can record that delivery's fate for as long as it remembers the packet: a retry of a
+    /// dropped delivery is delivered again, a retry of one still waiting or taken is not.
+    @ObservationIgnored var onDrop: (@MainActor (UInt64) -> Void)?
 
     public let maxAge: TimeInterval
     private let now: @MainActor () -> Date
@@ -85,12 +86,8 @@ public final class PaymentInbox {
         return item.sequence
     }
 
-    /// True when the delivery with this sequence number was dropped (the inbox was full, or it
-    /// waited past `maxAge`) and never handed to a screen.
-    public func wasDropped(_ sequence: UInt64) -> Bool { droppedSequences.contains(sequence) }
-
     private func recordDrop(_ item: InboxText) {
-        droppedSequences = Array((droppedSequences + [item.sequence]).suffix(64))
+        onDrop?(item.sequence)
     }
 
     private func stamp(_ text: String, arrivedAt: Date) -> InboxText {

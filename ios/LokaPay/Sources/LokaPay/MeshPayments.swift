@@ -189,6 +189,9 @@ public final class MeshPaymentRouter {
         /// The inbox delivery it became; nil for a dropped packet.
         let sequence: UInt64?
         let at: Date
+        /// Its inbox dropped that delivery (full, or past its age limit) before any screen took it.
+        /// Kept with the packet for as long as the packet is remembered.
+        var inboxDropped = false
     }
 
     private func remember(_ packet: Packet) {
@@ -207,6 +210,14 @@ public final class MeshPaymentRouter {
         self.receiveInbox = receiveInbox ?? PaymentInbox()
         self.payInbox = payInbox ?? PaymentInbox()
         self.now = now
+        self.receiveInbox.onDrop = { [weak self] sequence in self?.inboxDropped(sequence, route: .receive) }
+        self.payInbox.onDrop = { [weak self] sequence in self?.inboxDropped(sequence, route: .pay) }
+    }
+
+    /// Records that an inbox dropped this delivery, on the packet it came from.
+    private func inboxDropped(_ sequence: UInt64, route: MeshPaymentText.Route) {
+        guard let index = packets.firstIndex(where: { $0.sequence == sequence && $0.route == route }) else { return }
+        packets[index].inboxDropped = true
     }
 
     // MARK: Inbound
@@ -238,7 +249,7 @@ public final class MeshPaymentRouter {
         case .receive, .pay:
             let inbox = route == .pay ? payInbox : receiveInbox
             if let earlier {
-                guard let sequence = packets[earlier].sequence, inbox.wasDropped(sequence) else {
+                guard packets[earlier].inboxDropped else {
                     repeatsSkipped += 1
                     return true
                 }

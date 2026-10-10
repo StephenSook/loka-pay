@@ -177,6 +177,23 @@ struct MeshPaymentTests {
         #expect(inbox.droppedWhileDetached == 2 + PaymentInbox.capacity)
     }
 
+    @Test("a drop is remembered for as long as its packet is, however many drops follow")
+    func dropOutlivesLaterDrops() throws {
+        let router = MeshPaymentRouter()
+        let text = noteText(try note())
+        router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1")
+        // 100 more texts while no screen is attached: the note goes first, then 84 fillers.
+        for index in 0..<100 {
+            router.receive(allowanceText, from: "busy-contact", fromContact: true, packetID: "fill-\(index)")
+        }
+        #expect(router.receiveInbox.droppedWhileDetached == 85)
+        #expect(!router.receiveInbox.held.contains(text))
+        // The note's retry still finds its drop recorded, so it is delivered, not taken as a repeat.
+        router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1")
+        #expect(router.receiveInbox.held.last == text)
+        #expect(router.repeatsSkipped == 0)
+    }
+
     @Test("acks and receipts land in the Pay inbox; non-contact and other-version texts are dropped, counted once each")
     func returnsAndDrops() throws {
         let router = MeshPaymentRouter()
