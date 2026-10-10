@@ -106,6 +106,7 @@ test('canary payments are tagged, left out by default and counted with include=a
 test('timings recompute from known timestamps with each pair of clocks (PAYMENT-V1 4.3, task 3.41)', async () => {
   const db = await testDatabase();
   closers.push(() => db.close());
+  await new SettlementStore(db).migrate();
   await new EventStore(db, deployment).migrate();
   const row = (id: string, source: string, uploaded: number, block: number, received: number | null, amount = '1000000') => db.query(
     `INSERT INTO payment_events (note_id, seq, source, status, error, amount_units, signature, explorer, slot, block_time, uploaded_at, received_at)
@@ -309,7 +310,7 @@ test('a validly signed ACK with an absurd received-at is stored as null, and the
   expect(stats.totals).toMatchObject({ paymentsSettled: 2, heldOfflineSeconds: { n: 0 } });
 });
 
-test('a row that cannot be written is skipped and reported once; the rows behind it still project', async () => {
+test('a row Postgres refuses as data is skipped and reported once; the rows behind it still project', async () => {
   const f = await fixture();
   await f.post({ note: wire(0) });
   await f.post({ note: wire(1) });
@@ -317,13 +318,70 @@ test('a row that cannot be written is skipped and reported once; the rows behind
   const store = new EventStore(f.db, deployment, () => 'phone_ble', (noteId, reason) => skipped.push([noteId, reason]));
   const query = f.db.query.bind(f.db);
   vi.spyOn(f.db, 'query').mockImplementation(async (sql: string, params?: unknown[]) => {
-    if (sql.includes('INSERT INTO payment_events') && params?.[0] === vectors.notes[0].noteIdHex) throw new Error('out of range');
+    if (sql.includes('INSERT INTO payment_events') && params?.[0] === vectors.notes[0].noteIdHex) {
+      throw Object.assign(new Error('bigint out of range'), { code: '22003' });
+    }
     return query(sql, params) as never;
   });
   expect(await store.project()).toBe(1);
   expect(skipped).toEqual([[vectors.notes[0].noteIdHex, 'event_write_failed']]);
   expect(await store.project()).toBe(0);
   expect(skipped).toHaveLength(1);
+  // The uploads table keeps its own set: the same note is still recorded there.
+  expect(await store.projectUploads()).toBe(2);
+});
+
+test('a transient database error is rethrown, nothing is skipped, and the next tick projects the row', async () => {
+  const f = await fixture();
+  await f.post({ note: wire(0) });
+  const skipped: string[] = [];
+  const query = f.db.query.bind(f.db);
+  let failing = true;
+  vi.spyOn(f.db, 'query').mockImplementation(async (sql: string, params?: unknown[]) => {
+    if (failing && sql.includes('INSERT INTO payment_events')) throw Object.assign(new Error('connection reset'), { code: '08006' });
+    return query(sql, params) as never;
+  });
+  const store = new EventStore(f.db, deployment, () => 'phone_ble', noteId => skipped.push(noteId));
+  await expect(store.project()).rejects.toThrow('connection reset');
+  expect(skipped).toEqual([]);
+  failing = false;
+  expect(await store.project()).toBe(1);
+});
+
+test('an accepted upload whose journal row is released before any decision leaves the counts', async () => {
+  const f = await fixture();
+  f.chain.decision = null;
+  await f.post({ note: wire(0) });
+  await f.events.feed.tick();
+  expect((await f.app.inject({ url: '/api/stats' })).json().totals).toMatchObject({ paymentsAccepted: 1, paymentsPending: 1 });
+  // What releaseUnsigned does for an unsigned 429 budget_exhausted claim.
+  await f.db.query('DELETE FROM settlement_attempts WHERE note_id = $1', [vectors.notes[0].noteIdHex]);
+  expect((await f.app.inject({ url: '/api/stats' })).json().totals).toMatchObject({ paymentsAccepted: 0, paymentsPending: 0 });
+});
+
+test('accepted = settled + failed + pending for every source and run, and settled is the first field', async () => {
+  const f = await fixture();
+  await f.post({ note: wire(0) });
+  f.chain.decision = { slot: 13, blockTime: 1800000006, error: 'SerialUsed', errorCode: 6011 };
+  await f.post({ note: wire(1) });
+  f.chain.decision = null;
+  await f.post({ note: wire(2) });
+  await f.events.feed.tick();
+  // An event whose upload row has another source or time must still count once, under the event's values.
+  await f.db.query("UPDATE payment_uploads SET source = 'sms_rail', uploaded_at = 1 WHERE note_id = $1", [vectors.notes[0].noteIdHex]);
+  for (const url of ['/api/stats', '/api/stats?include=all']) {
+    const stats = (await f.app.inject({ url })).json();
+    expect(Object.keys(stats)[0]).toBe('paymentsSettled');
+    expect(stats.paymentsSettled).toBe(stats.totals.paymentsSettled);
+    for (const figures of [stats.totals, ...Object.values(stats.bySource)] as Record<string, number>[]) {
+      expect(Object.keys(figures)[0]).toBe('paymentsSettled');
+      expect(figures.paymentsAccepted).toBe(figures.paymentsSettled + figures.failedOnChain + figures.paymentsPending);
+    }
+    expect(stats.totals).toMatchObject({ paymentsSettled: 1, failedOnChain: 1, paymentsPending: 1, paymentsAccepted: 3 });
+    expect(stats.bySource.sms_rail.paymentsAccepted).toBe(0);
+  }
+  const windowed = (await computeStats(f.db, { run: { id: 'X', from: 1800000000, to: 1800000100 } })).totals;
+  expect(windowed.paymentsAccepted).toBe(windowed.paymentsSettled + windowed.failedOnChain + windowed.paymentsPending);
 });
 
 test('/api/stats counts accepted and pending uploads, so a stuck payment stays in the denominator', async () => {
