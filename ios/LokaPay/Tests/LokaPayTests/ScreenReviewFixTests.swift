@@ -167,3 +167,45 @@ struct ReceiveTwoPayersTests {
         #expect(model.unsettledTotal == 0)
     }
 }
+
+@Suite("an unreadable ledger never reads as $0.00 unsettled (review 1, finding 5)")
+@MainActor
+struct UnreadableLedgerTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    /// A ledger whose file exists and is not a ledger (OfflineLedger then throws `storage`).
+    static func corruptLedger() throws -> OfflineLedger {
+        let url = F.tempURL("ledger.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a ledger".utf8).write(to: url)
+        return OfflineLedger(url: url)
+    }
+
+    @Test("the risk line names the unreadable ledger instead of a zero total")
+    func riskLineWithoutTotal() {
+        let line = LimitState.riskLine(unsettled: nil, offlineLimit: 3_000_000, allowanceId: 77)
+        #expect(line == "Unsettled total unavailable (the ledger could not be read). Allowance #77, offline limit $3.00. Sandbox.")
+        #expect(!line.contains("$0.00"))
+        #expect(LimitState.riskLine(unsettled: 0, offlineLimit: 3_000_000, allowanceId: 77).contains("carries $0.00 unsettled"))
+    }
+
+    @Test("with an unreadable ledger the model has no total and no limit chip for the allowance on screen")
+    func modelWithoutTotal() async throws {
+        let ledger = try Self.corruptLedger()
+        #expect(throws: PaymentError.storage) { try ledger.unsettledTotal(allowanceId: F.allowanceId) }
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant, ledger: ledger,
+                                 settlementClient: nil, deployment: F.deployment, serverPublicKey: F.serverKey,
+                                 now: { F.now })
+        await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        let certificate = try #require(model.lastAllowance)
+        #expect(model.unsettledAllowanceId == F.allowanceId)
+        #expect(model.unsettled(for: certificate) == nil)
+        #expect(model.limitState == nil)
+        // And no note can be accepted against a ledger that cannot be read.
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.issue?.kind == .payment(.storage))
+        #expect(model.phase == .ready)
+    }
+}

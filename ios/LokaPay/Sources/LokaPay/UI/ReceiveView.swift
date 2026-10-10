@@ -106,8 +106,10 @@ public struct ReceiveView: View {
 
     @ViewBuilder private func limitBlock(_ certificate: AllowanceCertificate?) -> some View {
         if let certificate {
-            if let state = model.limitState { LimitChip(state) }
-            Text(LimitState.riskLine(unsettled: model.unsettled(for: certificate) ?? 0, offlineLimit: certificate.offlineLimit,
+            let unsettled = model.unsettled(for: certificate)
+            // No chip without a total: "Within local limit" would be a guess.
+            if unsettled != nil, let state = model.limitState { LimitChip(state) }
+            Text(LimitState.riskLine(unsettled: unsettled, offlineLimit: certificate.offlineLimit,
                                      allowanceId: certificate.allowanceId))
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
         }

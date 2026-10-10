@@ -273,9 +273,14 @@ public enum LimitState: Equatable, Sendable {
     }
 
     /// The offline-risk line, always shown on the Receive screen (amounts from the verified
-    /// certificate and the local ledger).
-    public static func riskLine(unsettled: UInt64, offlineLimit: UInt64, allowanceId: UInt64) -> String {
-        "Offline risk: this phone carries $\(Money.display(baseUnits: unsettled)) unsettled from allowance "
+    /// certificate and the local ledger). A nil total means the ledger could not be read: the
+    /// line says so rather than showing $0.00.
+    public static func riskLine(unsettled: UInt64?, offlineLimit: UInt64, allowanceId: UInt64) -> String {
+        guard let unsettled else {
+            return "Unsettled total unavailable (the ledger could not be read). Allowance #\(allowanceId), "
+                + "offline limit $\(Money.display(baseUnits: offlineLimit)). Sandbox."
+        }
+        return "Offline risk: this phone carries $\(Money.display(baseUnits: unsettled)) unsettled from allowance "
             + "#\(allowanceId), up to its $\(Money.display(baseUnits: offlineLimit)) offline limit, until it settles. Sandbox."
     }
 }
