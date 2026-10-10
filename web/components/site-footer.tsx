@@ -11,6 +11,9 @@ export function SiteFooter() {
         <Link href="/" className="underline">
           Home
         </Link>
+        <Link href="/verify" className="underline">
+          Verify a receipt
+        </Link>
         <Link href="/privacy" className="underline">
           Privacy
         </Link>
