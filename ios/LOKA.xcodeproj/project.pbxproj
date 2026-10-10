@@ -278,7 +278,7 @@ A00000000000000000000060,
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LOKA Pay";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and scan contact codes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and to scan contact codes and sandbox payment codes.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "LOKA uses Bluetooth to connect to nearby LOKA devices without Internet.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -306,7 +306,7 @@ A00000000000000000000060,
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LOKA Pay";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and scan contact codes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LOKA uses the camera to take photos for messages and to scan contact codes and sandbox payment codes.";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "LOKA uses Bluetooth to connect to nearby LOKA devices without Internet.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
