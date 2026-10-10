@@ -128,23 +128,33 @@ public struct ReceiveView: View {
                         let (next, overflow) = sum.addingReportingOverflow(p.note.note.amount)
                         return overflow ? .max : next
                     },
-                    unlisted: model.unsettledPaymentsUnlisted, unreadable: model.unsettledPaymentsUnreadable))
+                    unlisted: model.unsettledPaymentsUnlisted, unreadable: model.unsettledPaymentsUnreadable,
+                    blocked: held.filter { model.state(of: $0).isBlocked }.count))
                     .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
                 ForEach(held) { payment in
                     let amount = "$" + Money.display(baseUnits: payment.note.note.amount)
+                    let state = model.state(of: payment)
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(amount).font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
                             Text("sandbox").font(LokaStyle.label).foregroundStyle(LokaColor.muted)
+                            if state.isBlocked {
+                                Label("Cannot settle here", systemImage: "lock.fill")
+                                    .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                            }
                         }
-                        Text(ReceiveModel.unsettledRowText(payment, canSettle: model.canSettle(payment)))
+                        Text(ReceiveModel.unsettledRowText(payment, state: state))
                             .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
-                        Button("Settle " + amount) {
-                            Task { await model.settleUnsettled(noteId: payment.note.noteId) }
+                        // A blocked row offers no Settle: the caption says why, and the amount stays reserved.
+                        if !state.isBlocked {
+                            Button("Settle " + amount) {
+                                Task { await model.settleUnsettled(noteId: payment.note.noteId) }
+                            }
+                            .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+                            .disabled(model.isWorking)
+                            .accessibilityLabel("Settle " + amount + " sandbox from allowance "
+                                                + String(payment.note.note.allowanceId))
                         }
-                        .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
-                        .disabled(model.isWorking)
-                        .accessibilityLabel("Settle " + amount + " sandbox from allowance " + String(payment.note.note.allowanceId))
                     }
                 }
             }

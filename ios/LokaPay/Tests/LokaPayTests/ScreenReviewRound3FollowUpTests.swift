@@ -203,3 +203,72 @@ struct InboxArrivalOrderTests {
         #expect(inbox.held == ["B"] + more, "eviction dropped a text other than the first arrival")
     }
 }
+
+@Suite("an expired note with no saved receipt is shown as blocked, and stays reserved (review 3 round 3, finding 5)")
+@MainActor
+struct ExpiredWithoutReceiptTests {
+    let payer = SoftwareP256Signer()
+    let merchant = CountingSigner()
+    let merchantWire: Data
+    let allowanceWire: Data
+    let nowSeconds = Int64(F.now.timeIntervalSince1970)
+
+    init() {
+        merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        allowanceWire = F.allowanceWire(payer: payer.keyHash)
+    }
+
+    func makeModel(_ ledger: OfflineLedger) -> (ReceiveModel, StubTransport) {
+        let stub = StubTransport([])
+        let model = ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: ledger,
+                                 settlementClient: APIFixtures.client(stub, retry: .never), deployment: F.deployment,
+                                 serverPublicKey: F.serverKey, now: { F.now })
+        return (model, stub)
+    }
+
+    func certificate() throws -> AllowanceCertificate {
+        try AllowanceCertificate.verify(wire: allowanceWire, deployment: F.deployment, serverPublicKey: F.serverKey)
+    }
+
+    @Test("no ACK and past its expiry: blocked, says why, offers no settle, and the amount stays reserved")
+    func blockedRow() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0, expiry: nowSeconds - 60)
+        try ledger.accept(note: note, certificate: try certificate(), now: nowSeconds - 600, allowanceWire: allowanceWire)
+        let (model, stub) = makeModel(ledger)
+        let row = try #require(model.unsettledPayments.first)
+        #expect(model.state(of: row) == .expiredWithoutReceipt)
+        #expect(model.state(of: row).isBlocked)
+        #expect(!model.canSettle(row))
+        let text = ReceiveModel.unsettledRowText(row, state: .expiredWithoutReceipt)
+        #expect(text.contains("No signed receipt was kept for it"))
+        #expect(text.contains("a new one cannot be signed because the note expired"))
+        #expect(text.contains("Its amount stays reserved"))
+        #expect(!text.contains("signs its receipt first"))
+        let summary = ReceiveModel.unsettledSummary(count: 1, total: 1_000_000, unlisted: 0, unreadable: false, blocked: 1)
+        #expect(summary.contains("1 of them cannot be settled from this phone"))
+        #expect(!summary.contains("Each keeps its signed receipt"))
+
+        // Even if asked, nothing is signed or sent, and nothing is released.
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue?.kind == .payment(.expired))
+        #expect(merchant.count == 0)
+        #expect(stub.requests.isEmpty)
+        #expect(try ledger.entries().first?.state == .pending)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000)
+    }
+
+    @Test("past its expiry but with its own signed ACK from before then: still settleable")
+    func ackedExpiredIsSettleable() throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let expiry = nowSeconds - 60
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0, expiry: expiry)
+        try ledger.accept(note: note, certificate: try certificate(), now: expiry - 120, allowanceWire: allowanceWire)
+        try ledger.attachAck(noteId: note.noteId,
+                             ackWire: try Ack.sign(note: note, receivedAt: expiry - 120, with: merchant.inner).wire)
+        let (model, _) = makeModel(ledger)
+        let row = try #require(model.unsettledPayments.first)
+        #expect(model.state(of: row) == .settleable)
+        #expect(!ReceiveModel.unsettledRowText(row, state: .settleable).contains("cannot"))
+    }
+}

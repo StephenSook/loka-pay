@@ -369,6 +369,9 @@ struct ReceiveLayoutTests {
             ("ready, unsettled on this phone", .preview(.ready, held: [
                 PreviewFixtures.unsettled(), PreviewFixtures.unsettled(withAck: false, withCertificate: false),
             ])),
+            ("ready, a blocked unsettled row", .preview(.ready, held: [
+                PreviewFixtures.unsettled(), PreviewFixtures.unsettled(withAck: false, withCertificate: false, damaged: true),
+            ])),
             ("received", .preview(.received, payment: PreviewFixtures.received(), unsettled: 1_000_000)),
             ("received, not signed", .preview(.received, payment: PreviewFixtures.received(withAck: false),
                                               issue: .signing("Authentication canceled."), unsettled: 1_000_000)),

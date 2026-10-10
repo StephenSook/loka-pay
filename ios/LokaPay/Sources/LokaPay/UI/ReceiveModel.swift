@@ -734,20 +734,50 @@ public final class ReceiveModel {
         await settle()
     }
 
-    /// False for a damaged record, and for a note stored without its certificate whose allowance has
-    /// not been scanned on this screen. True does not promise `recheck` passes.
-    public func canSettle(_ held: UnsettledPayment) -> Bool {
-        !held.damaged && (held.certificate != nil || boundCertificate(for: held.note) != nil)
+    /// What a row of "Unsettled on this phone" can do now.
+    public enum UnsettledState: Equatable, Sendable {
+        /// Settle can bring it back (`recheck` still runs first).
+        case settleable
+        /// Stored without its certificate: its allowance code must be scanned on this screen first.
+        case needsAllowance
+        /// A stored part does not verify, or another entry holds its serial: never settled from here.
+        case damaged
+        /// No usable ACK was kept, and a new one cannot be signed because the note has expired, so it
+        /// cannot be settled from this phone. Its amount stays reserved: nothing proves the payer's
+        /// serial was not spent, and the ledger releases a note only on a verified CONF.
+        case expiredWithoutReceipt
+
+        /// True for the states Settle cannot leave.
+        public var isBlocked: Bool { self == .damaged || self == .expiredWithoutReceipt }
     }
 
-    /// The line above the list.
-    public nonisolated static func unsettledSummary(count: Int, total: UInt64, unlisted: Int, unreadable: Bool) -> String {
+    /// The state of `held` at the phone's time now.
+    public func state(of held: UnsettledPayment) -> UnsettledState {
+        if held.damaged { return .damaged }
+        // Without an ACK the note is checked as if received now, which an expired note fails.
+        if held.ack == nil, Int64(now().timeIntervalSince1970) > held.note.note.expiry { return .expiredWithoutReceipt }
+        if held.certificate == nil, boundCertificate(for: held.note) == nil { return .needsAllowance }
+        return .settleable
+    }
+
+    /// True only for `.settleable`; even then `recheck` runs before the note shows as Received.
+    public func canSettle(_ held: UnsettledPayment) -> Bool {
+        state(of: held) == .settleable
+    }
+
+    /// The line above the list. `blocked` counts the rows that cannot be settled from this phone.
+    public nonisolated static func unsettledSummary(count: Int, total: UInt64, unlisted: Int, unreadable: Bool,
+                                                    blocked: Int = 0) -> String {
         if unreadable {
             return "This phone could not read its offline ledger, so its unsettled notes cannot be listed. "
                 + "Nothing was released; they stay reserved."
         }
         var line = (count == 1 ? "1 note" : String(count) + " notes") + ", $" + Money.display(baseUnits: total)
-            + " sandbox, accepted offline and not settled yet. Each keeps its signed receipt; settling needs internet."
+            + " sandbox, accepted offline and not settled yet. Settling needs internet."
+        if blocked > 0 {
+            line += " " + String(blocked) + " of them cannot be settled from this phone (see below); "
+                + (blocked == 1 ? "its amount stays" : "their amounts stay") + " reserved."
+        }
         if unlisted > 0 {
             line += " " + String(unlisted) + " more held " + (unlisted == 1 ? "note" : "notes")
                 + " could not be read back to settle here; the ledger still counts them."
@@ -756,16 +786,24 @@ public final class ReceiveModel {
     }
 
     /// The caption under one row.
-    public nonisolated static func unsettledRowText(_ held: UnsettledPayment, canSettle: Bool) -> String {
+    public nonisolated static func unsettledRowText(_ held: UnsettledPayment, state: UnsettledState) -> String {
         // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
         var line = "Allowance #" + String(held.note.note.allowanceId) + ", received "
             + held.receivedAt.formatted(date: .abbreviated, time: .shortened) + " (this phone's clock)."
-        if held.damaged {
-            line += " Its saved record on this phone does not verify, so it cannot be settled from here."
-        } else if !canSettle {
+        switch state {
+        case .damaged:
+            line += " Its saved record on this phone does not verify, so it cannot be settled from here. "
+                + "Its amount stays reserved."
+        case .expiredWithoutReceipt:
+            let expiry = Date(timeIntervalSince1970: TimeInterval(held.note.note.expiry))
+            line += " No signed receipt was kept for it, and a new one cannot be signed because the note expired "
+                + expiry.formatted(date: .abbreviated, time: .shortened)
+                + ", so it cannot be settled from this phone. Its amount stays reserved against this allowance's "
+                + "offline limit."
+        case .needsAllowance:
             line += " Scan its allowance code (code 1 of 2) to settle it."
-        } else if held.ack == nil {
-            line += " Settling checks it again as if received now and signs its receipt first."
+        case .settleable:
+            if held.ack == nil { line += " Settling checks it again as if received now and signs its receipt first." }
         }
         return line
     }

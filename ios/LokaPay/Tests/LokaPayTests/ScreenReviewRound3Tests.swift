@@ -619,7 +619,8 @@ struct UnsettledRecoveryTests {
         #expect(row.certificate == nil)
         #expect(row.ack == nil)
         #expect(!model.canSettle(row))
-        #expect(ReceiveModel.unsettledRowText(row, canSettle: false).contains("Scan its allowance code"))
+        #expect(model.state(of: row) == .needsAllowance)
+        #expect(ReceiveModel.unsettledRowText(row, state: .needsAllowance).contains("Scan its allowance code"))
 
         await model.settleUnsettled(noteId: note.noteId)
         #expect(model.issue?.kind == .allowanceNeeded)
@@ -654,7 +655,7 @@ struct UnsettledRecoveryTests {
         #expect(ReceiveModel.unsettledSummary(count: 1, total: 1_000_000, unlisted: 0, unreadable: false)
                 .hasPrefix("1 note, $1.00 sandbox"))
         let row = PreviewFixtures.unsettled(withAck: false)
-        let text = ReceiveModel.unsettledRowText(row, canSettle: true)
+        let text = ReceiveModel.unsettledRowText(row, state: .settleable)
         #expect(text.hasPrefix("Allowance #" + String(row.note.note.allowanceId) + ", received "))
         #expect(text.contains("Settling checks it again as if received now and signs its receipt first."))
         for line in [summary, text, ReceiveModel.unsettledNextPaymentText] {
