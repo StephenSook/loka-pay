@@ -187,6 +187,25 @@ class PayerTest {
         expect("payee_mismatch") { SignedPayment(n0, merchant(1)) } // merchant B's certificate cannot label it
     }
 
+    @Test fun `transport length limits are the largest valid payloads, and every vector fits`() {
+        assertEquals(1027, PaymentTransport.maxTextLength(PaymentTransport.Kind.ALLOWANCE)) // 763 bytes
+        assertEquals(333, PaymentTransport.maxTextLength(PaymentTransport.Kind.MERCHANT)) // 243 bytes
+        for (kind in PaymentTransport.Kind.entries) {
+            val max = PaymentTransport.maxPayloadBytes(kind)
+            assertEquals(kind.name, PaymentTransport.maxTextLength(kind), PaymentTransport.encode(kind, ByteArray(max)).length)
+        }
+        val byKind = mapOf("notes" to PaymentTransport.Kind.NOTE, "acks" to PaymentTransport.Kind.ACK,
+            "confs" to PaymentTransport.Kind.CONFIRMATION, "allowances" to PaymentTransport.Kind.ALLOWANCE,
+            "merchants" to PaymentTransport.Kind.MERCHANT, "markers" to PaymentTransport.Kind.MARKER,
+            "receipts" to PaymentTransport.Kind.RECEIPT)
+        for ((key, kind) in byKind) for (v in Vectors.list(key)) {
+            assertTrue(key, v.getString("transport").length <= PaymentTransport.maxTextLength(kind))
+        }
+        // A maximal allowance: 16 earmarks.
+        val maxList = Earmarks.encode(List(16) { i -> ByteArray(32) { i.toByte() } })
+        assertEquals(PaymentTransport.maxPayloadBytes(PaymentTransport.Kind.ALLOWANCE), AllowanceCertificate.SIZE + 64 + maxList.size)
+    }
+
     @Test fun `concurrent reservations on one file never hand out a serial twice`() {
         val file = File(temp.root, "serials.txt")
         SerialReservations(file, JvmDirectorySync).initialize()

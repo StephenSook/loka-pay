@@ -19,6 +19,26 @@ object PaymentTransport {
 
     fun encode(kind: Kind, payload: ByteArray): String = "L1|P|1|${kind.letter}|${Base64Url.encode(payload)}"
 
+    /** The largest valid payload of each kind, from the layouts in sections 4 and 5. */
+    fun maxPayloadBytes(kind: Kind): Int = when (kind) {
+        Kind.NOTE -> SignedNote.WIRE_SIZE
+        Kind.ACK -> Ack.WIRE_SIZE
+        Kind.CONFIRMATION -> Confirmation.WIRE_SIZE
+        Kind.MARKER -> SignedNote.WIRE_SIZE + Ack.WIRE_SIZE
+        Kind.RECEIPT -> SignedNote.WIRE_SIZE + Ack.WIRE_SIZE + 1 + Confirmation.WIRE_SIZE
+        // ALLOW_V1 || signature || earmark list with the maximum 16 entries.
+        Kind.ALLOWANCE -> AllowanceCertificate.SIZE + 64 + 2 + 16 * 32
+        // MERCH_V1 with a 64-byte name || signature.
+        Kind.MERCHANT -> 115 + 64 + 64
+    }
+
+    /**
+     * The longest valid transport text of [kind]: the 9-character `L1|P|1|<kind>|` header plus
+     * the unpadded base64url length of the largest payload. Callers refuse longer input before
+     * storing or decoding it.
+     */
+    fun maxTextLength(kind: Kind): Int = 9 + (maxPayloadBytes(kind) * 4 + 2) / 3
+
     /**
      * Returns null for anything that is not version-1 payment content (callers ignore it and
      * never relay it as payment content); throws `base64url` when it claims to be and the

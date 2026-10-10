@@ -80,9 +80,15 @@ internal fun PayScreen() {
     var keyInvalidated by remember { mutableStateOf(false) }
     var confirmReplace by remember { mutableStateOf(false) }
 
+    // Saved text is bounded by the protocol: nothing longer than the longest valid transport text
+    // (plus a little slack) is stored or decoded.
+    val allowanceLimit = PaymentTransport.maxTextLength(PaymentTransport.Kind.ALLOWANCE) + INPUT_SLACK
+    val merchantLimit = PaymentTransport.maxTextLength(PaymentTransport.Kind.MERCHANT) + INPUT_SLACK
     var allowanceText by rememberSaveable { mutableStateOf("") }
     var merchantText by rememberSaveable { mutableStateOf("") }
     var amountText by rememberSaveable { mutableStateOf("") }
+    var allowanceTooLong by remember { mutableStateOf(false) }
+    var merchantTooLong by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     // The signed note with the merchant certificate captured when it was signed (never the live fields).
@@ -268,8 +274,13 @@ internal fun PayScreen() {
         }
 
         Section("Allowance certificate") {
-            OutlinedTextField(allowanceText, { allowanceText = it.trim() }, Modifier.fillMaxWidth(),
-                label = { Text("Paste L1|P|1|A|...") }, maxLines = 4, enabled = ready != null && !busy)
+            OutlinedTextField(allowanceText, { text ->
+                val t = text.trim()
+                allowanceTooLong = t.length > allowanceLimit
+                if (!allowanceTooLong) allowanceText = t
+            }, Modifier.fillMaxWidth(), label = { Text("Paste L1|P|1|A|...") }, maxLines = 4, enabled = ready != null && !busy)
+            if (allowanceTooLong) Text("Too long for an allowance certificate (the longest valid one is ${allowanceLimit - INPUT_SLACK} characters). Nothing was stored.",
+                color = MaterialTheme.colorScheme.error)
             when {
                 allowance == null || allowanceText.isEmpty() -> {}
                 allowance.value != null -> {
@@ -288,8 +299,13 @@ internal fun PayScreen() {
         }
 
         Section("Merchant certificate") {
-            OutlinedTextField(merchantText, { merchantText = it.trim() }, Modifier.fillMaxWidth(),
-                label = { Text("Paste L1|P|1|C|...") }, maxLines = 4, enabled = ready != null && !busy)
+            OutlinedTextField(merchantText, { text ->
+                val t = text.trim()
+                merchantTooLong = t.length > merchantLimit
+                if (!merchantTooLong) merchantText = t
+            }, Modifier.fillMaxWidth(), label = { Text("Paste L1|P|1|C|...") }, maxLines = 4, enabled = ready != null && !busy)
+            if (merchantTooLong) Text("Too long for a merchant certificate (the longest valid one is ${merchantLimit - INPUT_SLACK} characters). Nothing was stored.",
+                color = MaterialTheme.colorScheme.error)
             when {
                 merchant == null || merchantText.isEmpty() -> {}
                 merchant.value != null -> {
@@ -302,7 +318,8 @@ internal fun PayScreen() {
         }
 
         Section("Amount") {
-            OutlinedTextField(amountText, { amountText = it }, Modifier.fillMaxWidth(), singleLine = true,
+            // The largest u64 amount is 21 characters ("18446744073709.551615").
+            OutlinedTextField(amountText, { if (it.length <= MAX_AMOUNT_CHARS) amountText = it }, Modifier.fillMaxWidth(), singleLine = true,
                 label = { Text("Sandbox USDC, for example 1.00") }, enabled = ready != null && !busy,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             when {
@@ -364,8 +381,14 @@ private fun SignedNoteCard(context: Context, payment: SignedPayment) {
 /** A certificate check result: the verified value, or the refusal shown to the user. */
 private class Checked<T>(val value: T?, val error: String?)
 
+/** Extra characters accepted beyond the longest valid transport text before input is refused unread. */
+private const val INPUT_SLACK = 8
+private const val MAX_AMOUNT_CHARS = 32
+
 private fun <T> verifyCertificate(text: String, kind: PaymentTransport.Kind, verify: (ByteArray) -> T): Checked<T> {
     if (text.isEmpty()) return Checked(null, null)
+    // Never decode more than the protocol allows (also guards text restored from saved state).
+    if (text.length > PaymentTransport.maxTextLength(kind) + INPUT_SLACK) return Checked(null, "Too long to be a valid certificate.")
     return try {
         val decoded = PaymentTransport.decode(text) ?: return Checked(null, "Not LOKA payment content (expected L1|P|1|${kind.letter}|...).")
         if (decoded.kind != kind) return Checked(null, "This is a ${decoded.kind.name.lowercase()} payload, not ${kind.name.lowercase()}.")
