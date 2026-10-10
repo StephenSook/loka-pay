@@ -69,13 +69,22 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: tools/vectors/pnpm-lock.yaml
+          cache-dependency-path: |
+            tools/vectors/pnpm-lock.yaml
+            protocol/lib/pnpm-lock.yaml
 
       - name: Payment vectors are fresh (protocol/vectors/payment-v1.json equals the generator)
         run: |
           set -euo pipefail
           pnpm --dir tools/vectors install --frozen-lockfile
           pnpm --dir tools/vectors run check
+
+      - name: Protocol library agrees with the vectors (protocol/lib)
+        run: |
+          set -euo pipefail
+          pnpm --dir protocol/lib install --frozen-lockfile
+          pnpm --dir protocol/lib test
+          pnpm --dir protocol/lib typecheck
 
       - name: FACTS equality (every judge-facing number equals docs/FACTS.json)
         # TODO(3.6, 4.2): write tools/facts/check_facts.py. Until it exists this step warns
