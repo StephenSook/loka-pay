@@ -543,8 +543,9 @@ public final class ReceiveModel {
     }
 
     /// Shown above Next payment while the note on screen is not settled: the ACK lives only on this
-    /// screen, so the note cannot be settled from here once it is cleared.
-    public static let unsettledNextPaymentText =
+    /// screen, so the note cannot be settled from here once it is cleared. A constant string, so it
+    /// is readable from any isolation domain.
+    public nonisolated static let unsettledNextPaymentText =
         "Next payment leaves this note held in the offline ledger, unsettled. It cannot be settled from this "
         + "screen afterwards, so settle first when there is signal."
 
