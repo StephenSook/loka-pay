@@ -84,19 +84,21 @@ public struct ReceiveView: View {
             }
             Button { scanning = true } label: { Label("Scan the payer's codes", systemImage: "qrcode.viewfinder") }
                 .buttonStyle(LokaButtonStyle())
-            if let allowance = model.lastAllowance {
-                Label("Allowance #" + String(allowance.allowanceId) + " verified (code 1 of 2). Now the payment note (code 2 of 2).",
-                      systemImage: "checkmark.circle.fill")
+            let step = model.readyStep
+            switch step {
+            case .noteWaitingForAllowance:
+                Label(step.text, systemImage: "hourglass")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
-            } else if model.waitingNote != nil {
-                Label("Payment note checked. Waiting for its allowance (code 1 of 2).", systemImage: "hourglass")
+            case .allowanceVerified:
+                Label(step.text, systemImage: "checkmark.circle.fill")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
-            } else {
-                Text("Waiting for the payer's allowance (code 1 of 2) and payment note (code 2 of 2), by camera or Bluetooth.")
-                    .font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+            case .waitingForBoth:
+                Text(step.text).font(LokaStyle.body).foregroundStyle(LokaColor.muted)
             }
             if model.conflictingSpend { MoneyStatusChip(.conflictingSpend) }
-            limitBlock(model.lastAllowance)
+            // A waiting note belongs to an allowance not on this phone yet, so another payer's
+            // risk line would describe the wrong allowance.
+            if step != .noteWaitingForAllowance { limitBlock(model.lastAllowance) }
             CodeEntryField(prompt: "Or paste a payer code") { text in Task { await model.accept(text: text) } }
         }
         .lokaCard()
@@ -105,7 +107,7 @@ public struct ReceiveView: View {
     @ViewBuilder private func limitBlock(_ certificate: AllowanceCertificate?) -> some View {
         if let certificate {
             if let state = model.limitState { LimitChip(state) }
-            Text(LimitState.riskLine(unsettled: model.unsettledTotal ?? 0, offlineLimit: certificate.offlineLimit,
+            Text(LimitState.riskLine(unsettled: model.unsettled(for: certificate) ?? 0, offlineLimit: certificate.offlineLimit,
                                      allowanceId: certificate.allowanceId))
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
         }
@@ -126,7 +128,8 @@ public struct ReceiveView: View {
                 limitBlock(payment.certificate)
             }
             .lokaCard()
-            AllowanceCard(certificate: payment.certificate, usage: model.unsettledTotal.map { .unsettledHere($0) })
+            AllowanceCard(certificate: payment.certificate,
+                          usage: model.unsettled(for: payment.certificate).map { .unsettledHere($0) })
             VStack(alignment: .leading, spacing: 12) {
                 if let ackText = payment.ackText {
                     PaymentQRView(text: ackText, caption: "Receipt for the payer, signed by this phone")
@@ -203,7 +206,8 @@ public struct ReceiveView: View {
 }
 
 #Preview("Receive: note before allowance") {
-    ReceiveView(model: .preview(.ready, issue: .allowanceNeeded), connectivity: ConnectivityMonitor())
+    ReceiveView(model: .preview(.ready, issue: .allowanceNeeded, waitingNote: PreviewFixtures.note0),
+                connectivity: ConnectivityMonitor())
 }
 
 #Preview("Receive: conflicting spend seen") {

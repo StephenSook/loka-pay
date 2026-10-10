@@ -53,6 +53,8 @@ public final class ReceiveModel {
     public private(set) var merchantText: String?
     /// Verified allowance certificates seen on this screen, by allowance id.
     public private(set) var allowances: [UInt64: AllowanceCertificate] = [:]
+    /// The allowance the ready card shows for the payer at the till: set only while ready (from
+    /// an allowance code, or the allowance a note was checked against), cleared by Next payment.
     public private(set) var lastAllowance: AllowanceCertificate?
     /// A valid note that arrived before its allowance certificate.
     public private(set) var waitingNote: SignedNote?
@@ -64,8 +66,11 @@ public final class ReceiveModel {
     /// A second valid note from the certificate's payer on a serial already in the ledger.
     public private(set) var conflictingSpend = false
     public private(set) var isWorking = false
-    /// This merchant's pending total for the allowance on screen (OfflineLedger).
+    /// This merchant's pending total for the allowance on screen (OfflineLedger); nil when the
+    /// ledger could not be read. Read it through `unsettled(for:)`, which checks the pairing.
     public private(set) var unsettledTotal: UInt64?
+    /// The allowance `unsettledTotal` was read for.
+    public private(set) var unsettledAllowanceId: UInt64?
 
     public let deployment: Deployment
     private let signer: (any PaymentSigner)?
@@ -112,8 +117,42 @@ public final class ReceiveModel {
 
     /// The acceptance check chip state for the allowance on screen.
     public var limitState: LimitState? {
-        guard let certificate = payment?.certificate ?? lastAllowance, let unsettled = unsettledTotal else { return nil }
+        guard let certificate = payment?.certificate ?? lastAllowance,
+              let unsettled = unsettled(for: certificate) else { return nil }
         return LimitState.from(unsettled: unsettled, offlineLimit: certificate.offlineLimit, conflict: conflictingSpend)
+    }
+
+    /// This merchant's unsettled total for `certificate`, only when the total on hand was read
+    /// for that same allowance; nil otherwise (never another allowance's figure).
+    public func unsettled(for certificate: AllowanceCertificate) -> UInt64? {
+        unsettledAllowanceId == certificate.allowanceId ? unsettledTotal : nil
+    }
+
+    /// What the ready card says about the payer's two codes.
+    public enum ReadyStep: Equatable, Sendable {
+        case waitingForBoth
+        /// A note checked out and waits for its allowance. Checked before `lastAllowance`, which
+        /// may belong to someone else.
+        case noteWaitingForAllowance
+        case allowanceVerified(allowanceId: UInt64)
+
+        public var text: String {
+            switch self {
+            case .waitingForBoth:
+                return "Waiting for the payer's allowance (code 1 of 2) and payment note (code 2 of 2), by camera."
+            case .noteWaitingForAllowance:
+                return "Payment note checked. Waiting for its allowance (code 1 of 2)."
+            case .allowanceVerified(let id):
+                // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
+                return "Allowance #" + String(id) + " verified (code 1 of 2). Now the payment note (code 2 of 2)."
+            }
+        }
+    }
+
+    public var readyStep: ReadyStep {
+        if waitingNote != nil { return .noteWaitingForAllowance }
+        if let allowance = lastAllowance { return .allowanceVerified(allowanceId: allowance.allowanceId) }
+        return .waitingForBoth
     }
 
     // MARK: - Incoming codes
@@ -140,9 +179,10 @@ public final class ReceiveModel {
             let certificate = try AllowanceCertificate.verify(wire: wire, deployment: deployment,
                                                               serverPublicKey: serverPublicKey)
             allowances[certificate.allowanceId] = certificate
-            lastAllowance = certificate
-            // During a payment the screen shows that payment's allowance and its issues; leave them.
+            // During a payment the screen shows that payment's allowance and its issues; leave
+            // them. The certificate is kept, so the next payer's note still finds it.
             guard phase == .ready else { return }
+            lastAllowance = certificate
             issue = nil
             refreshUnsettled(certificate.allowanceId)
             if let waiting = waitingNote, waiting.note.allowanceId == certificate.allowanceId {
@@ -172,6 +212,9 @@ public final class ReceiveModel {
 
     private func process(_ note: SignedNote, certificate: AllowanceCertificate) async {
         guard let merchant else { return }
+        // Runs only while ready. The card, the limit chip and the risk line now describe the
+        // allowance this note is checked against, whatever happens below.
+        lastAllowance = certificate
         let seconds = Int64(now().timeIntervalSince1970)
         do {
             try Acceptance.check(note: note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash, now: seconds)
@@ -317,12 +360,17 @@ public final class ReceiveModel {
         waitingNote = nil
         issue = nil
         conflictingSpend = false
+        // The previous payer's allowance is not progress for the next one.
+        lastAllowance = nil
+        unsettledTotal = nil
+        unsettledAllowanceId = nil
         phase = .ready
     }
 
     // MARK: - Helpers
 
     private func refreshUnsettled(_ allowanceId: UInt64) {
+        unsettledAllowanceId = allowanceId
         unsettledTotal = try? ledger.unsettledTotal(allowanceId: allowanceId)
     }
 
@@ -336,7 +384,8 @@ extension ReceiveModel {
     /// PREVIEW ONLY: places a model built from test vectors into one state for the Xcode canvas.
     static func preview(_ phase: Phase, payment: ReceivedPayment? = nil, settlement: SettledPayment? = nil,
                         pending: PendingSettlement? = nil, issue: MoneyIssueKind? = nil, conflict: Bool = false,
-                        unsettled: UInt64? = nil, serverKey: Data? = PreviewFixtures.serverKey) -> ReceiveModel {
+                        unsettled: UInt64? = nil, waitingNote: SignedNote? = nil,
+                        serverKey: Data? = PreviewFixtures.serverKey) -> ReceiveModel {
         let model = ReceiveModel(merchantWire: PreviewFixtures.merchantWire, signer: PreviewFixtures.merchantSigner,
                                  ledger: OfflineLedger(url: PreviewFixtures.scratchURL("preview-ledger.json")),
                                  settlementClient: nil, deployment: PreviewFixtures.deployment,
@@ -347,8 +396,12 @@ extension ReceiveModel {
         model.settlement = settlement
         model.pendingSettlement = pending
         model.conflictingSpend = conflict
+        model.waitingNote = waitingNote
+        // A ready screen with an unsettled figure has seen the payer's allowance; a bare ready
+        // screen has seen nothing yet.
+        model.lastAllowance = payment?.certificate ?? (unsettled != nil ? PreviewFixtures.allowance : nil)
         model.unsettledTotal = unsettled
-        model.lastAllowance = payment?.certificate ?? PreviewFixtures.allowance
+        model.unsettledAllowanceId = model.lastAllowance?.allowanceId
         model.issue = issue.map { MoneyIssue($0, at: PreviewFixtures.now) }
         return model
     }
