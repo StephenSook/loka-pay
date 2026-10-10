@@ -8,7 +8,7 @@ import { numberKey, signAudioParams, verifyAudioParams, vonageJwt, type AudioPar
 import { CallLimits, NUMBER_WINDOW_MS, PAYMENT_MEMORY_MS, SITE_LIMIT, SITE_WINDOW_MS } from "../lib/call-limits";
 import { latestSettlement, settlementBySignature, settlementOf } from "../lib/call-payment";
 import { AudioCache, ChainMemo, callConfig, handleAudio, handleCall, safeTitle, type CallDeps } from "../lib/call-server";
-import { isCallLang, isNanpNumber, isNewSettlement, isPlausibleSignature, normalizeUsNumber } from "../lib/call-shared";
+import { isCallLang, isCallableUsNumber, isNewSettlement, isPlausibleSignature, normalizeUsNumber } from "../lib/call-shared";
 import { agoWords, speechFor } from "../lib/call-speech";
 import type { Row } from "../lib/program-feed";
 
@@ -45,8 +45,9 @@ const EN_DASH = String.fromCharCode(0x2013);
 // ---------- input checks ----------
 
 test.describe("number, language and signature checks", () => {
-  test("only +1 NANP numbers in E.164 form pass", () => {
-    for (const ok of [NUMBER, `${PLUS}12125550100`, `${PLUS}19995550100`]) expect(isNanpNumber(ok), ok).toBe(true);
+  test("only US geographic numbers in E.164 form pass", () => {
+    // Atlanta's 404 and 678, New York's 212, Los Angeles' 213.
+    for (const ok of [NUMBER, `${PLUS}16785550100`, `${PLUS}12125550100`, `${PLUS}12135550100`]) expect(isCallableUsNumber(ok), ok).toBe(true);
     for (const bad of [
       NATIONAL,
       `1${NATIONAL}`,
@@ -61,8 +62,55 @@ test.describe("number, language and signature checks", () => {
       12345,
       null,
     ]) {
-      expect(isNanpNumber(bad), String(bad)).toBe(false);
+      expect(isCallableUsNumber(bad), String(bad)).toBe(false);
     }
+  });
+
+  test("non-US NANP, toll-free, premium and special numbers are refused", () => {
+    const refused: Array<[string, string]> = [
+      ["876", "Jamaica"],
+      ["809", "Dominican Republic"],
+      ["284", "British Virgin Islands"],
+      ["242", "Bahamas"],
+      ["441", "Bermuda"],
+      ["787", "Puerto Rico (a US territory, outside the demo)"],
+      ["671", "Guam"],
+      ["416", "Toronto"],
+      ["604", "Vancouver"],
+      ["900", "premium"],
+      ["976", "976 as an area code"],
+      ["800", "toll-free"],
+      ["888", "toll-free"],
+      ["500", "personal services"],
+      ["700", "carrier"],
+      ["211", "N11"],
+      ["290", "held for expansion"],
+      ["370", "reserved"],
+      ["960", "reserved"],
+    ];
+    for (const [area, what] of refused) expect(isCallableUsNumber(`${PLUS}1${area}5550100`), `${area} ${what}`).toBe(false);
+    // Special exchanges inside a US area code: the 976 premium exchange, N11 and carrier codes.
+    for (const exchange of ["976", "411", "911", "950", "958"]) expect(isCallableUsNumber(`${PLUS}1404${exchange}0100`), exchange).toBe(false);
+    // The page normalizes through the same function, so it refuses the same numbers.
+    expect(normalizeUsNumber("(876) 555-0100")).toBeNull();
+    expect(normalizeUsNumber("1 900 555 0100")).toBeNull();
+    expect(normalizeUsNumber("404 976 0100")).toBeNull();
+    expect(normalizeUsNumber("(678) 555-0100")).toBe(`${PLUS}16785550100`);
+  });
+
+  test("the page and the server import the same validator, and no other file carries a number pattern", () => {
+    const web = path.join(__dirname, "..");
+    const panel = readFileSync(path.join(web, "components", "call-panel.tsx"), "utf8");
+    const server = readFileSync(path.join(web, "lib", "call-server.ts"), "utf8");
+    const shared = readFileSync(path.join(web, "lib", "call-shared.ts"), "utf8");
+    expect(panel).toMatch(/import \{[^}]*\bnormalizeUsNumber\b[^}]*\} from "@\/lib\/call-shared";/);
+    expect(server).toMatch(/import \{[^}]*\bisCallableUsNumber\b[^}]*\} from "\.\/call-shared";/);
+    expect(server).toContain("if (!isCallableUsNumber(to))");
+    expect(shared).toContain("return isCallableUsNumber(e164) ? e164 : null;");
+    // The NANP shape lives in lib/call-shared.ts alone.
+    const shape = "[2-9]\\d{2}";
+    for (const file of [panel, server, readFileSync(path.join(web, "app", "call", "page.tsx"), "utf8")]) expect(file).not.toContain(shape);
+    expect(shared).toContain(shape);
   });
 
   test("what a visitor types is normalized, and nothing else is guessed", () => {
@@ -404,6 +452,8 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
           [callRequest([NUMBER]), 400, "bad_request"],
           [callRequest({ to: NATIONAL, lang: "en" }), 400, "bad_number"],
           [callRequest({ to: `${PLUS}44${NATIONAL}`, lang: "en" }), 400, "bad_number"],
+          [callRequest({ to: `${PLUS}18765550100`, lang: "en" }), 400, "bad_number"],
+          [callRequest({ to: `${PLUS}19005550100`, lang: "en" }), 400, "bad_number"],
           [callRequest({ to: NUMBER, lang: "es" }), 400, "bad_lang"],
           [callRequest({ to: NUMBER, lang: "en", signature: "not-a-signature" }), 400, "bad_signature"],
           [callRequest({ to: NUMBER, lang: "en", pad: "x".repeat(3000) }), 413, "bad_request"],

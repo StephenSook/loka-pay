@@ -81,12 +81,18 @@ test("/call: loads with no login and no cookies, shows the consent text, and mak
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
-test("/call: a number that is not +1 is refused on the page and nothing is sent", async ({ page, baseURL }) => {
+test("/call: a number outside the US (or toll-free, or premium) is refused on the page and nothing is sent", async ({ page, baseURL }) => {
   const seen = watchRequests(page, baseURL!);
   await open(page, "/call");
-  await page.getByLabel("US or Canadian phone number").fill(`${PLUS}44 20 7946 0000`);
-  await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
-  await expect(page.getByTestId("number-help")).toHaveText("Enter a US or Canadian number: 10 digits, with or without +1.");
+  // The UK, Jamaica (a +1 number outside the US), and the 900 premium code.
+  for (const typed of [`${PLUS}44 20 7946 0000`, "(876) 555-0100", "1 900 555 0100"]) {
+    await page.getByLabel("US phone number").fill(typed);
+    await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
+    await expect(page.getByTestId("number-help")).toHaveText(
+      "Enter a US number: 10 digits, with or without +1. Other countries, toll-free and premium numbers cannot be called.",
+    );
+    await page.getByLabel("US phone number").fill("");
+  }
   await expect(page.getByTestId("call-state")).toHaveAttribute("data-state", "idle");
   expect(seen.own.filter((r) => r.url.includes("/api/call"))).toEqual([]);
 });
@@ -98,7 +104,7 @@ test("/call: Call me now calls through the stand-in, shows Calling and the explo
   const n = numberFor(testInfo.project.name, 0);
   const seen = watchRequests(page, baseURL!);
   await open(page, "/call");
-  await page.getByLabel("US or Canadian phone number").fill(`(404) 555-01${n.national.slice(-2)}`);
+  await page.getByLabel("US phone number").fill(`(404) 555-01${n.national.slice(-2)}`);
   await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
 
   const state = page.getByTestId("call-state");
@@ -189,7 +195,7 @@ test("/call: armed, a new settlement over the WebSocket posts its signature; the
   });
 
   await open(page, "/call");
-  await page.getByLabel("US or Canadian phone number").fill(n.e164);
+  await page.getByLabel("US phone number").fill(n.e164);
   await page.getByRole("button", { name: "Call me when the next payment settles" }).click();
   const state = page.getByTestId("call-state");
   await expect(state).toHaveAttribute("data-state", "waiting");

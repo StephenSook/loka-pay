@@ -24,7 +24,7 @@ import { latestSettlement, settlementBySignature, type SettledPayment } from "./
 import {
   SIGNATURE_MAX_AGE_MS,
   isCallLang,
-  isNanpNumber,
+  isCallableUsNumber,
   isPlausibleSignature,
   type CallAnswer,
   type CallErrorCode,
@@ -296,7 +296,7 @@ async function readCallRequest(request: Request): Promise<CallRequest | Response
   }
   if (typeof body !== "object" || body === null || Array.isArray(body)) return refuse(400, "bad_request", "the body is not a JSON object");
   const { to, lang, signature } = body as { to?: unknown; lang?: unknown; signature?: unknown };
-  if (!isNanpNumber(to)) return refuse(400, "bad_number", "a US or Canadian number in the form +1 and 10 digits");
+  if (!isCallableUsNumber(to)) return refuse(400, "bad_number", "a US geographic number in the form +1 and 10 digits");
   if (!isCallLang(lang)) return refuse(400, "bad_lang", "lang is en or fr");
   if (signature !== undefined && signature !== null && !isPlausibleSignature(signature)) {
     return refuse(400, "bad_signature", "a Solana transaction signature in base58");

@@ -63,7 +63,7 @@ export default async function CallPage() {
         <p className="text-sm text-muted">
           A refused or failed transaction is never read out as paid. Limits, counted in each server instance&apos;s
           memory: {NUMBER_LIMIT} calls per number every {NUMBER_WINDOW_MS / 60_000} minutes, one call per number for each
-          payment, and {SITE_LIMIT} calls an hour. US and Canadian numbers only. More in the{" "}
+          payment, and {SITE_LIMIT} calls an hour. US numbers only. More in the{" "}
           <Link prefetch={false} href="/privacy" className="font-bold underline">
             privacy policy
           </Link>

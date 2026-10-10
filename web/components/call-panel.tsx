@@ -139,7 +139,7 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
 
   function readNumber(): string | null {
     const to = normalizeUsNumber(draft);
-    setNumberError(to === null ? "Enter a US or Canadian number: 10 digits, with or without +1." : null);
+    setNumberError(to === null ? "Enter a US number: 10 digits, with or without +1. Other countries, toll-free and premium numbers cannot be called." : null);
     return to;
   }
 
@@ -170,7 +170,7 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
         <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="flex min-w-0 flex-col gap-1.5">
             <label htmlFor={numberId} className="font-bold">
-              US or Canadian phone number
+              US phone number
             </label>
             <input
               id={numberId}
@@ -187,7 +187,7 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
               className={`${FIELD} font-mono`}
             />
             <p id={numberHelpId} className={numberError ? "text-sm font-bold" : "text-sm text-muted"} data-testid="number-help">
-              {numberError ?? "US and Canadian numbers (+1) only."}
+              {numberError ?? "US numbers (+1) only."}
             </p>
           </div>
           <div className="flex min-w-0 flex-col gap-1.5">
