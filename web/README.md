@@ -6,11 +6,24 @@ Pages today:
 
 | Path | What it shows |
 |---|---|
-| `/` | What LOKA Pay is, the sandbox chip, the build status, links to the source and to `/privacy` |
-| `/privacy` | The privacy policy. Also the App Store Connect privacy policy URL for the TestFlight build |
+| `/` | What LOKA Pay is, the sandbox chip, the build status, the judge door button and links to every page |
+| `/judge` | The judge door: a numbered three-minute itinerary, the program's facts read live from devnet, the TestFlight status and the CI badges |
+| `/live` | The program's transactions, read by the browser straight from devnet (`getSignaturesForAddress`, `getTransaction`, then a `logsSubscribe` WebSocket). `/live?kiosk=1` uses large type |
 | `/verify` | Checks a payment receipt in the visitor's browser (PAYMENT-V1 section 4.9): from a `#r=<base64url>` link or pasted text, plus a button that loads the published test receipt |
+| `/proof` | Claims marked Live only with an evidence link, proof of reserves from the program's accounts at one slot, and "Built this weekend" from GitHub's compare API |
+| `/trust` | The threat model in plain words: what the program checks, what the protocol does not promise, custody, and the upgrade authority read from chain |
+| `/privacy` | The privacy policy. Also the App Store Connect privacy policy URL for the TestFlight build |
 
 Other pages arrive with the tasks that build them (see `PLAN.md`). Claims follow the code: no page describes a feature that is not built and tested.
+
+## Chain and GitHub reads (`/judge`, `/live`, `/proof`, `/trust`)
+
+- `lib/pins.ts` bundles every public field of `config/pins.json` with a static import and checks each address (32 bytes of base58, cluster `devnet`). A missing or malformed file fails `next build`. (`lib/deployment.ts` stays as it is for `/verify`, which needs the server key.)
+- `lib/solana.ts` is a small JSON-RPC client (8 s timeout, one retry on a timeout, network error or 5xx; HTTP 429 is reported, not retried). `NEXT_PUBLIC_SOLANA_RPC_URL` and `NEXT_PUBLIC_SOLANA_WS_URL` override the public devnet endpoints (`.env.example`).
+- `lib/vault.ts` decodes the program's accounts (`programs/loka_vault/src/state.rs`), events, `open_allowance` arguments, the upgradeable loader's accounts and SPL token accounts. `lib/logs.ts` reads log lines into instruction names, event amounts and Anchor's named errors, attributing each line to the program on top of the call stack.
+- `/judge`, `/proof` and `/trust` render per request and read on the server through `lib/chain.ts` and `lib/github.ts`. Results are cached with the time they were read (`lib/cached-read.ts`, `unstable_cache`): 30 seconds for devnet, 5 minutes for GitHub. A failed read is never cached and never replaced by an old or typed-in value; the page says what failed and when.
+- Public devnet allows 10 `getProgramAccounts` and 10 `getTransaction` calls per 10 seconds per IP, refuses `getProgramAccounts` inside a JSON-RPC batch, and refuses a batch that repeats `getAccountInfo` or `getTokenAccountBalance`. So the program's accounts are listed with one unfiltered `getProgramAccounts` call returning each account's 8-byte discriminator, fixed accounts are read with `getMultipleAccounts`, and `/live` reads transaction details 8 at a time.
+- Proof of reserves lists the program's accounts, reads the vault token account and every allowance and merchant in one `getMultipleAccounts` call (one slot), then lists the accounts again at that slot to confirm none was missed.
 
 ## `/verify`, the protocol library and `config/pins.json`
 
@@ -40,19 +53,20 @@ pnpm dev                 # http://localhost:3000
 pnpm lint                # ESLint (eslint-config-next)
 pnpm typecheck           # next typegen, then tsc --noEmit
 pnpm build               # production build
+pnpm test:unit           # decoder and parser unit tests (unit/), no browser, no server
 
 # Playwright: builds, serves on http://127.0.0.1:3100, runs chromium and webkit
 pnpm exec playwright install chromium webkit   # once
 pnpm test:e2e
 ```
 
-CI (`.github/workflows/web.yml`) runs the same steps, each on its own exit code. With `CI` set, Playwright skips its own build because the workflow builds in the step before.
+CI (`.github/workflows/web.yml`) runs the same steps, each on its own exit code. With `CI` set, Playwright skips its own build because the workflow builds in the step before. The unit tests run there too: `playwright.config.ts` includes them as its `unit` project, which needs no browser.
 
 ## Telemetry and tracking
 
 - Next.js telemetry is off in CI (`NEXT_TELEMETRY_DISABLED=1` in the workflow). Locally, run `pnpm exec next telemetry disable` once, or export `NEXT_TELEMETRY_DISABLED=1`.
-- No analytics, telemetry or error-tracking packages, and no cookies. `e2e/judge.spec.ts` fails if a page sets a cookie or requests anything from another origin.
-- Fonts (Bricolage Grotesque, Figtree) come through `next/font/google`, which downloads them at build time and serves them from this site. A page load never requests a font from Google.
+- No analytics, telemetry or error-tracking packages, and no cookies. `e2e/judge.spec.ts` fails if `/` or `/privacy` sets a cookie or requests anything from another origin. `e2e/judge-door.spec.ts` checks the same for `/proof` and `/trust`, allows only GitHub's badge images on `/judge`, and leaves `/live` free to reach devnet (the privacy page says so).
+- Fonts (Bricolage Grotesque, Figtree) are committed in `app/fonts` and loaded with `next/font/local`, so neither a build nor a page load contacts another site for them.
 
 ## Design tokens
 
