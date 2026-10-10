@@ -1199,4 +1199,44 @@ struct RegistrationPendingTests {
         }
         #expect(read.requests.count == 1, "never retried")
     }
+
+    @Test("a malformed registration 202 is refused by name and not posted again")
+    func malformedPendingRefused() async throws {
+        let hash = APIFixtures.keyHashHex("payer")
+        func body(_ changes: [String: Any]) -> Data {
+            let base: [String: Any] = ["status": "pending", "kind": "payer", "keyHash": hash, "signature": NSNull(),
+                                       "retryAfter": 2]
+            return APIFixtures.json(base.merging(changes) { _, new in new })
+        }
+        let violations: [(Data, String)] = [
+            (APIFixtures.json(["kind": "payer", "keyHash": hash, "signature": NSNull(), "retryAfter": 2]),
+             "does not say status pending"),
+            (body(["status": "failed"]), "does not say status pending"),
+            (body(["status": "PENDING"]), "does not say status pending"),
+            (body(["status": NSNull()]), "does not say status pending"),
+            (body(["kind": 42]), "names another registration kind"),
+            (body(["keyHash": 42]), "names another key hash"),
+        ]
+        for (data, reason) in violations {
+            let stub = StubTransport([StubReply(status: 202, body: data)])
+            do {
+                _ = try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+                Issue.record("accepted a 202 that \(reason)")
+            } catch let SettlementError.protocolViolation(text) {
+                #expect(text == "HTTP 202 \(reason)")
+            }
+            #expect(stub.requests.count == 1)
+        }
+        let unreadable = [Data(), Data("<html>pending</html>".utf8), Data("[]".utf8), Data("\"pending\"".utf8)]
+        for data in unreadable {
+            let stub = StubTransport([StubReply(status: 202, body: data)])
+            do {
+                _ = try await APIFixtures.client(stub).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+                Issue.record("accepted an unreadable 202")
+            } catch let SettlementError.invalidResponse(text) {
+                #expect(text.hasPrefix("RegistrationPendingResponse: "), "\(text)")
+            }
+            #expect(stub.requests.count == 1)
+        }
+    }
 }

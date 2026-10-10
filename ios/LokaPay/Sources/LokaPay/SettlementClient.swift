@@ -546,11 +546,15 @@ public struct SettlementClient: Sendable {
                                            replayed: body.replayed == true, reason: body.error))
     }
 
-    /// A registration 202 must name the route that was called and the key that was sent; one
-    /// that does not is a protocol violation and is not posted again.
+    /// A registration 202 must say "pending" and name the route that was called and the key that
+    /// was sent; one that does not is a protocol violation and is not posted again. A body that is
+    /// not a JSON object is `invalidResponse`, also not posted again.
     private func pendingRegistration(data: Data, response: HTTPURLResponse, kind: RegistrationKind,
                                      keyHash: Data) throws -> PendingRegistration {
         let body = try decode(SettlementAPI.RegistrationPendingResponse.self, data)
+        guard body.status == "pending" else {
+            throw SettlementError.protocolViolation("HTTP 202 does not say status pending")
+        }
         guard body.kind == kind.rawValue else {
             throw SettlementError.protocolViolation("HTTP 202 names another registration kind")
         }
@@ -819,10 +823,13 @@ enum SettlementAPI {
         }
     }
 
-    /// HTTP 202 for `POST /v1/payers` and `POST /v1/merchants`. `kind` and `keyHash` bind it to
-    /// the request: they decode leniently here, and the client refuses the body when either is
-    /// missing or differs. `signature` and `retryAfter` are display only.
+    /// HTTP 202 for `POST /v1/payers` and `POST /v1/merchants`, as the server sends it:
+    /// `{ "status": "pending", "kind", "keyHash", "signature": <base58 or null>, "retryAfter": 2 }`.
+    /// `status`, `kind` and `keyHash` decode leniently here, and the client refuses the body when
+    /// `status` is not "pending" or `kind` or `keyHash` is missing or differs from the request.
+    /// `signature` and `retryAfter` are display only.
     struct RegistrationPendingResponse: Codable, Equatable {
+        let status: String?
         let kind: String?
         let keyHash: String?
         let signature: String?
@@ -830,6 +837,7 @@ enum SettlementAPI {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
+            status = c.lenient(.status)
             kind = c.lenient(.kind)
             keyHash = c.lenient(.keyHash)
             signature = c.lenient(.signature)
