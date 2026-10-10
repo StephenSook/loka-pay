@@ -542,6 +542,49 @@ async function savedReplacement(f: Awaited<ReturnType<typeof fixture>>, publicKe
   return { first, original, replacement };
 }
 
+test('retryOf keeps X when original A becomes visible during preparation after replacement B collides', async () => {
+  const f = await fixture(); const publicKey = key();
+  f.options.policies.public = { ...policy, daily: { units: '315', funderLamports: '30', feeLamports: '30' } };
+  const service = new RegistrationService(f.options);
+  const funded = new Set<string>(); const plans = new Map<string, RegistrationPlan>();
+  const outcomes = new Map<string, 'ok' | 'collision'>(); let originalVisible = false;
+  f.chain.sign.mockImplementation(async (quote, plan) => {
+    const attempt = { signature: `attempt-${f.chain.sign.mock.calls.length}`, rawTransaction: 'test-only',
+      blockhash: quote.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight };
+    plans.set(attempt.signature, { ...plan }); return attempt;
+  });
+  f.chain.send.mockImplementation(async attempt => {
+    const id = plans.get(attempt.signature)!.allowanceId!;
+    outcomes.set(attempt.signature, funded.has(id) ? 'collision' : 'ok');
+    funded.add(id);
+  });
+  f.chain.observe.mockImplementation(async attempt => attempt.signature === 'attempt-1' && !originalVisible
+    ? null : outcomes.get(attempt.signature)!);
+  f.chain.lookup.mockImplementation(async attempt => attempt.signature === 'attempt-1' && !originalVisible
+    ? { found: false, outcome: null } : { found: true, outcome: outcomes.get(attempt.signature)! });
+  const first = await service.submit('payer', { publicKey }); expect(first.statusCode).toBe(202);
+  const original = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(outcomes.get('attempt-1')).toBe('ok'); expect(originalVisible).toBe(false);
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.quote.mockResolvedValueOnce({ message: 'replacement', blockhash: 'fresh', lastValidBlockHeight: 200,
+    cost: { units: '105', funderLamports: '10', feeLamports: '10' } });
+  const failed = await service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { reason: 'allocation_collision', retryOf: 'attempt-2' } });
+  expect(plans.get('attempt-2')!.allowanceId).toBe(original.plan.allowanceId);
+  f.chain.quote.mockImplementationOnce(async () => {
+    originalVisible = true;
+    return { message: 'explicit-retry', blockhash: 'retry', lastValidBlockHeight: 300,
+      cost: { units: '105', funderLamports: '10', feeLamports: '10' } };
+  });
+  const result = await service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect([...funded]).toEqual([original.plan.allowanceId]);
+  expect(plans.get('attempt-3')!.allowanceId).toBe(original.plan.allowanceId);
+  expect(outcomes.get('attempt-3')).toBe('collision');
+  expect(f.chain.sign).toHaveBeenCalledTimes(3); expect(f.chain.send).toHaveBeenCalledTimes(3);
+  expect(result).toMatchObject({ statusCode: 200, body: { allowanceId: original.plan.allowanceId, openSignature: 'attempt-1' } });
+  expect((await f.store.get('payer', original.plan.keyHash)).plan).toEqual(original.plan);
+});
+
 test.each(['collision', 'failed'] as const)('original registration success wins over replacement %s without another attempt', async terminal => {
   const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
   f.chain.outcome = terminal;

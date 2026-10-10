@@ -59,6 +59,7 @@ export class RegistrationService {
     }
     // A takeover keeps the original name, pool, policy and expiry. Renewal has a new plan and job id.
     job = await this.options.store.get(kind, request.keyHash);
+    const fixedAllowanceId = kind === 'payer' && (job.explicitRetries ?? 0) > 0;
     // Only the fenced winner can save then send. Saved-attempt recovery has a separate lease.
     let reserved = false;
     try {
@@ -76,7 +77,7 @@ export class RegistrationService {
       }
       for (let tries = 0; tries < 8; tries++) {
         const plan = { ...job.plan };
-        if (kind === 'payer') {
+        if (kind === 'payer' && !fixedAllowanceId) {
           plan.allowanceId = randomBytes(8).readBigUInt64BE().toString();
           if (await this.options.chain.taken(plan.allowanceId)) continue;
         }
@@ -98,7 +99,7 @@ export class RegistrationService {
         job.plan = plan; job.attempt = attempt;
         await this.options.store.broadcast(job, attempt, a => this.options.chain.send(a));
         const outcome = await this.options.chain.observe(attempt, plan);
-        if (kind === 'payer' && outcome === 'collision') continue;
+        if (kind === 'payer' && outcome === 'collision' && !fixedAllowanceId) continue;
         return this.resolve(job, true, outcome);
       }
       if (reserved && job.attempt) return this.failed(job, 'collision_retry_exhausted');
