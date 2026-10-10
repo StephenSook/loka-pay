@@ -90,11 +90,16 @@ test('invalid signatures and mismatched payer keys cannot consume the allowance 
   expect((await f.post(note(1))).statusCode).toBe(200); expect((await f.post(note(2))).statusCode).toBe(200);
 });
 
-test('repeated uploads are submissions while GET polling does not consume the limit', async () => {
+test('decided replays and GET polling do not consume upload quota', async () => {
   const f = await fixture(); const first = (await f.post(note(1))).json();
   for (let i = 0; i < 3; i++) expect((await f.service.get(first.noteId)).statusCode).toBe(200);
-  expect((await f.post(note(1))).json().replayed).toBe(true); expect((await f.post(note(1))).statusCode).toBe(429);
+  for (let i = 0; i < 5; i++) expect((await f.post(note(1))).json()).toEqual({ ...first, replayed: true });
   expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect((await f.post(note(2))).statusCode).toBe(200);
+  expect((await f.post(note(3))).statusCode).toBe(429);
+  expect((await f.post(note(1))).json()).toEqual({ ...first, replayed: true });
+  const counters = await f.db.query<{ used: number }>('SELECT used FROM settlement_rate_limits');
+  expect(Number(counters.rows[0].used)).toBe(3);
 });
 
 test('an older window observation cannot reset the current allowance quota', async () => {

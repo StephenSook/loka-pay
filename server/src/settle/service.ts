@@ -34,6 +34,11 @@ export class SettlementService {
     try { refusal = await this.options.chain.checkIdentity(upload.validated); }
     catch { throw new HttpError(503, 'chain_unavailable'); }
     if (refusal !== null) throw new HttpError(422, refusal);
+    const previous = await this.options.store.get(upload.noteId);
+    if (previous?.decision) {
+      if (upload.ack) await this.options.store.attachAck(upload.noteId, upload.ack);
+      return this.resolve(previous, true);
+    }
     const key = `${P.toHex(this.options.deployment.programId)}:${this.options.deployment.clusterId}:${P.toHex(this.options.deployment.mint)}:${upload.validated.note.allowanceId}`;
     const retryAfter = await this.options.store.limitSubmission(key, this.rateLimit);
     if (retryAfter !== null) throw new HttpError(429, 'rate_limited', retryAfter);
@@ -55,6 +60,7 @@ export class SettlementService {
       if (quote.feePayer !== this.feeBudget.feePayer) throw new Error('Fee quote payer mismatch');
       stage = 'fee_admission';
       if (!await this.options.store.reserveFee(row.noteId, this.feeBudget, quote.lamports, { token })) {
+        if (replayed) return this.pending(row, 'fee_admission');
         if (await this.options.store.releaseUnsigned(row.noteId, token)) throw new HttpError(429, 'budget_exhausted');
         return this.pending((await this.options.store.get(row.noteId))!);
       }
