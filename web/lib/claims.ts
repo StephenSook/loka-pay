@@ -225,3 +225,39 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
     },
   ];
 }
+
+/** What /trust says up front about whether the program can still be changed (lib/chain.ts programData). */
+export interface Upgradeability {
+  kind: "upgradeable" | "frozen" | "unknown";
+  heading: string;
+  body: string;
+}
+
+/**
+ * Decided by the program data account's upgrade authority, from the same read the custody
+ * section shows (with its time and age there). A failed or stale read says unknown: the
+ * page never asserts either way without it.
+ */
+export function upgradeability(read: Read<ProgramFacts>): Upgradeability {
+  const audit = "Nobody outside the team has audited this program.";
+  const programData = read.ok && !read.staleBecause ? read.data.programData : null;
+  if (programData === null || !programData.ok) {
+    return {
+      kind: "unknown",
+      heading: "Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.",
+      body: `${audit} The latest read of its upgrade authority failed (the reason is below), so this page does not say whether the program can still be changed.`,
+    };
+  }
+  if (programData.value.upgradeAuthority === null) {
+    return {
+      kind: "frozen",
+      heading: "Devnet pilot, unaudited, and frozen: the program can no longer be changed.",
+      body: `${audit} The chain shows no upgrade authority, so nobody can change the program any more, not even to ship a fix. The read is shown below with its time.`,
+    };
+  }
+  return {
+    kind: "upgradeable",
+    heading: "Devnet pilot, unaudited, not frozen on purpose.",
+    body: `${audit} It stays upgradeable so a fix can ship during the event: freezing a Solana program cannot be undone. That also means whoever holds the upgrade authority can change the program, so that key is shown below, read from the chain with its time.`,
+  };
+}

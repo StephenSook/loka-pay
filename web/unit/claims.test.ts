@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { ProgramFacts, ReservesRead } from "../lib/chain";
-import { claimsFrom, type Claim } from "../lib/claims";
+import { claimsFrom, upgradeability, type Claim } from "../lib/claims";
 import { PROGRAM_JOB, type MainChecks } from "../lib/github";
 import { PINS } from "../lib/pins";
 import type { Read } from "../lib/read-state";
@@ -194,5 +194,32 @@ test.describe("claims decided by named evidence, never Live unconditionally", ()
     expect(c.live.status).toBe("unchecked");
     expect(c.live.evidence).toBeUndefined();
     expect(c.live.note).toContain("this page cannot see your browser's connection");
+  });
+});
+
+// The /trust heading (lib/claims.ts upgradeability) follows the upgrade authority read.
+test.describe("the /trust upgradeability heading", () => {
+  const withProgramData = (programData: ProgramFacts["programData"]) => cached({ ...facts(), programData }, 20_000);
+
+  test("an upgrade authority on chain: not frozen on purpose", () => {
+    expect(upgradeability(cached(facts(), 20_000))).toMatchObject({ kind: "upgradeable", heading: "Devnet pilot, unaudited, not frozen on purpose." });
+  });
+
+  test("no upgrade authority: frozen, never 'not frozen'", () => {
+    const u = upgradeability(withProgramData({ ok: true, value: { deploySlot: 1, deployTimeMs: null, upgradeAuthority: null, programBytes: null } }));
+    expect(u.kind).toBe("frozen");
+    expect(u.heading).not.toContain("not frozen");
+    expect(u.heading).toContain("frozen");
+  });
+
+  test("an unread authority, a stale read or a failed read: unknown, asserting neither", () => {
+    const unread = upgradeability(withProgramData({ ok: false, reason: "the program data account does not exist" }));
+    const staleRead = upgradeability(stale(facts(), 90_000, "node is behind"));
+    const failedRead = upgradeability(failed("could not reach api.devnet.solana.com"));
+    for (const u of [unread, staleRead, failedRead]) {
+      expect(u.kind).toBe("unknown");
+      expect(u.heading).not.toContain("not frozen");
+      expect(u.heading).not.toContain("and frozen");
+    }
   });
 });

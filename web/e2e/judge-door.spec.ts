@@ -155,7 +155,11 @@ test("/judge: seven numbered stops, the program facts or an honest failure, real
 test("/trust: pilot status, custody, the checks and the limits; no request leaves the site", async ({ page, baseURL }) => {
   const foreign = watchForeign(page, baseURL!);
   await open(page, "/trust");
-  await expect(page.getByTestId("pilot-status")).toHaveText("Devnet pilot, unaudited, not frozen on purpose.");
+  // The heading follows the upgrade authority read (lib/claims.ts upgradeability), so it can
+  // never contradict the custody section below it.
+  const pilot = page.getByTestId("pilot-status");
+  const pilotKind = await pilot.getAttribute("data-upgradeability");
+  expect(["upgradeable", "frozen", "unknown"]).toContain(pilotKind);
   for (const name of ["Who holds what", "What the program checks before it moves money", "What the protocol does not promise"]) {
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
   }
@@ -178,6 +182,21 @@ test("/trust: pilot status, custody, the checks and the limits; no request leave
   if (await authority.isVisible()) {
     await expect(authority).toHaveText(pins.upgradeAuthority);
     await expect(page.getByTestId("custody-authority")).toContainText("A 2-of-3 multisig is planned (task 3.46), not done.");
+  }
+  if (pilotKind === "upgradeable") {
+    await expect(pilot).toHaveText("Devnet pilot, unaudited, not frozen on purpose.");
+    await expect(authority).toBeVisible();
+  } else if (pilotKind === "frozen") {
+    await expect(pilot).toHaveText("Devnet pilot, unaudited, and frozen: the program can no longer be changed.");
+    await expect(page.getByTestId("custody-authority")).toContainText("the program is frozen");
+  } else {
+    await expect(pilot).toHaveText("Devnet pilot, unaudited. Whether it can still be upgraded is not known right now.");
+    // Unknown only when the read behind it failed or is stale, which the page says too.
+    const failureShown = page
+      .getByTestId("read-failure")
+      .or(page.locator('[data-testid="trust-read-stamp"][data-stale="true"]'))
+      .or(page.getByTestId("custody-authority").getByText(/^Not read:/));
+    await expect(failureShown.first()).toBeVisible();
   }
   await expect(page.getByRole("main")).toContainText("Double spending is bounded, not prevented.");
   await page.waitForLoadState("networkidle");

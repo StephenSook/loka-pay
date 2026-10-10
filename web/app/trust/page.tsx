@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { SandboxChip } from "@/components/chips";
 import { CARD, Fact, Mono, OutLink, PAGE, ReadFailure, ReadStamp, YesNo } from "@/components/judge-ui";
 import { readProgramFacts } from "@/lib/chain";
+import { upgradeability } from "@/lib/claims";
 import { MULTISIG_TASK } from "@/lib/facts";
 import { PINS } from "@/lib/pins";
 import { REPO_URL } from "@/lib/site";
@@ -60,6 +61,8 @@ const CHECKS: Array<{ title: string; body: string }> = [
 export default async function TrustPage() {
   await connection();
   const facts = await readProgramFacts();
+  // The heading follows the upgrade authority the custody section shows, never a fixed line.
+  const pilot = upgradeability(facts);
   const programData = facts.ok ? facts.data.programData : null;
   const vault = facts.ok ? facts.data.vault : null;
   const readStatus = facts.ok ? (
@@ -90,14 +93,10 @@ export default async function TrustPage() {
 
       <section aria-labelledby="pilot" className="flex min-w-0 gap-3 rounded-card border-3 border-warning-line bg-warning p-5 text-on-state">
         <div className="flex min-w-0 flex-col gap-2">
-          <h2 id="pilot" className="text-2xl" data-testid="pilot-status">
-            Devnet pilot, unaudited, not frozen on purpose.
+          <h2 id="pilot" className="text-2xl" data-testid="pilot-status" data-upgradeability={pilot.kind}>
+            {pilot.heading}
           </h2>
-          <p className="leading-relaxed">
-            Nobody outside the team has audited this program. It stays upgradeable so a fix can ship during the event:
-            freezing a Solana program cannot be undone. That also means whoever holds the upgrade authority can change
-            the program, so that key is shown below, read from the chain.
-          </p>
+          <p className="leading-relaxed">{pilot.body}</p>
         </div>
       </section>
 
