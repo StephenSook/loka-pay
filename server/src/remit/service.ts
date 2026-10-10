@@ -48,6 +48,8 @@ export class RegistrationService {
     } else token = await this.options.store.claim(job, now);
     if (!token) {
       const existing = await this.options.store.get(kind, request.keyHash);
+      if (kind === 'payer' && existing.plan.pool === 'public' && existing.plan.expiry < now
+        && existing.result && [200, 201].includes(existing.result.statusCode)) throw new HttpError(409, 'onboarding_already_claimed');
       return this.resolve(existing, false);
     }
     // A takeover keeps the original name, pool, policy and expiry. Renewal has a new plan and job id.

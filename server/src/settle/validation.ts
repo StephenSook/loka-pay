@@ -16,6 +16,7 @@ const messages: Record<string, string> = {
   unknown_allowance: 'No valid allowance account exists for this allowance id.',
   unknown_merchant: 'No valid merchant record exists for this payee key hash.',
   payer_mismatch: 'The supplied payer key does not match the allowance account.',
+  onboarding_already_claimed: 'This key already received its public onboarding allowance. Another claim is not allowed.',
   retry_not_available: 'No confirmed failed registration is eligible for the requested retry.',
   budget_exhausted: 'The selected wallet pool has reached its daily budget.',
   chain_unavailable: 'Chain data is unavailable. Nothing was signed; you may retry.',

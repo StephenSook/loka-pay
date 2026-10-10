@@ -41,7 +41,7 @@ export class RegistrationStore {
         attempt=NULL,result=NULL,recovery_used=false,explicit_retries=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.explicit_retries ELSE 0 END,claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at
       WHERE (registration_jobs.attempt IS NULL AND registration_jobs.result IS NULL
           AND COALESCE(registration_jobs.lease_expires_at,0)<=EXCLUDED.lease_expires_at-30)
-        OR (registration_jobs.kind='payer' AND registration_jobs.result->>'statusCode' IN ('200','201')
+        OR (registration_jobs.kind='payer' AND registration_jobs.plan->>'pool'='team' AND registration_jobs.result->>'statusCode' IN ('200','201')
           AND (registration_jobs.plan->>'expiry')::bigint < $6) RETURNING id`,
     [this.namespace, job.plan.kind, job.plan.keyHash, job.id, JSON.stringify(job.plan), now, token, this.clock?.() ?? null]);
     return result.rows.length === 1 ? token : null;

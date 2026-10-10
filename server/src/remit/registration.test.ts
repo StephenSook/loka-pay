@@ -226,8 +226,8 @@ test('taken random ids and proven confirmed collisions retry, uncertainty does n
   expect(f.allow).toHaveBeenCalledTimes(1);
 });
 
-test('renewal is allowed only after a completed allowance expires and receives a fresh id', async () => {
-  const f = await fixture(); const publicKey = key();
+test('team renewal is allowed only after a completed allowance expires and receives a fresh id', async () => {
+  const publicKey = key(); const f = await fixture([P.toHex(P.keyHash(P.base64urlDecode(publicKey)))]);
   const first = (await f.post('payers', { publicKey })).json();
   f.setNow(1800003600);
   const atExpiry = await f.post('payers', { publicKey }); expect(atExpiry.statusCode).toBe(200); expect(atExpiry.json()).toEqual(first);
@@ -426,6 +426,28 @@ test('an uncertain registration send cannot use retryOf to create another signat
   const pending = await f.service.submit('payer', { publicKey });
   expect((await f.service.submit('payer', { publicKey, retryOf: pending.body.signature })).statusCode).toBe(202);
   expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('public onboarding refuses a second funded claim after expiry and never spends team budget', async () => {
+  const f = await fixture(); const publicKey = key();
+  const first = await f.post('payers', { publicKey }); expect(first.statusCode).toBe(201);
+  expect((await f.post('payers', { publicKey })).statusCode).toBe(200);
+  f.setNow(1800003601);
+  const second = await f.post('payers', { publicKey });
+  expect(second.statusCode).toBe(409); expect(second.json().error).toBe('onboarding_already_claimed');
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.spent('team', '2027-01-15')).toBeNull();
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
+});
+
+test('the public pool cap holds under simultaneous onboarding and leaves team funds untouched', async () => {
+  const f = await fixture();
+  const results = await Promise.all(Array.from({ length: 5 }, () => f.post('payers', { publicKey: key() })));
+  expect(results.filter(r => r.statusCode === 201)).toHaveLength(2);
+  expect(results.filter(r => r.statusCode === 429)).toHaveLength(3);
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '210', funderLamports: '20', feeLamports: '20' });
+  expect(await f.store.spent('team', '2027-01-15')).toBeNull();
+  expect(f.chain.sign.mock.calls.every(([, plan]) => plan.pool === 'public')).toBe(true);
 });
 
 test('unsigned retry budget denial restores the repost signal without consuming its retry slot', async () => {
