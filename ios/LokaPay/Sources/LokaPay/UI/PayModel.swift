@@ -25,6 +25,31 @@ public struct SignedPayment: Equatable, Sendable {
     public var transportTexts: [String] { [allowanceText, noteText] }
 }
 
+/// Try to cheat (task 2.13), a sandbox demo of a double spend: this phone's last signed note
+/// signed AGAIN, with the same allowance, serial, amount, currency and expiry, for a different
+/// merchant. It is a genuine note, so merchant B accepts it offline; Solana refuses the reused
+/// serial on chain (SerialUsed), and that failed transaction is the evidence.
+public struct CheatNote: Equatable, Sendable {
+    /// The note this phone signed first. Its payment card stays as it was.
+    public let original: SignedNote
+    /// Merchant B, verified with the pinned server key and the deployment.
+    public let merchant: MerchantCertificate
+    /// The cheat note and its two codes (allowance first), shown like any note.
+    public let payment: SignedPayment
+
+    /// The banner over the cheat codes.
+    public var banner: String {
+        Self.banner(serial: payment.note.note.serial, allowanceId: payment.note.note.allowanceId,
+                    merchantName: merchant.displayName)
+    }
+
+    public static func banner(serial: UInt8, allowanceId: UInt64, merchantName: String) -> String {
+        // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
+        "Cheat note: serial " + String(serial) + " of allowance #" + String(allowanceId) + " signed again for "
+            + merchantName + ". Merchant B will accept it offline; Solana should refuse it. Sandbox only."
+    }
+}
+
 /// The Pay screen (tasks 3.71, 3.70, 2.1 package side). Order of work: scan and verify the merchant
 /// certificate, check the amount against the verified allowance, durably reserve a serial, sign
 /// (the Secure Enclave signer shows Face ID or the passcode), check the signed note with the same
@@ -52,6 +77,20 @@ public final class PayModel {
         case note = 1
     }
 
+    /// The Try to cheat control's own steps. They sit under the payment card and never change
+    /// `phase`, `payment` or `receipt`, so the original payment is shown exactly as before.
+    public enum CheatStep: Equatable, Sendable {
+        case off
+        /// Scanning merchant B's code.
+        case scanMerchant
+        /// Merchant B verified; waiting for the owner to sign.
+        case confirm
+        /// Waiting for the signer (Face ID or passcode on a phone).
+        case signing
+        /// The cheat note is signed: show its two codes.
+        case showNote
+    }
+
     public private(set) var phase: Phase = .unavailable
     public private(set) var allowance: PayerAllowance?
     public private(set) var merchant: MerchantCertificate?
@@ -62,6 +101,17 @@ public final class PayModel {
     /// Serials reserved for this allowance on this phone (from SerialReservations).
     public private(set) var notesSigned: Int?
     public var amountText = ""
+
+    public private(set) var cheatStep: CheatStep = .off
+    /// The note the cheat signs again: the payment on screen when Try to cheat was pressed.
+    public private(set) var cheatOriginal: SignedNote?
+    /// Merchant B, once its certificate verified.
+    public private(set) var cheatMerchant: MerchantCertificate?
+    public private(set) var cheat: CheatNote?
+    public private(set) var cheatCodeStep: CodeStep = .allowance
+    /// Counts signing attempts; each `signCheat` and each close of the control moves it on, so a
+    /// result from a superseded attempt is recognised and dropped.
+    @ObservationIgnored private var cheatAttempt: UInt64 = 0
 
     public let deployment: Deployment
     private let signer: (any PaymentSigner)?
@@ -254,7 +304,7 @@ public final class PayModel {
         guard phase == .showNote || phase == .receipt, let payment, let serverPublicKey else { return }
         switch ScanParser.parse(text, accepting: [.ack, .receipt]) {
         case .failure(let kind):
-            report(kind)
+            reportReceipt(kind)
         case .success(let decoded):
             do {
                 let bytes: Data
@@ -275,7 +325,7 @@ public final class PayModel {
                 issue = nil
                 phase = .receipt
             } catch {
-                report(Self.kind(of: error))
+                reportReceipt(Self.kind(of: error))
             }
         }
     }
@@ -287,6 +337,126 @@ public final class PayModel {
         phase = merchant == nil ? .scanMerchant : .enterAmount
     }
 
+    // MARK: - Try to cheat (task 2.13, sandbox demo)
+
+    /// True while this phone's signed note is on screen (its card or its receipt). The cheat signs
+    /// exactly that note again; the user never picks an allowance or a serial.
+    public var canTryToCheat: Bool {
+        (phase == .showNote || phase == .receipt) && payment != nil && signer != nil
+    }
+
+    /// Starts the control for the payment on screen (again, for another merchant, after a cheat note).
+    public func startCheat() {
+        guard canTryToCheat, cheatStep != .signing, let payment else { return }
+        clearCheat()
+        cheatOriginal = payment.note
+        issue = nil
+        cheatStep = .scanMerchant
+    }
+
+    /// Closes the control. The original payment is untouched.
+    public func cancelCheat() {
+        guard cheatStep != .off, cheatStep != .signing else { return }
+        clearCheat()
+        issue = nil
+    }
+
+    /// Scanned or pasted `L1|P|1|C|...` for merchant B, checked exactly like merchant selection:
+    /// the pinned server key, the deployment binding and the allowance's earmarks. The merchant the
+    /// original note already pays is refused by name (re-signing to the same payee is no double spend).
+    public func acceptCheatMerchant(text: String) {
+        guard cheatStep == .scanMerchant || cheatStep == .confirm, let original = cheatOriginal,
+              let certificate = allowance?.certificate, let serverPublicKey else { return }
+        switch ScanParser.parse(text, accepting: [.merchant]) {
+        case .failure(let kind):
+            report(kind)
+        case .success(let decoded):
+            do {
+                let verified = try MerchantCertificate.verify(wire: decoded.payload, deployment: deployment,
+                                                              serverPublicKey: serverPublicKey)
+                guard verified.merchantKeyHash != original.note.payeeKeyHash else { return report(.cheatSameMerchant) }
+                guard certificate.allows(merchantKeyHash: verified.merchantKeyHash) else {
+                    return report(.payment(.notEarmarked))
+                }
+                cheatMerchant = verified
+                issue = nil
+                cheatStep = .confirm
+            } catch {
+                report(Self.kind(of: error))
+            }
+        }
+    }
+
+    /// Signs the cheat note: the original note with merchant B as payee and every other field
+    /// unchanged (allowance id, serial, amount, currency, expiry), through the same signer as a
+    /// payment (Face ID or the passcode on a phone). It never reads or writes the serial store:
+    /// this is the one deliberate reuse SerialReservations names.
+    public func signCheat() async {
+        guard cheatStep == .confirm, let original = cheatOriginal, payment?.note.noteId == original.noteId,
+              let merchantB = cheatMerchant, let allowance, let signer else { return }
+        let certificate = allowance.certificate
+        guard original.note.allowanceId == certificate.allowanceId, original.payerKeyHash == certificate.payerKeyHash else {
+            return report(.payment(.allowanceMismatch))
+        }
+        guard Int64(now().timeIntervalSince1970) <= original.note.expiry else { return report(.payment(.expired)) }
+        let body: NoteV1 = {
+            var copy = original.note
+            copy.payeeKeyHash = merchantB.merchantKeyHash
+            return copy
+        }()
+        let deployment = deployment
+        cheatAttempt &+= 1
+        let attempt = cheatAttempt
+        issue = nil
+        cheatStep = .signing
+        // True only while this attempt is the control's current one. New payment, Change merchant
+        // or a newer attempt supersedes it, and its late result (success or failure) is dropped,
+        // so it can never touch a newer attempt's state.
+        func isCurrent() -> Bool {
+            cheatAttempt == attempt && cheatStep == .signing && cheatOriginal?.noteId == original.noteId
+        }
+        let signed: SignedNote
+        do {
+            // Off the main actor: the Secure Enclave blocks while Face ID or the passcode sheet is up.
+            signed = try await Task.detached(priority: .userInitiated) { try SignedNote.sign(body, with: signer) }.value
+            let checked = try SignedNote.validate(wire: signed.wire, deployment: deployment)
+            guard checked.payerKeyHash == certificate.payerKeyHash else { throw PaymentError.payerMismatch }
+        } catch {
+            guard isCurrent() else { return }
+            cheatStep = .confirm
+            if let error = error as? PaymentError { return report(.payment(error)) }
+            return report(.signing("no serial was reserved; \(error.localizedDescription)"))
+        }
+        guard isCurrent() else { return }
+        cheat = CheatNote(original: original, merchant: merchantB,
+                          payment: SignedPayment(note: signed,
+                                                 allowanceText: PaymentTransport.encode(.allowance, allowance.wire),
+                                                 noteText: PaymentTransport.encode(.note, signed.wire)))
+        cheatCodeStep = .allowance
+        cheatStep = .showNote
+    }
+
+    public func showCheatCode(_ step: CodeStep) {
+        guard cheat != nil else { return }
+        cheatCodeStep = step
+    }
+
+    /// The text behind the cheat code on screen.
+    public var currentCheatCodeText: String? {
+        guard let cheat else { return nil }
+        return cheatCodeStep == .allowance ? cheat.payment.allowanceText : cheat.payment.noteText
+    }
+
+    private func clearCheat() {
+        // Supersedes any signing attempt still waiting for the signer.
+        cheatAttempt &+= 1
+        cheatStep = .off
+        cheatOriginal = nil
+        cheatMerchant = nil
+        cheat = nil
+        cheatCodeStep = .allowance
+    }
+
     // MARK: - Helpers
 
     private func resetPayment() {
@@ -295,6 +465,7 @@ public final class PayModel {
         amountText = ""
         issue = nil
         codeStep = .allowance
+        clearCheat()
     }
 
     private func refreshNotesSigned() {
@@ -304,6 +475,12 @@ public final class PayModel {
 
     private func report(_ kind: MoneyIssueKind) {
         issue = MoneyIssue(kind, at: now())
+    }
+
+    /// A receipt or ack handed back that this phone refused. Its check failure is the receipt's,
+    /// not the payment's, so the banner names the receipt check and claims nothing about the chain.
+    private func reportReceipt(_ kind: MoneyIssueKind) {
+        issue = MoneyIssue(kind, at: now(), refusedBy: kind.refusedBy == nil ? nil : .receiptCheck)
     }
 
     static func kind(of error: Error) -> MoneyIssueKind {
@@ -317,7 +494,9 @@ extension PayModel {
     /// PREVIEW ONLY: places a model built from test vectors into one state for the Xcode canvas.
     static func preview(_ phase: Phase, merchant: MerchantCertificate? = nil, payment: SignedPayment? = nil,
                         receipt: VerifiedReceipt? = nil, issue: MoneyIssueKind? = nil, amountText: String = "",
-                        codeStep: CodeStep = .allowance, serverKey: Data? = PreviewFixtures.serverKey) -> PayModel {
+                        codeStep: CodeStep = .allowance, serverKey: Data? = PreviewFixtures.serverKey,
+                        cheatStep: CheatStep = .off, cheatMerchant: MerchantCertificate? = nil,
+                        cheat: CheatNote? = nil) -> PayModel {
         let model = PayModel(allowanceWire: PreviewFixtures.allowanceWire, signer: PreviewFixtures.payerSigner,
                              serials: SerialReservations(url: PreviewFixtures.scratchURL("preview-serials.json")),
                              deployment: PreviewFixtures.deployment, serverPublicKey: serverKey,
@@ -329,6 +508,10 @@ extension PayModel {
         model.receipt = receipt
         model.amountText = amountText
         model.codeStep = codeStep
+        model.cheatStep = cheatStep
+        model.cheatOriginal = cheatStep == .off ? nil : payment?.note
+        model.cheatMerchant = cheatMerchant ?? cheat?.merchant
+        model.cheat = cheat
         model.issue = issue.map { MoneyIssue($0, at: PreviewFixtures.now) }
         return model
     }

@@ -245,7 +245,9 @@ public struct ReceiveView: View {
 
     @ViewBuilder private var settledSection: some View {
         if let settlement = model.settlement {
-            MoneyStatusChip(settlement.status, large: true)
+            // "Failed (already spent)" only from the signed CONF's SerialUsed code (ReceiptFacts).
+            MoneyStatusChip(settlement.status, large: true,
+                            detail: settlement.facts(clusterId: model.deployment.clusterId).statusDetail)
             ReceiptCard(receipt: settlement.receipt, merchant: model.merchant, clusterId: model.deployment.clusterId,
                         receivedWithZeroBars: model.payment?.receivedWithZeroBars ?? false)
             VStack(alignment: .leading, spacing: 12) {
@@ -257,7 +259,7 @@ public struct ReceiveView: View {
                     Text("The server had already decided this note (not signed).")
                         .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
                 }
-                PaymentQRView(text: settlement.receiptText, caption: "Settled receipt for the payer")
+                PaymentQRView(text: settlement.receiptText, caption: settlement.receiptCaption)
                 inboxNotes
                 Button("Next payment") { model.nextPayment() }.buttonStyle(LokaButtonStyle())
             }
