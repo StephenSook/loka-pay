@@ -24,15 +24,28 @@ server/src/events/runs.ts and GET /api/stats?run=EXP-PAY-001. When a note has no
 CONF, its block time stands in and a check fails, so a human looks.
 
 What the chain cannot show: that the payer phone had zero bars, and tries that never reached
-the chain. Both come from the session's attempt log (experiments/EXP-PAY-001-protocol.md).
+the chain. Both come from the session's attempt log (experiments/EXP-PAY-001-protocol.md
+section 5), so counting is opt-in and the log is required (--attempt-log):
+
+  - only a redeem that matches a log row with airplane_mode y counts toward the headline;
+  - a log row matches by note id, or, when its note id is blank, by payer key hash (from
+    --phone LABEL=HASH) plus serial plus |log time - block time| <= 120 s;
+  - an in-window redeem that matches no row is listed under "not in the attempt log,
+    excluded" with its signature; a row with airplane_mode n is listed and excluded;
+  - a log row that matches no redeem is listed as "tried, never reached the chain".
+
+The headline denominator is the matched log rows with airplane_mode y (cheats excluded).
 
 Exit codes: 0 every check passed; 1 a fetch failed (nothing is written); 2 a check failed
-(the drafts are written with the failures listed first); 64 usage error.
+(the drafts are written with the failures listed first); 64 usage error, including a missing
+or malformed attempt log (nothing is written).
 """
 
 import argparse
+import csv
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 import re
@@ -58,6 +71,13 @@ USER_AGENT = "loka-pay-exp-pay-001/1"
 DEFAULT_RPC = "https://api.devnet.solana.com"
 DEFAULT_API = "https://api.zerobars.us"
 EXPLORER = "https://explorer.solana.com/tx/%s?cluster=devnet"
+MATCH_SECONDS = 120  # fallback match: |attempt-log time - block time| at most this
+LOG_REQUIRED = ("time", "payer_phone", "merchant_phone", "airplane_mode", "transport")
+LOG_TRANSPORTS = ("bt", "camera")
+
+
+class LogError(Exception):
+    """The attempt log is missing or does not have the protocol's shape. Nothing is written."""
 
 
 class FetchError(Exception):
@@ -363,6 +383,187 @@ def count_window(rows):
     }
 
 
+# ---------------------------------------------------------------- attempt log (counting is opt-in)
+
+def _cell(record, key):
+    value = record.get(key)
+    return "" if value is None else str(value).strip()
+
+
+def load_attempt_log(path, now):
+    """Read the session's attempt log (protocol section 5): a .csv with a header row, or a .json
+    list of row objects (or {"attempts": [...]}). One row per try. Required columns: time,
+    payer_phone, merchant_phone, airplane_mode (y or n), transport (bt or camera). Optional:
+    note_id (64 hex), serial (0 to 255), cheat (y or n). Other columns are ignored. Rows count
+    from 1, the CSV header is not a row. Returns (attempts, info); raises LogError on any cell it
+    cannot read exactly, so a typo refuses instead of silently dropping a try."""
+    if not path:
+        raise LogError("--attempt-log is required. Only payments in the session's attempt log with "
+                       "airplane_mode y count toward the headline (experiments/EXP-PAY-001-protocol.md "
+                       "section 5); without a log nothing can be counted, so nothing is written.")
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as error:
+        raise LogError("cannot read the attempt log %s: %s" % (path, error.strerror or error))
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise LogError("attempt log %s is not UTF-8 text" % path)
+    if path.lower().endswith(".json"):
+        try:
+            data = json.loads(text)
+        except ValueError as error:
+            raise LogError("attempt log %s is not valid JSON: %s" % (path, error))
+        if isinstance(data, dict):
+            data = data.get("attempts")
+        if not isinstance(data, list) or not all(isinstance(r, dict) for r in data):
+            raise LogError('attempt log %s: JSON must be a list of row objects or {"attempts": [...]}' % path)
+        records, fmt = [{str(k).strip().lower(): v for k, v in r.items()} for r in data], "json"
+    elif path.lower().endswith(".csv"):
+        reader = csv.DictReader(io.StringIO(text, newline=""))
+        header = [(h or "").strip().lower() for h in (reader.fieldnames or [])]
+        missing = [c for c in LOG_REQUIRED if c not in header]
+        if missing:
+            raise LogError("attempt log %s: the header has no %s column" % (path, ", ".join(missing)))
+        records, fmt = [{(k or "").strip().lower(): v for k, v in r.items()} for r in reader], "csv"
+    else:
+        raise LogError("attempt log %s: use a .csv or a .json file" % path)
+
+    attempts = []
+    for number, record in enumerate(records, 1):
+        if not any(_cell(record, k) for k in record):
+            continue  # a blank spreadsheet line
+        where = "attempt log %s row %d" % (path, number)
+        for column in LOG_REQUIRED:
+            if not _cell(record, column):
+                raise LogError("%s: %s is empty" % (where, column))
+        if _cell(record, "time").lower() == "now":
+            raise LogError("%s: time must be the try's own time, not 'now'" % where)
+        try:
+            when = parse_when(_cell(record, "time"), now)
+        except argparse.ArgumentTypeError as error:
+            raise LogError("%s: %s" % (where, error))
+        airplane = _cell(record, "airplane_mode").lower()
+        if airplane not in ("y", "n"):
+            raise LogError("%s: airplane_mode is %r; write y or n" % (where, _cell(record, "airplane_mode")))
+        transport = _cell(record, "transport").lower()
+        if transport not in LOG_TRANSPORTS:
+            raise LogError("%s: transport is %r; write bt or camera" % (where, _cell(record, "transport")))
+        note_id = _cell(record, "note_id").lower()
+        if note_id and not re.fullmatch(r"[0-9a-f]{64}", note_id):
+            raise LogError("%s: note_id %r is not 64 hex characters" % (where, note_id))
+        serial = _cell(record, "serial")
+        if serial and not (re.fullmatch(r"\d{1,3}", serial) and int(serial) <= 255):
+            raise LogError("%s: serial %r is not a whole number from 0 to 255" % (where, serial))
+        cheat = _cell(record, "cheat").lower()
+        if cheat not in ("", "y", "n"):
+            raise LogError("%s: cheat is %r; write y, n or leave it empty" % (where, cheat))
+        attempts.append({"row": number, "time": when, "time_et": et(when),
+                         "payer_phone": _cell(record, "payer_phone"), "merchant_phone": _cell(record, "merchant_phone"),
+                         "airplane_mode": airplane, "transport": transport, "note_id": note_id or None,
+                         "serial": int(serial) if serial else None, "cheat": cheat == "y"})
+    info = {"format": fmt, "sha256": hashlib.sha256(raw).hexdigest(), "rows": len(attempts)}
+    return attempts, info
+
+
+def parse_phones(values):
+    """--phone LABEL=HASH, repeatable: the payer key hash of each phone label used in the log."""
+    phones = {}
+    for value in values:
+        label, sep, digest = value.partition("=")
+        label, digest = label.strip(), digest.strip().lower()
+        if not sep or not label or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise argparse.ArgumentTypeError("--phone takes LABEL=<64-hex payer key hash>, got %r" % value)
+        if phones.get(label.casefold(), digest) != digest:
+            raise argparse.ArgumentTypeError("--phone %s is given two different payer key hashes" % label)
+        phones[label.casefold()] = digest
+    return phones
+
+
+def match_attempts(rows, attempts, phones, window_from, window_to):
+    """Attach each attempt-log row to the on-chain redeem it describes. Returns problems.
+
+    rows must be classified first. A row with a note id matches that note. A row without one
+    matches by payer key hash (phones[payer_phone]) plus serial plus |time - block time| <=
+    MATCH_SECONDS; when the payment and its cheat both fit (same payer and serial), the cheat
+    column picks one. Matched redeems get log_row, airplane_mode and transport. Every attempt
+    gets in_window (by its own time) and matched_note_id (None when nothing matched)."""
+    problems = []
+    by_note = {}
+    for row in rows:
+        by_note.setdefault(row["note_id"], []).append(row)
+    claimed = {}
+
+    def claim(attempt, note_id):
+        if note_id in claimed:
+            problems.append("attempt log: rows %d and %d both describe note %s; one try is one row"
+                            % (claimed[note_id]["row"], attempt["row"], note_id[:16]))
+            return
+        claimed[note_id] = attempt
+        attempt["matched_note_id"] = note_id
+
+    for attempt in attempts:
+        attempt["in_window"] = window_from <= attempt["time"] <= window_to
+        attempt["matched_note_id"] = None
+    for attempt in attempts:  # note ids first, so the fallback never takes a note a row named
+        if attempt["note_id"] and attempt["note_id"] in by_note:
+            claim(attempt, attempt["note_id"])
+    named = set(claimed)
+    for attempt in attempts:
+        if attempt["note_id"] or attempt["serial"] is None:
+            continue
+        payer = phones.get(attempt["payer_phone"].casefold())
+        if payer is None:
+            problems.append("attempt log row %d: payer phone %r has no --phone LABEL=HASH and the row has no "
+                            "note id, so it cannot be matched" % (attempt["row"], attempt["payer_phone"]))
+            continue
+        fits = {}
+        for row in rows:
+            if (row["payer_key_hash"] == payer and row["serial"] == attempt["serial"]
+                    and row["chain_block_time"] is not None and row["note_id"] not in named
+                    and abs(row["chain_block_time"] - attempt["time"]) <= MATCH_SECONDS):
+                fits.setdefault(row["note_id"], row)
+        if len(fits) > 1:
+            narrowed = {n: r for n, r in fits.items() if (r["class"] == "refused_cheat") == attempt["cheat"]}
+            if len(narrowed) != 1:
+                problems.append("attempt log row %d: %d notes fit payer phone %s serial %d within %d s; write the "
+                                "note id" % (attempt["row"], len(fits), attempt["payer_phone"], attempt["serial"],
+                                             MATCH_SECONDS))
+                continue
+            fits = narrowed
+        if fits:
+            claim(attempt, next(iter(fits)))
+    for note_id, attempt in claimed.items():
+        for row in by_note[note_id]:
+            row["log_row"] = attempt["row"]
+            row["airplane_mode"] = attempt["airplane_mode"]
+            row["transport"] = attempt["transport"]
+    return problems
+
+
+def headline_rows(rows):
+    """Fail closed: only redeems matched to an attempt-log row with airplane_mode y can count."""
+    return [r for r in rows if r.get("log_row") is not None and r.get("airplane_mode") == "y"]
+
+
+def log_counts(rows, attempts):
+    """What the attempt log kept out of the headline, so nothing leaves it unlisted."""
+    in_window = [r for r in rows if r.get("in_window")]
+    return {
+        "denominator": "attempt-log rows with airplane_mode y matched to an on-chain payment in the window "
+                       "(cheats excluded)",
+        "not_in_attempt_log": len({r["note_id"] for r in in_window if r.get("log_row") is None}),
+        "logged_airplane_n": len({r["note_id"] for r in in_window
+                                  if r.get("log_row") is not None and r.get("airplane_mode") == "n"}),
+        "tried_never_reached_chain": sum(1 for a in attempts if a["matched_note_id"] is None and a["in_window"]
+                                         and a["airplane_mode"] == "y" and not a["cheat"]),
+        "attempt_log_rows": len(attempts),
+        "settled_in_window_logged_or_not": len({r["note_id"] for r in in_window
+                                                if not r["excluded"] and r["class"] == "settled"}),
+    }
+
+
 # ---------------------------------------------------------------- network
 
 class Rpc:
@@ -661,14 +862,19 @@ def run(args, now, log):
                 and row["error_code"] == SERIAL_USED):
             problems.append("ambiguous: %s: %s; raise --lookback-hours or classify it by hand"
                             % (row["signature"], row.get("reason")))
-    counts = count_window(rows)
+
+    # 5. Opt-in counting: only redeems matched to an attempt-log row with airplane_mode y reach the headline.
+    problems.extend(match_attempts(rows, args.attempts, args.phones, window_from, window_to))
+    counted = headline_rows(rows)
+    counts = count_window(counted)
+    counts.update(log_counts(rows, args.attempts))
     if counts["payments_reached_chain"] + counts["refused_cheats"] < args.min_payments:
-        problems.append("floor: %d redeem payments in the window, fewer than --min-payments %d (a scan that finds "
-                        "nothing is not a clean result)" % (counts["payments_reached_chain"] + counts["refused_cheats"],
-                                                            args.min_payments))
+        problems.append("floor: %d redeems in the window matched an attempt-log row with airplane_mode y, fewer than "
+                        "--min-payments %d (a scan that finds nothing is not a clean result)"
+                        % (counts["payments_reached_chain"] + counts["refused_cheats"], args.min_payments))
 
     per_allowance = {}
-    for row in rows:
+    for row in counted:
         if row.get("in_window") and not row["excluded"] and row["class"] == "settled":
             entry = per_allowance.setdefault(str(row["allowance_id"]), {
                 "payer_key_hash": row["payer_key_hash"], "settled": 0, "settled_units": 0, "serials": []})
@@ -676,7 +882,10 @@ def run(args, now, log):
             entry["settled_units"] += row["amount_units"]
             entry["serials"].append(row["serial"])
 
-    command = ["python3", "tools/measure/exp_pay_001.py", "--from", str(window_from), "--to", str(window_to)]
+    command = ["python3", "tools/measure/exp_pay_001.py", "--from", str(window_from), "--to", str(window_to),
+               "--attempt-log", args.attempt_log_shown]
+    for label, digest in sorted(args.phones.items()):
+        command += ["--phone", "%s=%s" % (label.upper(), digest)]
     for signature in args.exclude_payer_of_tx:
         command += ["--exclude-payer-of-tx", signature]
     for value in args.exclude_payer:
@@ -705,9 +914,17 @@ def run(args, now, log):
                  "block_time_range": [window_from, scan_to], "settle_margin_seconds": args.settle_margin,
                  "lookback_hours": args.lookback_hours, "rpc_calls": rpc.calls},
         "excluded_payers": [{"payer_key_hash": k, "why": v} for k, v in excluded.items()],
+        "attempt_log": dict(args.attempt_log_info, path=args.attempt_log_shown,
+                            phones={label.upper(): digest for label, digest in sorted(args.phones.items())},
+                            match_seconds=MATCH_SECONDS),
         "counts": counts,
         "per_allowance": per_allowance,
         "checks": {"passed": not problems, "problems": problems},
+        "not_in_attempt_log": [public_row(r) for r in rows if r.get("in_window") and r.get("log_row") is None],
+        "logged_airplane_n": [public_row(r) for r in rows
+                              if r.get("in_window") and r.get("log_row") is not None and r.get("airplane_mode") == "n"],
+        "tried_never_reached_chain": [a for a in args.attempts if a["matched_note_id"] is None],
+        "attempts": args.attempts,
         "payments": [public_row(r) for r in rows],
         "other_program_transactions": other,
         "decode_failures": decode_failures,
@@ -720,7 +937,8 @@ def public_row(row):
     keep = ["signature", "slot", "chain_block_time", "uploaded_at", "window_clock", "in_window", "fetched_for",
             "class", "excluded", "cheat_of", "duplicate_of", "reason", "note_id", "allowance_id", "serial",
             "amount_units", "payee_key_hash", "payer_key_hash", "expiry", "error_code", "error", "fee_lamports",
-            "api_http_status", "api_status", "settle_seconds", "conf_problems"]
+            "api_http_status", "api_status", "settle_seconds", "conf_problems", "log_row", "airplane_mode",
+            "transport"]
     out = {k: row[k] for k in keep if k in row}
     if "conf" in row:
         out["conf_verified"] = row["conf"]["verified"]
@@ -737,6 +955,35 @@ def usd(units):
 
 def fmt_seconds(value):
     return "n/a" if value is None else ("%g" % round(value, 3))
+
+
+def counted_label(r):
+    if not r.get("in_window"):
+        return "outside window"
+    if r["excluded"]:
+        return "excluded payer"
+    if r.get("log_row") is None:
+        return "not in attempt log"
+    if r.get("airplane_mode") != "y":
+        return "logged, airplane n"
+    if r["class"] == "refused_cheat":
+        return "cheat, not counted"
+    if r["class"] == "duplicate":
+        return "duplicate"
+    return "yes"
+
+
+def redeem_table(rows, full_signature=False):
+    out = ["| Time (ET, block) | Class | Allowance | Serial | Payer key hash | Note id | Signature |",
+           "|---|---|---|---|---|---|---|"]
+    for r in rows:
+        shown = r["signature"] if full_signature else r["signature"][:12]
+        out.append("| %s | %s | %d | %d | `%s` | `%s` | [%s](%s) |" % (
+            et(r.get("chain_block_time")), r["class"] + (" (excluded payer)" if r["excluded"] else ""),
+            r["allowance_id"], r["serial"], r["payer_key_hash"], r["note_id"][:16], shown, r["explorer"]))
+    if not rows:
+        out.append("| none | | | | | | |")
+    return out
 
 
 def render_markdown(report):
@@ -760,18 +1007,28 @@ def render_markdown(report):
               % (report["deployment"]["program_id"], report["deployment"]["cluster"], s["signatures_listed"],
                  "yes" if s["listing_reached_before_window"] or s["listing_complete"] else "NO"),
               "", "## Counts", "",
+              "Counting is opt-in: a redeem counts only when it matches a row of the attempt log with "
+              "airplane_mode y (by note id, or by payer key hash plus serial plus block time within %d s of the "
+              "row's time)." % report["attempt_log"]["match_seconds"], "",
               "| What | n |", "|---|---|",
-              "| Payments that reached Solana (chain part of the headline denominator) | %d |" % c["payments_reached_chain"],
+              "| Matched attempt-log rows with airplane_mode y that reached Solana (headline denominator) | %d |"
+              % c["payments_reached_chain"],
               "| Settled on Solana (headline numerator) | %d |" % c["payments_settled"],
               "| Failed on chain for another reason | %d |" % c["payments_failed_other"],
               "| Refused cheats, SerialUsed 6011 (excluded from the denominator) | %d |" % c["refused_cheats"],
               "| Duplicate settles of an already settled note | %d |" % c["duplicates"],
+              "| In the window but not in the attempt log (excluded, listed below) | %d |" % c["not_in_attempt_log"],
+              "| In the attempt log with airplane_mode n (excluded, listed below) | %d |" % c["logged_airplane_n"],
+              "| Tried in the window with airplane_mode y, never reached the chain (cheats excluded) | %d |"
+              % c["tried_never_reached_chain"],
+              "| Settled in the window, logged or not (compare with `/api/stats` `paymentsSettled`) | %d |"
+              % c["settled_in_window_logged_or_not"],
               "",
-              "Draft headline from the chain alone: **%d of %d payments that reached Solana settled.** Before this "
-              "becomes `zero_bar_payments_settled` / `zero_bar_payments_tried`, add every try from the attempt log "
-              "that never reached the chain to the denominator, and confirm from the log that each counted payment "
-              "was made with zero bars (UNVERIFIED here: the chain cannot see a phone's signal)."
-              % (c["payments_settled"], c["payments_reached_chain"]),
+              "Draft headline: **%d of %d settled.** Denominator: %d %s. `zero_bar_payments_tried` adds the %d "
+              "tries that never reached the chain (protocol section 8). Zero bars rests on the log's airplane_mode "
+              "column (UNVERIFIED here: the chain cannot see a phone's signal)."
+              % (c["payments_settled"], c["payments_reached_chain"], c["payments_reached_chain"], c["denominator"],
+                 c["tried_never_reached_chain"]),
               "", "## Settle seconds", "",
               "Block time minus uploaded at, both read from the server-signed CONF (chain clock minus server clock, "
               "1-second resolution; Solana block time is the cluster's stake-weighted estimate). Percentiles "
@@ -789,19 +1046,42 @@ def render_markdown(report):
                          a["settled_units"], usd(a["settled_units"]), ", ".join(str(x) for x in sorted(a["serials"]))))
     else:
         lines.append("None settled in the window.")
+    lines += ["", "## Not in the attempt log, excluded", "",
+              "In the window and matched by no attempt-log row (a Wi-Fi test, a rehearsal, a phone's first payment). "
+              "None of these count. To find a phone's payer key hash for `--phone`, match the allowance here with "
+              "\"Allowance #\" on that phone's Pay screen.", ""]
+    lines += redeem_table(report["not_in_attempt_log"], full_signature=True)
+    lines += ["", "## In the attempt log with airplane_mode n, excluded from the headline", ""]
+    lines += redeem_table(report["logged_airplane_n"], full_signature=True)
+    lines += ["", "## Tried, never reached the chain", "",
+              "Attempt-log rows that matched no redeem in the scan. In-window rows with airplane_mode y that are not "
+              "cheats go into `zero_bar_payments_tried`.", "",
+              "| Log row | Time (ET, log) | In window | Payer | Merchant | Airplane mode | Transport | Serial | Cheat "
+              "| Note id |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for a in report["tried_never_reached_chain"]:
+        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            a["row"], a["time_et"], "yes" if a["in_window"] else "no", a["payer_phone"], a["merchant_phone"],
+            a["airplane_mode"], a["transport"], "" if a["serial"] is None else a["serial"],
+            "y" if a["cheat"] else "n", "`%s`" % a["note_id"][:16] if a["note_id"] else ""))
+    if not report["tried_never_reached_chain"]:
+        lines.append("| none | | | | | | | | | |")
+    log_info = report["attempt_log"]
+    lines += ["", "## Attempt log", "",
+              "- File: `%s` (%s, %d rows, sha256 `%s`)." % (log_info["path"], log_info["format"], log_info["rows"],
+                                                            log_info["sha256"]),
+              "- Phones (`--phone`): %s." % (", ".join("%s = `%s`" % (k, v) for k, v in log_info["phones"].items())
+                                             or "none given; rows match by note id only")]
     lines += ["", "## Every redeem in the scan", "",
-              "| Time (ET, block) | Class | Counted | Allowance | Serial | Amount (units) | Settle s | Note id | Transaction |",
-              "|---|---|---|---|---|---|---|---|---|"]
+              "| Time (ET, block) | Class | Counted | Log row | Allowance | Serial | Amount (units) | Settle s | Note id "
+              "| Transaction |", "|---|---|---|---|---|---|---|---|---|---|"]
     for r in report["payments"]:
-        counted = "yes" if r.get("in_window") and not r["excluded"] and r["class"] in ("settled", "failed_other") else (
-            "excluded payer" if r["excluded"] else "cheat, not counted" if r["class"] == "refused_cheat" else
-            "duplicate" if r["class"] == "duplicate" else "outside window")
         label = r["class"] + (" (of %s)" % r["cheat_of"][:8] if r.get("cheat_of") else "")
-        lines.append("| %s | %s | %s | %d | %d | %d | %s | `%s` | [%s](%s) |" % (
-            et(r.get("chain_block_time")), label, counted, r["allowance_id"], r["serial"], r["amount_units"],
-            fmt_seconds(r.get("settle_seconds")), r["note_id"][:16], r["signature"][:12], r["explorer"]))
+        lines.append("| %s | %s | %s | %s | %d | %d | %d | %s | `%s` | [%s](%s) |" % (
+            et(r.get("chain_block_time")), label, counted_label(r), r.get("log_row") or "", r["allowance_id"],
+            r["serial"], r["amount_units"], fmt_seconds(r.get("settle_seconds")), r["note_id"][:16],
+            r["signature"][:12], r["explorer"]))
     if not report["payments"]:
-        lines.append("| none | | | | | | | | |")
+        lines.append("| none | | | | | | | | | |")
     lines += ["", "## Excluded payers", ""]
     lines.extend("- `%s`: %s" % (e["payer_key_hash"], e["why"]) for e in report["excluded_payers"])
     lines += ["", "## Other program transactions in the scan (not payments)", ""]
@@ -812,9 +1092,10 @@ def render_markdown(report):
     else:
         lines.append("None.")
     lines += ["", "## Not checked by this script (UNVERIFIED here)", "",
-              "- Zero bars on the payer phone at signing time (airplane mode): from the attempt log and recordings.",
-              "- Tries that never reached the chain (a scan that failed, a phone that crashed): from the attempt log.",
-              "- Which phone and person made each payment: the chain shows key hashes, not devices.",
+              "- Zero bars on the payer phone at signing time: the script trusts the attempt log's airplane_mode "
+              "column; recordings and status-bar photos are the evidence for it.",
+              "- That the attempt log lists every try: a try nobody wrote down is in neither list.",
+              "- Which person made each payment: the chain shows key hashes, and `--phone` maps them to labels.",
               "- Canary, ci and load_test rows: `/api/stats` drops them by source; this script drops payers by key "
               "hash, so pass any test payer with `--exclude-payer` or `--exclude-payer-of-tx`.",
               "", "## Recompute", "", "```", report["recompute"], "```", "",
@@ -832,6 +1113,12 @@ def main(argv, now=None, log=None):
                     help="window start: unix seconds or ISO 8601 (no offset means US Eastern)")
     ap.add_argument("--to", dest="window_to", default="now", type=lambda t: parse_when(t, now),
                     help="window end: unix seconds, ISO 8601 or 'now' (default)")
+    ap.add_argument("--attempt-log", default=None,
+                    help="REQUIRED: the session's attempt log, .csv or .json, one row per try (protocol section 5); "
+                         "only redeems matching a row with airplane_mode y count")
+    ap.add_argument("--phone", action="append", default=[],
+                    help="LABEL=<64-hex payer key hash> for a payer phone label in the log (needed to match rows "
+                         "that have no note id)")
     ap.add_argument("--exclude-payer", action="append", default=[], help="payer key hash (64 hex) to leave out")
     ap.add_argument("--exclude-payer-of-tx", action="append", default=[],
                     help="leave out the payer of this redeem transaction (derived by decoding it)")
@@ -842,7 +1129,9 @@ def main(argv, now=None, log=None):
                     help="also read transactions this many seconds after --to (an upload before the end settles after it)")
     ap.add_argument("--lookback-hours", type=float, default=48.0,
                     help="how far before --from to look for the settled original of a refused cheat")
-    ap.add_argument("--min-payments", type=int, default=1, help="fail unless at least this many redeems are in the window")
+    ap.add_argument("--min-payments", type=int, default=1,
+                    help="fail unless at least this many redeems in the window match an attempt-log row with "
+                         "airplane_mode y")
     ap.add_argument("--max-pages", type=int, default=20)
     ap.add_argument("--cache", default=None, help="directory to cache finalized transactions in (optional)")
     ap.add_argument("--json-out", default=os.path.join(REPO, "experiments", "EXP-PAY-001.draft.json"))
@@ -854,6 +1143,20 @@ def main(argv, now=None, log=None):
     if args.window_to <= args.window_from:
         log("exp_pay_001: --to must be after --from")
         return 64
+    # The attempt log is read before any network call: no log, or a log it cannot read, writes nothing.
+    try:
+        args.attempts, args.attempt_log_info = load_attempt_log(args.attempt_log, now)
+        args.phones = parse_phones(args.phone)
+    except LogError as error:
+        log("exp_pay_001: REFUSED, nothing written: %s" % error)
+        return 64
+    except argparse.ArgumentTypeError as error:
+        log("exp_pay_001: %s" % error)
+        return 64
+    log_path = os.path.abspath(args.attempt_log)
+    # A path outside the repo can hold a home directory; the recompute command prints it as a placeholder.
+    args.attempt_log_shown = (os.path.relpath(log_path, REPO) if log_path.startswith(REPO + os.sep)
+                              else "<your attempt log>")
     try:
         report = run(args, now, log)
     except FetchError as error:
@@ -872,9 +1175,13 @@ def main(argv, now=None, log=None):
         fh.write(render_markdown(report))
     c = report["counts"]
     print("EXP-PAY-001 window %s to %s" % (report["window"]["from_et"], report["window"]["to_et"]))
+    print("headline: %d of %d settled (denominator: %d %s)"
+          % (c["payments_settled"], c["payments_reached_chain"], c["payments_reached_chain"], c["denominator"]))
     print("reached chain %d, settled %d, failed other %d, refused cheats %d, duplicates %d"
           % (c["payments_reached_chain"], c["payments_settled"], c["payments_failed_other"], c["refused_cheats"],
              c["duplicates"]))
+    print("not in the attempt log, excluded %d; logged with airplane_mode n, excluded %d; tried, never reached "
+          "the chain %d" % (c["not_in_attempt_log"], c["logged_airplane_n"], c["tried_never_reached_chain"]))
     print("settle seconds: median %s, p95 %s, n %d" % (fmt_seconds(c["settle_seconds"]["median"]),
                                                       fmt_seconds(c["settle_seconds"]["p95"]), c["settle_seconds"]["n"]))
     shown = [os.path.relpath(p, REPO) if os.path.abspath(p).startswith(REPO + os.sep) else p

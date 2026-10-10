@@ -9,6 +9,7 @@ Run: python3 -m unittest tools/measure/test_exp_pay_001.py -v
 
 import contextlib
 import copy
+import csv
 import datetime as dt
 import io
 import json
@@ -45,6 +46,32 @@ def redeem(signature):
     rows = exp.extract_redeems(copy.deepcopy(FIX["transactions"][signature]), PROGRAM)
     assert len(rows) == 1, rows
     return rows[0]
+
+
+LOG_COLUMNS = ["time", "payer_phone", "merchant_phone", "airplane_mode", "transport", "note_id", "serial", "cheat"]
+
+
+def log_row(signature, airplane="y", by_note_id=True, shift=0, cheat=None):
+    """One attempt-log row for a fixture redeem. Its time is the block time (plus shift) written in ET,
+    as a person reads it off the merchant phone. Phone B paid both iPhone fixtures (protocol section 2)."""
+    row = redeem(signature)
+    when = dt.datetime.fromtimestamp(FIX["transactions"][signature]["blockTime"] + shift, exp.ET)
+    return {"time": when.strftime("%Y-%m-%d %H:%M:%S"), "payer_phone": "B", "merchant_phone": "A",
+            "airplane_mode": airplane, "transport": "camera", "note_id": row["note_id"] if by_note_id else "",
+            "serial": "" if by_note_id else str(row["serial"]),
+            "cheat": cheat if cheat is not None else ("y" if signature == IPHONE_REFUSED else "n")}
+
+
+def write_log(rows, fmt="csv"):
+    path = os.path.join(tempfile.mkdtemp(), "attempts." + fmt)
+    with open(path, "w", newline="") as fh:
+        if fmt == "json":
+            json.dump(rows, fh)
+        else:
+            writer = csv.DictWriter(fh, fieldnames=LOG_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+    return path
 
 
 class Ed25519(unittest.TestCase):
@@ -251,7 +278,12 @@ class EndToEnd(unittest.TestCase):
             out.append({"signature": signature, "slot": tx["slot"], "blockTime": tx["blockTime"], "err": tx["meta"]["err"]})
         return sorted(out, key=lambda s: -s["slot"])
 
-    def run_main(self, argv, listing):
+    def run_main(self, argv, listing, attempts=None, fmt="csv"):
+        """attempts: attempt-log rows; by default both iPhone fixture payments, logged by note id with
+        airplane_mode y (the tool refuses to count without a log)."""
+        if attempts is None:
+            attempts = [log_row(IPHONE_SETTLED), log_row(IPHONE_REFUSED)]
+        argv = argv + ["--attempt-log", write_log(attempts, fmt)]
         notes = FIX["notes"]
         out = tempfile.mkdtemp()
         json_out, md_out = os.path.join(out, "draft.json"), os.path.join(out, "draft.md")
@@ -325,9 +357,110 @@ class EndToEnd(unittest.TestCase):
         with mock.patch.object(exp.Rpc, "signatures", boom), \
                 mock.patch.object(exp.Rpc, "transaction", lambda self, s: copy.deepcopy(FIX["transactions"][s])):
             code = exp.main(["--from", "1791663300", "--to", "1791668437", "--json-out", json_out,
-                             "--md-out", os.path.join(out, "draft.md")], now=1791668437, log=lambda m: None)
+                             "--md-out", os.path.join(out, "draft.md"),
+                             "--attempt-log", write_log([log_row(IPHONE_SETTLED)])], now=1791668437, log=lambda m: None)
         self.assertEqual(code, 1)
         self.assertFalse(os.path.exists(json_out))
+
+
+class AttemptLog(unittest.TestCase):
+    """Counting is opt-in: only redeems that match an attempt-log row with airplane_mode y count."""
+
+    PAIR = [IPHONE_SETTLED, IPHONE_REFUSED]
+    listing = EndToEnd.listing  # the same fixture harness, without running EndToEnd's tests twice
+    run_main = EndToEnd.run_main
+
+    def start(self):
+        return str(FIX["transactions"][IPHONE_SETTLED]["blockTime"] - 60)
+
+    def test_an_unlogged_payment_is_excluded_and_listed(self):
+        # The cheat is logged; the settled payment is not (a teammate's test, a rehearsal).
+        code, report, md = self.run_main(["--from", self.start()], self.listing(self.PAIR),
+                                         attempts=[log_row(IPHONE_REFUSED)])
+        self.assertEqual(code, 0, report and report["checks"])
+        c = report["counts"]
+        self.assertEqual((c["payments_reached_chain"], c["payments_settled"], c["refused_cheats"]), (0, 0, 1))
+        self.assertEqual(c["not_in_attempt_log"], 1)
+        self.assertEqual([p["signature"] for p in report["not_in_attempt_log"]], [IPHONE_SETTLED])
+        self.assertEqual(c["settled_in_window_logged_or_not"], 1)  # the server stat still sees it
+        section = md.split("## Not in the attempt log, excluded")[1].split("\n## ")[0]
+        self.assertIn(IPHONE_SETTLED, section)  # listed with its full signature, never dropped
+        self.assertNotIn(IPHONE_REFUSED, section)
+        self.assertEqual(report["per_allowance"], {})
+        self.assertIn("**0 of 0 settled.**", md)
+
+    def test_a_logged_airplane_payment_counts(self):
+        code, report, md = self.run_main(["--from", self.start()], self.listing(self.PAIR),
+                                         attempts=[log_row(IPHONE_SETTLED)])
+        self.assertEqual(code, 0, report and report["checks"])
+        c = report["counts"]
+        self.assertEqual((c["payments_reached_chain"], c["payments_settled"]), (1, 1))
+        self.assertEqual(c["settle_seconds"]["n"], 1)
+        self.assertEqual([p["signature"] for p in report["not_in_attempt_log"]], [IPHONE_REFUSED])
+        self.assertIn("matched to an on-chain payment", c["denominator"])
+        self.assertIn("**1 of 1 settled.** Denominator: 1 attempt-log rows with airplane_mode y", md)
+        self.assertEqual(report["tried_never_reached_chain"], [])
+        settled = next(p for p in report["payments"] if p["signature"] == IPHONE_SETTLED)
+        self.assertEqual((settled["log_row"], settled["airplane_mode"], settled["transport"]), (1, "y", "camera"))
+
+    def test_a_row_without_a_note_id_matches_by_payer_serial_and_time(self):
+        phone = "B=" + redeem(IPHONE_SETTLED)["payer_key_hash"]
+        for shift, matched in ((exp.MATCH_SECONDS, True), (exp.MATCH_SECONDS + 1, False)):
+            with self.subTest(shift=shift):
+                code, report, _ = self.run_main(
+                    ["--from", self.start(), "--phone", phone], self.listing(self.PAIR),
+                    attempts=[log_row(IPHONE_SETTLED, by_note_id=False, shift=-shift), log_row(IPHONE_REFUSED)])
+                self.assertEqual(report["counts"]["payments_settled"], 1 if matched else 0)
+                self.assertEqual(len(report["tried_never_reached_chain"]), 0 if matched else 1)
+                self.assertEqual(code, 0, report["checks"])
+                self.assertIn("--phone " + phone, report["recompute"])
+
+    def test_a_logged_wifi_payment_is_excluded_from_the_headline(self):
+        code, report, md = self.run_main(["--from", self.start()], self.listing(self.PAIR),
+                                         attempts=[log_row(IPHONE_SETTLED, airplane="n"), log_row(IPHONE_REFUSED)],
+                                         fmt="json")
+        self.assertEqual(code, 0, report and report["checks"])
+        c = report["counts"]
+        self.assertEqual((c["payments_reached_chain"], c["payments_settled"], c["refused_cheats"]), (0, 0, 1))
+        self.assertEqual(c["logged_airplane_n"], 1)
+        self.assertEqual(c["not_in_attempt_log"], 0)
+        self.assertEqual([p["signature"] for p in report["logged_airplane_n"]], [IPHONE_SETTLED])
+        self.assertIn(IPHONE_SETTLED, md.split("## In the attempt log with airplane_mode n")[1].split("\n## ")[0])
+
+    def test_a_logged_try_with_no_chain_match_is_listed_as_never_reached(self):
+        lost = log_row(IPHONE_SETTLED)
+        lost["note_id"] = "ab" * 32  # a note that never reached Solana
+        code, report, md = self.run_main(["--from", self.start()], self.listing(self.PAIR),
+                                         attempts=[lost, log_row(IPHONE_REFUSED)])
+        self.assertEqual(code, 0, report and report["checks"])
+        self.assertEqual([a["row"] for a in report["tried_never_reached_chain"]], [1])
+        self.assertEqual(report["counts"]["tried_never_reached_chain"], 1)
+        self.assertEqual(report["counts"]["payments_settled"], 0)
+        self.assertIn("`abababababababab`", md.split("## Tried, never reached the chain")[1].split("\n## ")[0])
+
+    def test_running_without_a_log_refuses(self):
+        out = tempfile.mkdtemp()
+        json_out, md_out = os.path.join(out, "draft.json"), os.path.join(out, "draft.md")
+        said, listing = [], self.listing(self.PAIR)
+        # The network is faked with the fixtures, so a regression that counts without a log exits 0 here.
+        with mock.patch.object(exp.Rpc, "signatures", lambda rpc, address, before=None, limit=1000: listing), \
+                mock.patch.object(exp.Rpc, "transaction", lambda rpc, s: copy.deepcopy(FIX["transactions"][s])), \
+                mock.patch.object(exp, "fetch_note", lambda api, note_id, log: {
+                    "http_status": 200, "body": FIX["notes"].get(note_id)}):
+            code = exp.main(["--from", self.start(), "--json-out", json_out, "--md-out", md_out, "--rpc-delay", "0"],
+                            now=FIX["transactions"][IPHONE_REFUSED]["blockTime"] + 60, log=said.append)
+        self.assertEqual(code, 64)
+        self.assertFalse(os.path.exists(json_out) or os.path.exists(md_out))
+        self.assertTrue(any("--attempt-log is required" in m for m in said), said)
+
+    def test_a_malformed_log_refuses(self):
+        bad = log_row(IPHONE_SETTLED)
+        bad["airplane_mode"] = "maybe"
+        with self.assertRaises(exp.LogError) as caught:
+            exp.load_attempt_log(write_log([bad]), 0)
+        self.assertIn("write y or n", str(caught.exception))
+        code, report, _ = self.run_main(["--from", self.start()], self.listing(self.PAIR), attempts=[bad])
+        self.assertEqual((code, report), (64, None))
 
 
 if __name__ == "__main__":
