@@ -167,9 +167,11 @@ struct TryToCheatMerchantTests {
                                 body: APIFixtures.json(["error": "rate_limited", "message": "slow down"]))
         let inFlight = StubReply(status: 202, body: APIFixtures.json(["noteId": cheat.noteId.hex, "status": "pending",
                                                                      "signature": NSNull(), "retryAfter": 2]))
-        let earlier: [(String, StubReply)] = [("answer lost", StubReply(failure: URLError(.timedOut))), ("in flight", inFlight)]
+        // In flight: the upload and every poll of the first Settle's 20 s wait answer 202 (2.22).
+        let earlier: [(String, [StubReply])] = [("answer lost", [StubReply(failure: URLError(.timedOut))]),
+                                                ("in flight", Array(repeating: inFlight, count: 6))]
         for (name, first) in earlier {
-            let (model, ledger) = await merchantBModel([first, limited])
+            let (model, ledger) = await merchantBModel(first + [limited])
             await model.accept(text: PaymentTransport.encode(.note, cheat.wire))
             await model.settle()
             #expect(model.offersCheckAgain, "\(name)")

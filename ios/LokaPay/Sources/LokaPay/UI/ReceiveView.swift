@@ -55,7 +55,11 @@ public struct ReceiveView: View {
         }
         // Bluetooth codes are taken only while this screen is shown; others wait in the inbox.
         .onAppear { model.startInbox() }
-        .onDisappear { model.stopInbox() }
+        .onDisappear {
+            model.stopInbox()
+            // A Settle wait stops with the screen: nothing polls for a screen nobody sees.
+            model.stopWaiting()
+        }
         .announcesIssue(model.issue)
     }
 
@@ -227,6 +231,9 @@ public struct ReceiveView: View {
             .buttonStyle(LokaButtonStyle())
             .disabled(payment.ack == nil || model.isWorking)
             if model.isWorking, payment.ack != nil { ProgressView() }
+            if model.isWaitingForChain {
+                Text(ReceiveModel.settleWaitText).font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+            }
             if model.offersCheckAgain {
                 Text(model.settlementOutcomeUnknown ? ReceiveModel.outcomeUnknownText
                                                     : "The server has the note; the chain has not decided yet.")
