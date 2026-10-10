@@ -38,7 +38,9 @@ Sandbox tokens only: devnet USDC has no value. Moving real dollars would require
 - **The note** is a fixed 141-byte structure signed by a P-256 key in the iPhone's Secure Enclave, behind Face ID or the device passcode. Byte layouts and validation: `protocol/PAYMENT-V1.md`; the HTTP contract: `protocol/API-V1.md`; test vectors: `protocol/vectors/payment-v1.json`.
 - **Settlement:** Solana's secp256r1 precompile verifies the phone's signature on-chain, so neither a relaying phone nor our server can forge or redirect a payment. The program checks the serial, cap, expiry and earmark, then credits the merchant.
 - **Offline risk is bounded and visible:** a merchant who accepts offline carries a limited, attributable risk, capped by the allowance's offline limit. A reused serial fails on-chain.
-- **Architecture diagram:** TODO(3.11).
+- **Architecture diagram:** below; source in `docs/payments-architecture.html`.
+
+![How a LOKA Pay payment moves: payer phone to merchant phone offline, merchant to the settlement API online, then one Solana transaction checked by the secp256r1 precompile and the loka_vault program](docs/payments-architecture.png)
 
 Trust assumptions and the threat model, in plain words: https://zerobars.us/trust (TODO(3.2)).
 

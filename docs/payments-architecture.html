@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LOKA Pay Architecture</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Source for docs/payments-architecture.png. Layout follows the
+         architecture-diagram template: nested zones, nodes, and an SVG
+         connection overlay drawn from the connections array below. */
+      :root {
+        --paper: #fbf8f3;
+        --ink: #102a43;
+        --muted: #44566c;
+        --card: #ffffff;
+        --offline: #1fa35b;
+        --online: #1f6fb5;
+        --chain: #b5651d;
+        --read: #6a6a6a;
+      }
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--paper);
+        color: var(--ink);
+        padding: 36px 44px 44px;
+      }
+      .head {
+        max-width: 1400px;
+        margin: 0 auto 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 24px;
+        flex-wrap: wrap;
+      }
+      .title {
+        font-family: "Bricolage Grotesque", system-ui, sans-serif;
+        font-weight: 800;
+        font-size: 30px;
+        letter-spacing: -0.03em;
+      }
+      .subtitle { font-size: 14px; color: var(--muted); margin-top: 4px; font-weight: 500; }
+      .legend { display: flex; gap: 20px; flex-wrap: wrap; justify-content: flex-end; }
+      .legend-item {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12.5px; font-weight: 600; color: var(--muted);
+      }
+      .legend-line { width: 38px; height: 0; border-top: 2.5px solid currentColor; }
+      .legend-line.dashed { border-top-style: dashed; }
+
+      .diagram { position: relative; width: 100%; max-width: 1400px; margin: 22px auto 0; }
+
+      .zone {
+        position: relative;
+        border: 2px dashed var(--zone-border);
+        border-radius: 14px;
+        padding: 34px 20px 20px;
+        background: var(--zone-bg);
+      }
+      .zone-label {
+        position: absolute;
+        top: -1px; left: 14px;
+        transform: translateY(-50%);
+        font-size: 11.5px; font-weight: 700;
+        color: var(--zone-border);
+        background: var(--paper);
+        padding: 1px 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .zone-content { display: grid; gap: 18px; align-items: start; }
+      .zone-depth-0 { --zone-border: #1f7a4a; --zone-bg: rgba(31, 163, 91, 0.05); }
+      .zone-depth-1 { --zone-border: #1f5f99; --zone-bg: rgba(31, 111, 181, 0.05); }
+      .zone-depth-2 { --zone-border: #9a5b1d; --zone-bg: rgba(181, 101, 29, 0.05); }
+      .zone-depth-3 { --zone-border: #5b4a9a; --zone-bg: rgba(91, 74, 154, 0.05); }
+
+      .node {
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+        padding: 12px 12px 12px;
+        background: var(--card);
+        border: 2px solid var(--ink);
+        border-radius: 14px;
+        box-shadow: 4px 4px 0 var(--ink);
+        min-width: 150px; max-width: 230px;
+        justify-self: center;
+      }
+      .node-icon {
+        width: 40px; height: 40px;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--ink);
+      }
+      .node-icon svg { width: 100%; height: 100%; }
+      .node-title {
+        font-family: "Bricolage Grotesque", system-ui, sans-serif;
+        font-weight: 800; font-size: 15px; letter-spacing: -0.01em;
+        text-align: center; line-height: 1.2;
+      }
+      .node-desc {
+        font-size: 11.5px; font-weight: 500; color: var(--muted);
+        text-align: center; line-height: 1.38;
+      }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10.5px; }
+      .tag {
+        display: inline-block; margin-top: 4px;
+        font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+        border: 1.5px solid var(--ink); border-radius: 999px; padding: 1px 8px;
+        background: #fff3d6;
+      }
+
+      .conn-overlay { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; z-index: 10; }
+      .conn-overlay path.conn { fill: none; stroke-width: 2.25; stroke-linejoin: round; }
+      .conn-overlay .conn-offline { stroke: var(--offline); }
+      .conn-overlay .conn-online  { stroke: var(--online); }
+      .conn-overlay .conn-chain   { stroke: var(--chain); stroke-dasharray: 7 4; }
+      .conn-overlay .conn-read    { stroke: var(--read); stroke-dasharray: 5 4; }
+      .conn-overlay text {
+        font-family: "Figtree", system-ui, sans-serif;
+        font-size: 11px; font-weight: 700; fill: var(--ink);
+        paint-order: stroke; stroke: var(--paper); stroke-width: 4px; stroke-linejoin: round;
+      }
+      .foot {
+        max-width: 1400px; margin: 26px auto 0;
+        font-size: 12px; color: var(--muted); font-weight: 500; line-height: 1.5;
+      }
+      .span-2 { grid-column: span 2; }
+      .facts {
+        align-self: stretch;
+        background: #fff8e6;
+        border: 2px solid var(--ink);
+        border-radius: 14px;
+        box-shadow: 4px 4px 0 var(--ink);
+        padding: 18px 22px;
+      }
+      .facts-title {
+        font-family: "Bricolage Grotesque", system-ui, sans-serif;
+        font-weight: 800; font-size: 17px; letter-spacing: -0.01em; margin-bottom: 8px;
+      }
+      .facts ul { list-style: none; display: grid; gap: 6px; }
+      .facts li { font-size: 13px; line-height: 1.4; font-weight: 500; }
+      .facts li b { font-weight: 700; }
+      .facts-foot { margin-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.45; font-weight: 500; }
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <div>
+        <div class="title">LOKA Pay: how a payment moves</div>
+        <div class="subtitle">Sandbox tokens only (devnet USDC has no value). Every signature is checked again by the next hop.</div>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-line" style="color: #1fa35b"></div>Offline: Bluetooth or camera QR</div>
+        <div class="legend-item"><div class="legend-line" style="color: #1f6fb5"></div>Online: HTTPS over cellular</div>
+        <div class="legend-item"><div class="legend-line dashed" style="color: #b5651d"></div>Solana transaction</div>
+        <div class="legend-item"><div class="legend-line dashed" style="color: #6a6a6a"></div>Reads the chain, no login</div>
+      </div>
+    </div>
+
+    <div class="diagram" id="diagram">
+      <div class="zone-content" style="grid-template-columns: 1.6fr 0.95fr 1.15fr; gap: 64px 104px; align-items: stretch">
+        <!-- Offline zone -->
+        <div class="zone zone-depth-0">
+          <span class="zone-label">Airplane mode, zero bars</span>
+          <div class="zone-content" style="grid-template-columns: 1fr 1fr; gap: 64px 104px">
+            <div class="node" data-node-id="payer-iphone">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M10.5 4.5h3"/><rect x="9.5" y="12" width="5" height="4" rx="0.8"/><path d="M10.5 12v-1.3a1.5 1.5 0 0 1 3 0V12"/></svg>
+              </div>
+              <span class="node-title">Payer iPhone</span>
+              <span class="node-desc">Secure Enclave P-256 key that never leaves the phone. Face ID or passcode for every signature. Signs the 141-byte note.</span>
+            </div>
+            <div class="node" data-node-id="merchant-iphone">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M10.5 4.5h3"/><path d="M9.3 13.2l1.9 1.9 3.6-3.8"/></svg>
+              </div>
+              <span class="node-title">Merchant iPhone</span>
+              <span class="node-desc">Checks the note offline in the spec's order, reserves it against the allowance's offline limit, shows "Received, pending (sandbox)".</span>
+            </div>
+            <div class="node" data-node-id="android-phone">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><circle cx="12" cy="19" r="0.6" fill="currentColor"/><path d="M12 9.5c-1.6 0-2.6 1.2-2.6 2.6v1.6h5.2v-1.6c0-1.4-1-2.6-2.6-2.6z"/></svg>
+              </div>
+              <span class="node-title">Android phone</span>
+              <span class="node-desc">Android Keystore P-256 key behind a fingerprint or face check. Same note, same on-chain check.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Server zone -->
+        <div class="zone zone-depth-1">
+          <span class="zone-label">Vultr VPS</span>
+          <div class="zone-content" style="grid-template-columns: 1fr">
+            <div class="node" data-node-id="settlement-api">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="6" rx="1.5"/><rect x="3.5" y="14.5" width="17" height="6" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+              </div>
+              <span class="node-title">Settlement API</span>
+              <span class="node-desc"><span class="mono">api.zerobars.us</span>. Pays the fee, builds the transaction, returns a confirmation signed with its Ed25519 key. A refusal is never signed and never cached.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chain zone -->
+        <div class="zone zone-depth-2">
+          <span class="zone-label">Solana devnet</span>
+          <div class="zone-content" style="grid-template-columns: 1fr; gap: 40px">
+            <div class="node" data-node-id="precompile">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l7.5 3v6c0 4.6-3.2 8.4-7.5 10-4.3-1.6-7.5-5.4-7.5-10v-6z"/><path d="M8.8 12l2.2 2.2 4.2-4.4"/></svg>
+              </div>
+              <span class="node-title">secp256r1 precompile</span>
+              <span class="node-desc">Solana's validators check the phone's P-256 signature over the exact note bytes. Low-S only.</span>
+            </div>
+            <div class="node" data-node-id="loka-vault">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2z"/><path d="M4 7.2l8 4.4 8-4.4M12 11.6v9.6"/></svg>
+              </div>
+              <span class="node-title">loka_vault program</span>
+              <span class="node-desc">Checks the allowance's cap, expiry, earmarks and a 256-bit serial bitmap. A reused serial fails with <span class="mono">SerialUsed</span>.</span>
+            </div>
+            <div class="node" data-node-id="vault-usdc">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6M5 12v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-6"/></svg>
+              </div>
+              <span class="node-title">Vault</span>
+              <span class="node-desc">One program-owned devnet USDC account. Allowances are locked here before anyone goes offline; merchants are credited from it.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Web zone, second row under the server and the chain -->
+        <div class="facts">
+          <div class="facts-title">What each hop checks</div>
+          <ul>
+            <li><b>Payer phone:</b> the owner's face or passcode before the key signs.</li>
+            <li><b>Merchant phone:</b> every signature and the allowance's offline limit, with no internet.</li>
+            <li><b>Settlement API:</b> the same checks again; it cannot forge or redirect a payment.</li>
+            <li><b>Solana:</b> the signature, the serial, the cap and the expiry, on chain.</li>
+          </ul>
+          <div class="facts-foot">The note is 141 bytes; on the wire it carries a 64-byte low-S signature and the 33-byte public key (238 bytes). Layouts: <span class="mono">protocol/PAYMENT-V1.md</span>. HTTP: <span class="mono">protocol/API-V1.md</span>. Addresses: <span class="mono">config/pins.json</span>.</div>
+        </div>
+        <div class="zone zone-depth-3 span-2">
+          <span class="zone-label">Vercel, zerobars.us</span>
+          <div class="zone-content" style="grid-template-columns: 1fr 1fr; gap: 40px">
+            <div class="node" data-node-id="verify-page">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19M5.5 6.3h.01M8 6.3h.01"/><path d="M8.8 14.2l2.1 2.1 4.3-4.4"/></svg>
+              </div>
+              <span class="node-title">/verify</span>
+              <span class="node-desc">Checks a receipt's signatures in the judge's own browser.</span>
+            </div>
+            <div class="node" data-node-id="judge-pages">
+              <div class="node-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19M5.5 6.3h.01M8 6.3h.01"/><path d="M6.5 16.5l3-3.5 2.5 2 5.5-5"/></svg>
+              </div>
+              <span class="node-title">/judge /live /proof /trust</span>
+              <span class="node-desc">Read program state, transactions and reserves straight from devnet. No login, no cookies.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <svg class="conn-overlay" id="connOverlay">
+        <defs>
+          <marker id="ah-offline" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 L2,4 Z" fill="#1fa35b" /></marker>
+          <marker id="ah-offline-rev" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M10,0 L0,4 L10,8 L8,4 Z" fill="#1fa35b" /></marker>
+          <marker id="ah-online" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 L2,4 Z" fill="#1f6fb5" /></marker>
+          <marker id="ah-online-rev" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M10,0 L0,4 L10,8 L8,4 Z" fill="#1f6fb5" /></marker>
+          <marker id="ah-chain" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 L2,4 Z" fill="#b5651d" /></marker>
+          <marker id="ah-read" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 L2,4 Z" fill="#6a6a6a" /></marker>
+        </defs>
+      </svg>
+
+      <script>
+        // type: offline | online | chain | read. direction: forward | bidi.
+        // labelAt: optional {dx, dy} nudge from the default label spot.
+        const connections = [
+          { from: "payer-iphone", to: "merchant-iphone", type: "offline", direction: "bidi", fromSide: "right", toSide: "left", route: "straight", label: "note, receipt" },
+          { from: "android-phone", to: "merchant-iphone", type: "offline", direction: "forward", fromSide: "right", toSide: "bottom", route: "elbow-up", label: "same wire" },
+          { from: "merchant-iphone", to: "settlement-api", type: "online", direction: "bidi", fromSide: "right", toSide: "left", route: "h", label: "POST /v1/notes" },
+          { from: "settlement-api", to: "precompile", type: "chain", direction: "forward", fromSide: "right", toSide: "left", route: "h", label: "1 transaction" },
+          { from: "precompile", to: "loka-vault", type: "chain", direction: "forward", fromSide: "bottom", toSide: "top", route: "straight" },
+          { from: "loka-vault", to: "vault-usdc", type: "chain", direction: "forward", fromSide: "bottom", toSide: "top", route: "straight" },
+          { from: "judge-pages", to: "vault-usdc", type: "read", direction: "forward", fromSide: "top", toSide: "bottom", route: "v", label: "reads devnet" },
+        ];
+
+        (function () {
+          const svg = document.getElementById("connOverlay");
+          const diagram = document.getElementById("diagram");
+          const M = 12;
+          function rect(el) {
+            const r = el.getBoundingClientRect(), d = diagram.getBoundingClientRect();
+            return { x: r.left - d.left, y: r.top - d.top, w: r.width, h: r.height, cx: r.left - d.left + r.width / 2, cy: r.top - d.top + r.height / 2 };
+          }
+          function side(r, s) {
+            if (s === "left") return { x: r.x - M, y: r.cy };
+            if (s === "right") return { x: r.x + r.w + M, y: r.cy };
+            if (s === "top") return { x: r.cx, y: r.y - M };
+            return { x: r.cx, y: r.y + r.h + M };
+          }
+          function render() {
+            svg.querySelectorAll(".conn, .conn-label").forEach((e) => e.remove());
+            const d = diagram.getBoundingClientRect();
+            svg.style.width = d.width + "px";
+            svg.style.height = d.height + "px";
+            svg.setAttribute("viewBox", `0 0 ${d.width} ${d.height}`);
+            connections.forEach((c) => {
+              const a = document.querySelector(`[data-node-id="${c.from}"]`);
+              const b = document.querySelector(`[data-node-id="${c.to}"]`);
+              if (!a || !b) return;
+              const fr = rect(a), tr = rect(b);
+              const p1 = side(fr, c.fromSide), p2 = side(tr, c.toSide);
+              let path, lx, ly;
+              if (c.route === "v") {
+                path = `M${p2.x},${p1.y} L${p2.x},${p2.y}`;
+                lx = p2.x + 10; ly = (p1.y + p2.y) / 2 + 4;
+              } else if (c.route === "h") {
+                path = `M${p1.x},${p1.y} L${p2.x},${p1.y}`;
+                lx = (p1.x + p2.x) / 2; ly = p1.y - 9;
+              } else if (c.route === "straight") {
+                path = `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
+                lx = (p1.x + p2.x) / 2; ly = Math.min(p1.y, p2.y) - 9;
+                if (c.labelSide === "right") { lx = p1.x + 10; ly = (p1.y + p2.y) / 2 + 4; }
+              } else if (c.route === "elbow-up") {
+                path = `M${p1.x},${p1.y} L${p2.x},${p1.y} L${p2.x},${p2.y}`;
+                lx = (p1.x + p2.x) / 2; ly = p1.y - 9;
+              } else if (c.route === "side-loop") {
+                const x = Math.max(p1.x, p2.x) + 26;
+                path = `M${p1.x},${p1.y} L${x},${p1.y} L${x},${p2.y} L${p2.x},${p2.y}`;
+                lx = x + 6; ly = (p1.y + p2.y) / 2;
+              } else {
+                const mx = (p1.x + p2.x) / 2;
+                path = `M${p1.x},${p1.y} L${mx},${p1.y} L${mx},${p2.y} L${p2.x},${p2.y}`;
+                lx = (p1.x + p2.x) / 2; ly = Math.min(p1.y, p2.y) - 9;
+              }
+              const el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              el.setAttribute("class", `conn conn-${c.type}`);
+              el.setAttribute("d", path);
+              el.setAttribute("marker-end", `url(#ah-${c.type})`);
+              if (c.direction === "bidi") el.setAttribute("marker-start", `url(#ah-${c.type}-rev)`);
+              svg.appendChild(el);
+              if (c.label) {
+                const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                t.setAttribute("class", "conn-label");
+                const nudge = c.labelAt || {};
+                t.setAttribute("x", lx + (nudge.dx || 0));
+                t.setAttribute("y", ly + (nudge.dy || 0));
+                t.setAttribute("text-anchor", c.route === "side-loop" || c.route === "v" ? "start" : "middle");
+                t.textContent = c.label;
+                svg.appendChild(t);
+              }
+            });
+          }
+          window.addEventListener("DOMContentLoaded", render);
+          window.addEventListener("resize", render);
+          if (document.fonts && document.fonts.ready) document.fonts.ready.then(render);
+        })();
+      </script>
+    </div>
+
+  </body>
+</html>
