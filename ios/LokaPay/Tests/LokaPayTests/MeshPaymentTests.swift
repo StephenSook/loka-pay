@@ -612,6 +612,31 @@ struct MeshPaymentTests {
         #expect(pay.receipt?.status == .settled)
     }
 
+    @Test("Pay takes returns only while shown: hidden, an ack waits in the inbox; shown again, it lands")
+    func payReturnsFollowVisibility() async throws {
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
+        let pay = payModel(meshSend: { _ in })
+        MeshReturns.follow(router.payInbox, model: pay, active: true)
+        pay.acceptMerchant(text: PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchant.keyHash)))
+        pay.amountText = "1.00"
+        await pay.pay()
+        let payment = try #require(pay.payment)
+
+        // The Offline corner opens: Pay lets go of the inbox, and the ack waits there.
+        MeshReturns.follow(router.payInbox, model: pay, active: false)
+        #expect(!router.payInbox.isAttached)
+        let ack = try ackText(payment.note)
+        router.receive(ack, from: "merchant-contact", fromContact: true, packetID: "y-1")
+        #expect(router.payInbox.held == [ack])
+        #expect(pay.phase == .showNote)
+
+        // Back on Pay: the held ack is checked and the payment shows it.
+        MeshReturns.follow(router.payInbox, model: pay, active: true)
+        #expect(router.payInbox.held.isEmpty)
+        #expect(pay.phase == .receipt)
+        #expect(pay.receipt?.note.noteId == payment.note.noteId)
+    }
+
     @Test("an ack for another note reaching Pay over Bluetooth is not this payment's and raises no error")
     func strayReturnIgnored() async throws {
         let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)

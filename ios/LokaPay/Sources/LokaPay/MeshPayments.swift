@@ -421,6 +421,14 @@ public enum MeshReturns {
         }
     }
 
+    /// Pay takes acks and receipts only while it is on screen: attached while `active`, detached
+    /// otherwise, so a return that arrives behind the Offline corner waits in the inbox (within its
+    /// capacity and age limit) instead of changing a hidden screen or being consumed unseen.
+    @MainActor
+    public static func follow(_ inbox: PaymentInbox, model: PayModel, active: Bool) {
+        if active { attach(inbox, to: model) } else { inbox.detach(model) }
+    }
+
     /// The merchant's replies that still need to go back over the mesh, in order: the ack once the
     /// note is on screen, then the receipt once the chain decided. `sent` holds the `replyKey`s of
     /// what already went. Keys include the payment's presentation, so the same verified ack goes

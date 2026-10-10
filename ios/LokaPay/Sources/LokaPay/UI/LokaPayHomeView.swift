@@ -138,8 +138,8 @@ public struct LokaPayHomeView: View {
         .background(LokaColor.paper.ignoresSafeArea())
         .onAppear {
             connectivity.start()
-            // Acks and receipts over Bluetooth reach the payment on screen whichever tab is shown.
-            if let meshReturns { MeshReturns.attach(meshReturns, to: payModel) }
+            // Acks and receipts over Bluetooth reach the payment on screen, on either tab, while shown.
+            if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
             sendDueReplies()
         }
         .onDisappear {
@@ -151,7 +151,10 @@ public struct LokaPayHomeView: View {
         // A reply that could not be queued is offered again when Receive is shown again and when a
         // local link or the radio comes back.
         .onChange(of: tab) { if tab == .receive { sendDueReplies() } }
-        .onChange(of: isActive) { if isActive { sendDueReplies() } }
+        .onChange(of: isActive) {
+            if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
+            if isActive { sendDueReplies() }
+        }
         .onChange(of: meshLinkReady) { if meshLinkReady == true { sendDueReplies() } }
         .onChange(of: bluetoothOn) { if bluetoothOn == true { sendDueReplies() } }
         .onChange(of: receiveModel.payment?.ackText) { sendDueReplies() }
