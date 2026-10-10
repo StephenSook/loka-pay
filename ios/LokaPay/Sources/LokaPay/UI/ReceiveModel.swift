@@ -133,21 +133,12 @@ public final class ReceiveModel {
     private let inbox: PaymentInbox?
     /// The verified wire of each certificate in `allowances`, kept with every note accepted against it.
     @ObservationIgnored private var allowanceWires: [UInt64: Data] = [:]
-    /// A Bluetooth text this screen took from the inbox and has not started checking yet.
-    private struct QueuedText {
-        let text: String
-        let arrivedAt: Date
-        /// The attachment (`inboxGeneration`) the text arrived under.
-        let generation: UInt64
-    }
-    /// Inbox texts waiting for the single consumer, oldest first. Together with the inbox's held
-    /// texts they never exceed `PaymentInbox.capacity`.
-    @ObservationIgnored private var inboxQueue: [QueuedText] = []
-    /// The one task that checks queued inbox texts, one after another, in arrival order.
+    /// The one task that checks the inbox's queued texts for this screen, one after another, in
+    /// arrival order. The queue and its bound live in the shared `PaymentInbox`.
     @ObservationIgnored private var inboxConsumer: Task<Void, Never>?
-    /// Counts this model's attachments to the inbox: `startInbox` and `stopInbox` each begin a new
-    /// one. A queued text is checked only while the attachment it arrived under still owns the inbox.
-    @ObservationIgnored private var inboxGeneration: UInt64 = 0
+    /// The attachment `PaymentInbox.attach` returned; nil while this screen is not attached. The
+    /// consumer takes queued texts only with it, so it stops when the screen goes or is replaced.
+    @ObservationIgnored private var inboxAttachment: UInt64?
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
@@ -292,26 +283,23 @@ public final class ReceiveModel {
     /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
         guard phase != .unavailable, let inbox else { return }
-        inboxGeneration &+= 1
-        let generation = inboxGeneration
-        inbox.attach(self) { [weak self] text, arrivedAt in
+        inboxAttachment = inbox.attach(self) { [weak self] text, arrivedAt in
             guard let self else { return false }
-            self.takeFromInbox(text, arrivedAt: arrivedAt, generation: generation)
+            self.takeFromInbox(text, arrivedAt: arrivedAt)
             return true
         }
+        // Texts a screen this one replaced had queued are this screen's now, in arrival order.
+        if inbox.hasQueued { startInboxConsumer() }
     }
 
     /// Stops taking inbox texts (a newer Receive model that already attached keeps the inbox).
-    /// Texts this screen queued and has not started checking go back to the inbox at once, with
-    /// their first arrival times, so nothing is validated, reserved or signed for a screen that is
-    /// not shown. A text already being checked when the screen goes finishes, like a scan would.
+    /// Queued texts nobody started go back to the inbox's held list at once, with their first
+    /// arrival times (`PaymentInbox.detach`), so nothing is validated, reserved or signed for a
+    /// screen that is not shown. A text already being checked when the screen goes finishes, like
+    /// a scan would.
     public func stopInbox() {
-        guard let inbox else { return }
-        inboxGeneration &+= 1
-        inbox.detach(self)
-        let queued = inboxQueue
-        inboxQueue = []
-        for item in queued { inbox.giveBack(item.text, arrivedAt: item.arrivedAt) }
+        inbox?.detach(self)
+        inboxAttachment = nil
     }
 
     /// What a Bluetooth text can become on this screen.
@@ -343,12 +331,12 @@ public final class ReceiveModel {
         }
     }
 
-    /// The inbox handler: counts junk at once, so it never takes a place, and queues the rest for
-    /// the single consumer. Queued texts count toward `PaymentInbox.capacity` with the held ones;
-    /// when they would pass it, the oldest pending text is dropped and counted, as when the inbox
-    /// holds too many. A text arriving while a signature is pending (Face ID) therefore waits in a
-    /// bounded queue, never in an open-ended chain of tasks.
-    private func takeFromInbox(_ text: String, arrivedAt: Date, generation: UInt64) {
+    /// The inbox handler: counts junk at once, so it never takes a place, and queues the rest in the
+    /// inbox's one FIFO for the single consumer. The inbox keeps held and queued texts together
+    /// within `PaymentInbox.capacity` (the oldest goes first, counted), whichever screen queued
+    /// them. A text arriving while a signature is pending (Face ID) therefore waits in a bounded
+    /// queue, never in an open-ended chain of tasks, and a newer screen takes that queue over.
+    private func takeFromInbox(_ text: String, arrivedAt: Date) {
         guard let inbox, phase != .unavailable, merchant != nil else { return }
         switch triage(text) {
         case .ignored:
@@ -356,36 +344,23 @@ public final class ReceiveModel {
         case .unreadable:
             inboxUnreadable += 1
         case .payment:
-            if inbox.held.count + inboxQueue.count >= PaymentInbox.capacity { dropOldestPending(inbox) }
-            inboxQueue.append(QueuedText(text: text, arrivedAt: arrivedAt, generation: generation))
-            if inboxConsumer == nil {
-                // Holds the model until the queue is empty, so a queued text is never lost with it.
-                inboxConsumer = Task { await self.drainInboxQueue() }
-            }
+            inbox.enqueue(text, arrivedAt: arrivedAt)
+            startInboxConsumer()
         }
     }
 
-    /// Makes room for one text: drops and counts the one that arrived first, held or queued.
-    private func dropOldestPending(_ inbox: PaymentInbox) {
-        let queued = inboxQueue.indices.min { inboxQueue[$0].arrivedAt < inboxQueue[$1].arrivedAt }
-        if let heldAt = inbox.oldestHeldArrival, queued.map({ heldAt <= inboxQueue[$0].arrivedAt }) ?? true {
-            inbox.dropOldestHeld()
-        } else if let queued {
-            inboxQueue.remove(at: queued)
-            inbox.recordDrop()
-        }
+    private func startInboxConsumer() {
+        guard inboxConsumer == nil else { return }
+        // Weak: queued texts live in the inbox, so a model that goes away loses none of them.
+        inboxConsumer = Task { [weak self] in await self?.drainInbox() }
     }
 
-    /// The single consumer: checks queued texts one at a time, in arrival order. A text whose
-    /// attachment lost the inbox (the screen went away, or a newer screen took over) is never
-    /// checked here: it goes back to the inbox with its first arrival time.
-    private func drainInboxQueue() async {
-        while !inboxQueue.isEmpty {
-            let item = inboxQueue.removeFirst()
-            guard item.generation == inboxGeneration, let inbox, inbox.isListener(self) else {
-                inbox?.giveBack(item.text, arrivedAt: item.arrivedAt)
-                continue
-            }
+    /// The single consumer: takes the inbox's queued texts one at a time, in arrival order, only
+    /// while this screen's attachment owns the inbox. Once the screen goes away or a newer screen
+    /// takes over, it stops; the queue stays in the inbox for whoever is attached.
+    private func drainInbox() async {
+        while let inbox, let attachment = inboxAttachment,
+              let item = inbox.takeNext(for: self, attachment: attachment) {
             await acceptFromInbox(item.text, arrivedAt: item.arrivedAt)
         }
         inboxConsumer = nil

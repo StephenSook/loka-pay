@@ -194,6 +194,89 @@ struct InboxOwnershipTests {
     }
 }
 
+@Suite("one pending FIFO in the shared inbox, across a takeover (review 3 round 2, finding 3)")
+@MainActor
+struct InboxSharedQueueTests {
+    let payer = SoftwareP256Signer()
+
+    @Test("takeover while the old screen's signature waits: held plus queued stays within capacity, arrival order kept")
+    func takeoverWhileSigning() async throws {
+        let merchant = GatedSigner()
+        let merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        let inbox = PaymentInbox()
+        func makeModel() -> ReceiveModel {
+            ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: OfflineLedger(url: F.tempURL("ledger.json")),
+                         settlementClient: nil, deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox,
+                         now: { F.now })
+        }
+        let old = makeModel()
+        old.startInbox()
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        inbox.deliver(PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        inbox.deliver(PaymentTransport.encode(.note, note.wire))
+        try await merchant.waitUntilStarted()
+        #expect(old.isWorking)
+
+        // 24 valid codes, oldest first: allowances 1000 to 1023.
+        let texts = (0..<24).map { i in
+            PaymentTransport.encode(.allowance, F.allowanceWire(payer: SoftwareP256Signer().keyHash, id: 1000 + UInt64(i)))
+        }
+        for text in texts.prefix(20) { inbox.deliver(text) }
+        #expect(inbox.droppedWhileDetached == 4)
+
+        // A rebuilt screen takes over while the old one still waits for its signature, then 4 more
+        // codes arrive. One bound covers both screens: 4 more of the oldest are dropped.
+        let fresh = makeModel()
+        fresh.startInbox()
+        for text in texts.suffix(4) { inbox.deliver(text) }
+        #expect(inbox.droppedWhileDetached == 8, "the two screens' queues together passed the capacity")
+
+        // The new screen checks the 16 kept codes in arrival order while the old one is still blocked.
+        await fresh.inboxDrained()
+        #expect(Set(fresh.allowances.keys) == Set((1008...1023).map { UInt64($0) }))
+        #expect(fresh.lastAllowance?.allowanceId == 1023)
+
+        merchant.open()
+        await old.inboxDrained()
+        await fresh.inboxDrained()
+        #expect(old.payment?.ack != nil, "the old screen's own signature finished")
+        #expect(Array(old.allowances.keys) == [F.allowanceId], "the old screen checked nothing after it lost the inbox")
+        #expect(fresh.lastAllowance?.allowanceId == 1023, "an older code ran after a newer one")
+        #expect(inbox.droppedWhileDetached == 8)
+        #expect(inbox.held.isEmpty)
+    }
+
+    @Test("the inbox keeps one arrival-ordered queue: capacity drops the oldest, a takeover keeps it, detach returns it")
+    func sharedQueue() {
+        final class Owner {}
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        let a = Owner()
+        let b = Owner()
+        let at = { (offset: Int) in clock.now.addingTimeInterval(TimeInterval(offset)) }
+        inbox.hold("h0", arrivedAt: at(-20))
+        inbox.hold("h1", arrivedAt: at(-10))
+        let first = inbox.attach(a) { text, arrived in
+            inbox.enqueue(text, arrivedAt: arrived)
+            return true
+        }
+        #expect(inbox.queuedTexts == ["h0", "h1"])
+        for i in 0..<16 { inbox.enqueue("q\(i)", arrivedAt: at(i)) }
+        // 18 pending: the two that arrived first are dropped.
+        #expect(inbox.queuedTexts == (0..<16).map { "q\($0)" })
+        #expect(inbox.droppedWhileDetached == 2)
+
+        let second = inbox.attach(b) { _, _ in true }
+        #expect(inbox.queuedTexts.count == 16, "a takeover keeps the queue as it is")
+        #expect(inbox.takeNext(for: a, attachment: first) == nil, "the replaced screen takes nothing")
+        #expect(inbox.takeNext(for: b, attachment: second)?.text == "q0")
+        inbox.detach(b)
+        #expect(inbox.queuedTexts.isEmpty)
+        #expect(inbox.held == (1..<16).map { "q\($0)" }, "queued texts go back held, in arrival order")
+        #expect(inbox.held.count + inbox.queuedTexts.count <= PaymentInbox.capacity)
+    }
+}
+
 @Suite("a lost answer leaves the outcome unknown and offers Check again (review 3, finding 2)")
 @MainActor
 struct OutcomeUnknownTests {
