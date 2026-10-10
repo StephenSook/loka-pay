@@ -101,11 +101,11 @@ describe('routing, CORS and the burst guard', () => {
   });
 });
 
-test('logs carry no IP, forwarded address, user agent or body (PLAN.md 3.55)', async () => {
+test('logs carry no IP, forwarded address, user agent or body value (PLAN.md 3.55)', async () => {
   const lines: string[] = [];
   const stream = new Writable({ write(chunk, _encoding, done) { lines.push(String(chunk)); done(); } });
   const app = await buildApp(options({ logger: privateLogger(stream) }));
-  const planted = ['203.0.113.77', '198.51.100.99', 'planted-agent/9.9', '+15555550123'];
+  const planted = ['203.0.113.77', '198.51.100.99', 'planted-agent/9.9', 'planted-body-value-7f3a'];
   await app.inject({ method: 'POST', url: '/v1/payers', remoteAddress: planted[1],
     headers: { 'x-forwarded-for': planted[0], 'user-agent': planted[2] }, payload: { publicKey: planted[3] } });
   await app.inject({ url: '/api/health', remoteAddress: planted[1], headers: { 'user-agent': planted[2] } });
