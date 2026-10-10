@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The merchant's record of notes accepted offline (protocol/PAYMENT-V1.md section 6,
@@ -27,10 +28,13 @@ public final class OfflineLedger: @unchecked Sendable {
     }
 
     private let url: URL
-    private let lock = NSLock()
+    private let lock: NSLock
 
+    /// Every instance on the same file shares one lock (FileLocks), so two ledger objects can
+    /// never both approve capacity or overwrite each other's accepted notes.
     public init(url: URL) {
         self.url = url
+        self.lock = FileLocks.lock(for: url)
     }
 
     /// Records `note` as accepted offline, or throws `serialSeen` / `offlineLimit` and
@@ -100,7 +104,17 @@ public final class OfflineLedger: @unchecked Sendable {
     private func load() throws -> [Entry] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         do {
-            return try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
+            let entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
+            // The retained note wire is the source of truth: every cached field must match it,
+            // so a damaged record can never understate carried value or hide a serial.
+            for e in entries {
+                guard let wire = Data(hex: e.wireHex), wire.count == SignedNote.wireSize else { throw PaymentError.storage }
+                let noteBytes = Data(wire.prefix(NoteV1.size))
+                let note = try NoteV1.decode(noteBytes)
+                guard note.allowanceId == e.allowanceId, note.serial == e.serial, note.amount == e.amount,
+                      Data(SHA256.hash(data: noteBytes)).hex == e.noteIdHex else { throw PaymentError.storage }
+            }
+            return entries
         } catch {
             // A corrupt ledger must never read as empty: that would forget carried value.
             throw PaymentError.storage
