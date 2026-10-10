@@ -319,6 +319,8 @@ test("no client module reaches a module that reads server-only configuration", (
   expect(rel).toContain("lib/program-feed.ts");
   // /call's panel reaches the shared checks, so the walk sees the call files too.
   expect(rel).toContain("lib/call-shared.ts");
+  // /send's form reaches its rules, so the walk sees the send files too.
+  expect(rel).toContain("lib/remittance.ts");
   for (const serverOnly of [
     "lib/github.ts",
     "lib/server-rpc.ts",
@@ -330,6 +332,8 @@ test("no client module reaches a module that reads server-only configuration", (
     "lib/call-crypto.ts",
     "lib/call-limits.ts",
     "lib/call-payment.ts",
+    "lib/send-server.ts",
+    "lib/deployment.ts",
   ]) {
     expect(rel, `${serverOnly} is reachable from a client module`).not.toContain(serverOnly);
   }

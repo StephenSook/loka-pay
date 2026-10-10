@@ -11,7 +11,7 @@ LOKA Pay adds offline payments to LOKA, an offline Bluetooth mesh messenger. Thi
 | `android/loka-mesh-lab/` | Kotlin + Jetpack Compose Android app (`app`) and the portable protocol core (`core`) | LOKA foundation |
 | `programs/` | Anchor workspace with the `loka_vault` Solana program and its tests | Event work |
 | `server/` | Settlement API: TypeScript, Node 22, Fastify, Vitest | Event work |
-| `web/` | Next.js judge site (`/judge`, `/live`, `/verify`, `/send`, `/proof`, `/trust`, `/lab`) | Event work |
+| `web/` | Next.js judge site (`/judge`, `/live`, `/verify`, `/send`, `/proof`, `/trust`, `/privacy`, `/call`) | Event work |
 | `protocol/` | Wire specs (`PAYMENT-V1.md` and LOKA's packet specs) and test vectors | Both |
 | `config/pins.json` | Public keys, fingerprints, program id and mint read by every build | Event work |
 | `docs/` | Design and runbook docs; `docs/FACTS.json` holds every judge-facing number | Both |
