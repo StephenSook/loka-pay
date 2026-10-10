@@ -181,6 +181,28 @@ test("pending, pending, then success: the same request is sent again after retry
   await expect(page.getByTestId("cert-earmarks")).toHaveText("Any merchant");
 });
 
+test("a send that stays pending: no repost starts past 30 s, then Still pending with a retry", async ({ page }) => {
+  // Real time, not a fake clock: POSTs at about 0, 10 and 20 s. A fourth would start just past
+  // 30 s (each answer takes a moment), so the page stops after the third answer.
+  test.setTimeout(60_000);
+  await open(page, "/send");
+  const posts = await mockApi(page, [{ status: 202, body: pendingBody(RECIPIENT, TEST_TX, 10) }]);
+  const started = Date.now();
+  await fill(page, RECIPIENT, "1");
+  await expect(page.getByTestId("send-result")).toHaveAttribute("data-kind", "still_pending", { timeout: 40_000 });
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThanOrEqual(19_000);
+  expect(elapsed).toBeLessThan(30_000);
+  expect(posts.map((p) => p.postData())).toEqual(Array(3).fill(`{"recipientAllowanceId":"${RECIPIENT}","amountUnits":"1000000"}`));
+  await expect(page.getByTestId("send-status")).toHaveText("Still pending");
+  await expect(page.getByTestId("send-explorer")).toHaveAttribute("href", `https://explorer.solana.com/tx/${TEST_TX}?cluster=devnet`);
+  await expect(page.getByTestId("send-retry")).toHaveCount(1);
+  await expect(page.getByTestId("allowance-qr")).toHaveCount(0);
+  // Past one more retryAfter: nothing else was sent after the page said Still pending.
+  await page.waitForTimeout(11_000);
+  expect(posts.length).toBe(3);
+});
+
 test("a repeat (200) says the server returned the recipient's existing send, with its first terms", async ({ page }) => {
   await open(page, "/send");
   await mockApi(page, [{ status: 200, body: successBody(RECIPIENT, { allowanceId: BigInt(101), cap: BigInt(250_000) }) }]);
