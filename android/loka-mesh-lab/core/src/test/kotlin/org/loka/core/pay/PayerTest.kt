@@ -124,9 +124,12 @@ class PayerTest {
     private class RecordingSync(private val file: File) : DirectorySync {
         val calls = mutableListOf<Pair<File, String?>>()
         var failNext = false
+        /** Every sync of this directory fails until it is cleared. */
+        var failOn: File? = null
         override fun sync(directory: File) {
             calls += directory to (if (file.isFile) file.readText() else null)
             if (failNext) { failNext = false; throw java.io.IOException("fsync refused (test)") }
+            if (directory == failOn) throw java.io.IOException("fsync refused for $directory (test)")
         }
     }
 
@@ -154,10 +157,39 @@ class PayerTest {
         sync.failNext = true
         expect("storage") { store.reserve(5UL) } // serial 0 is not returned
         assertEquals(1, store.reserve(5UL)) // and it is burned, not handed out later
-        // Initialising an existing store only checks it: no write, so no sync.
-        val before = sync.calls.size
+        // Initialising an existing store checks it and syncs the folder and its parent, with no write.
+        sync.calls.clear()
         store.initialize()
-        assertEquals(before, sync.calls.size)
+        val dir = File(temp.root, "pay").canonicalFile
+        val content = "loka-pay-serials-v1\n5 2\n"
+        assertEquals(listOf(dir to content, temp.root.canonicalFile to content), sync.calls)
+        assertEquals(content, file.readText())
+        assertEquals(2, store.reserve(5UL))
+    }
+
+    @Test fun `a failed parent sync on first initialisation is retried, and initialize returns only after it succeeds`() {
+        val file = File(temp.root, "pay/serials.txt")
+        val sync = RecordingSync(file)
+        val store = SerialReservations(file, sync)
+        val dir = File(temp.root, "pay").canonicalFile
+        val parent = temp.root.canonicalFile
+        sync.failOn = parent
+        expect("storage") { store.initialize() } // file renamed and folder synced, then the parent sync fails
+        assertTrue(file.isFile) // the store is visible
+        // A retry takes the existing-file branch and must still refuse while the parent cannot be synced.
+        expect("storage") { store.initialize() }
+        sync.failOn = null
+        sync.calls.clear()
+        store.initialize()
+        assertEquals(listOf(dir to "loka-pay-serials-v1\n", parent to "loka-pay-serials-v1\n"), sync.calls)
+        // Counters survive a later failed and retried initialisation.
+        assertEquals(0, store.reserve(3UL))
+        sync.failOn = parent
+        expect("storage") { store.initialize() }
+        sync.failOn = null
+        store.initialize()
+        assertEquals("loka-pay-serials-v1\n3 1\n", file.readText())
+        assertEquals(1, store.reserve(3UL))
     }
 
     @Test fun `initialising over a damaged store checks it and never replaces it`() {

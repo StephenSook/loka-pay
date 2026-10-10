@@ -51,16 +51,19 @@ class SerialReservations(private val file: File, private val directorySync: Dire
 
     /**
      * First-run initialisation: creates an empty store durably (file, its folder and the folder's
-     * entry in its parent are all synced). A store that already exists is only checked, never
-     * replaced, so calling this again cannot reset counters.
+     * entry in its parent are all synced). A store that already exists is checked, never replaced,
+     * so calling this again cannot reset counters; it is synced the same way, so a retry after a
+     * failed sync returns only once the folder and its entry in the parent are durable.
      */
     fun initialize(): Unit = locked(create = true) { target ->
         if (target.exists()) {
             load(target)
+            sync(target.parentFile) // a retry: the earlier attempt may have failed before or after this
         } else {
-            save(target, emptyMap())
-            target.parentFile.parentFile?.let { sync(it) }
+            save(target, emptyMap()) // syncs the folder after the rename
         }
+        // On both branches: the store folder's own entry in its parent.
+        target.parentFile.parentFile?.let { sync(it) }
     }
 
     /** Returns the next unused serial (0 to 255) for [allowanceId] after persisting it. Throws `serials_exhausted` after 256. */
