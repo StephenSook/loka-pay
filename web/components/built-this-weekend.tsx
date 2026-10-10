@@ -53,6 +53,7 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
 
 function Numbers({ b, readAtMs, current, shownAtMs }: { b: BuiltThisWeekend; readAtMs: number; current: boolean; shownAtMs: number }) {
   const partial = b.listedCommits < b.totalCommits;
+  const additionsFloor = b.filesCapped || b.filesWithoutLineCount > 0;
   return (
     <div className={`${CARD} flex flex-col gap-4`}>
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -65,8 +66,8 @@ function Numbers({ b, readAtMs, current, shownAtMs }: { b: BuiltThisWeekend; rea
         <Stat label={b.filesCapped ? "Files changed (GitHub lists at most 300)" : "Files changed"} testId="built-files">
           {b.filesCapped ? `${b.filesChanged}+` : b.filesChanged.toLocaleString("en-US")}
         </Stat>
-        <Stat label={b.filesCapped ? "Lines added (in the listed files)" : "Lines added"} testId="built-additions">
-          {b.additions.toLocaleString("en-US")}
+        <Stat label={additionsFloor ? "Lines added (at least)" : "Lines added"} testId="built-additions">
+          {additionsFloor ? `${b.additions.toLocaleString("en-US")}+` : b.additions.toLocaleString("en-US")}
         </Stat>
         <Stat label="First commit" testId="built-first" wide>
           {b.firstCommitMs !== null ? <When ms={b.firstCommitMs} /> : <span className="text-base">Not shown: list cut short</span>}
@@ -80,6 +81,13 @@ function Numbers({ b, readAtMs, current, shownAtMs }: { b: BuiltThisWeekend; rea
         {b.commitsWithoutLogin > 0 ? `, plus ${b.commitsWithoutLogin} commits with no linked login` : ""}.
         {partial ? ` GitHub listed ${b.listedCommits} of the ${b.totalCommits} commits.` : ""}
       </p>
+      {b.filesWithoutLineCount > 0 ? (
+        <p className="text-sm" data-testid="built-additions-note">
+          GitHub gave no line count for {b.filesWithoutLineCount} of the {b.filesChanged} files (binary files and diffs
+          too large to show), so lines added is a floor. For the exact count, run{" "}
+          <code className="font-mono text-sm">git diff --shortstat {KIT_TAG} main</code> in a clone.
+        </p>
+      ) : null}
       {/* Numbers is shown only for the latest read (stale reads are handled above). */}
       <ReadStamp
         source="GitHub's API (refreshed at most every 5 minutes)"

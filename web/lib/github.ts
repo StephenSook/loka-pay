@@ -94,7 +94,13 @@ export interface BuiltThisWeekend {
   filesChanged: number;
   /** True when GitHub's file list hit its cap, so the count and additions are a floor. */
   filesCapped: boolean;
-  /** Lines added, summed over the listed files. */
+  /**
+   * Listed files GitHub gave no line count for: no patch and zero additions, which is how its
+   * compare answer reports a binary file or a diff too large to show. Zero added lines and a
+   * missing count look the same there, so these are never counted.
+   */
+  filesWithoutLineCount: number;
+  /** Lines added in the files GitHub gave a line count for; a floor when any file has none or the list is capped. */
   additions: number;
   /** Author times of the earliest and latest listed commits; null when the list is cut short. */
   firstCommitMs: number | null;
@@ -144,11 +150,18 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
     const ms = typeof date === "string" ? Date.parse(date) : NaN;
     if (!Number.isNaN(ms)) times.push(ms);
   }
-  const files = b.files as Array<{ additions?: unknown } | null>;
+  const files = b.files as Array<{ additions?: unknown; patch?: unknown } | null>;
   let additions = 0;
+  let withoutLineCount = 0;
   for (const f of files) {
     if (typeof f !== "object" || f === null || !isCount(f.additions)) {
       throw new GitHubError("GitHub's compare answer listed a file without a count of added lines");
+    }
+    // Seen live on this repository: 142 of 238 files came back with additions 0 and no patch,
+    // so summing them showed 17,298 lines where git counts 46,013.
+    if (typeof f.patch !== "string" && f.additions === 0) {
+      withoutLineCount += 1;
+      continue;
     }
     additions += f.additions;
   }
@@ -163,6 +176,7 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
     commitsWithoutLogin: withoutLogin,
     filesChanged: files.length,
     filesCapped: files.length >= FILES_CAP,
+    filesWithoutLineCount: withoutLineCount,
     additions,
     firstCommitMs: complete && times.length > 0 ? Math.min(...times) : null,
     latestCommitMs: complete && times.length > 0 ? Math.max(...times) : null,

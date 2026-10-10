@@ -191,8 +191,8 @@ test("an edit that lands on a note the same payer also signed fails without clai
 
 test("editing and re-checking send nothing: zero requests while the panel works", async ({ page }) => {
   const panel = await openWithTestReceipt(page);
-  // Let the page finish loading, including any link prefetch the footer starts when it
-  // scrolls into view, before counting.
+  // Let the page finish loading before counting. Header and footer links never prefetch
+  // (prefetch={false}); a late WebKit prefetch of /privacy once broke this count in CI.
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForLoadState("networkidle");
 
