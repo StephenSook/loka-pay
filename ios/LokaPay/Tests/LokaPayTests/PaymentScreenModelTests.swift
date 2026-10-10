@@ -647,4 +647,76 @@ struct SettleWaitTests {
         #expect(!model.isWaitingForChain && !model.isWorking)
         #expect(try ledger.entries().first?.state == .pending)
     }
+
+    @Test("a poll with no answer when the budget runs out leaves the outcome unknown, never pending (Codex finding 1)")
+    func unansweredPollIsUnknown() async throws {
+        let id = try noteId()
+        let clock = FakeClock()
+        // The upload answers 202; the poll at 2 s would take 25 s, so the budget ends with it unanswered.
+        let stub = StubTransport([pendingReply(id),
+                                  decisionReply(F.confWire(noteId: id, status: 1), id, jsonStatus: "settled").delayed(25)],
+                                 clock: clock)
+        let (model, _, ledger) = try await received(client(stub, clock: clock.clock))
+        await model.settle()
+        #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
+        #expect(clock.now <= ReceiveModel.settleWaitBudget)
+        #expect(model.phase == .received)
+        #expect(model.settlement == nil)
+        #expect(model.settlementOutcomeUnknown, "the poll's lost answer may have carried the decision")
+        #expect(model.issue?.kind == .settlement(.network(.timedOut)))
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("leaving while a held note's receipt is being signed starts no upload; back on screen, Settle works (Codex finding 2)",
+          .timeLimit(.minutes(1)))
+    func leavingDuringHeldNoteSigning() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        // The merchant key behind a gate (ScreenReviewRound3Tests): its signature waits until opened.
+        let gate = GatedSigner()
+        let note = try F.note(payer: payer, payee: gate.keyHash, amount: 1_000_000, serial: 0)
+        let allowanceWire = F.allowanceWire(payer: payer.keyHash)
+        let certificate = try AllowanceCertificate.verify(wire: allowanceWire, deployment: F.deployment,
+                                                          serverPublicKey: F.serverKey)
+        // Held with no stored ACK, so Settle on its row signs a receipt first (Face ID on a phone).
+        try ledger.accept(note: note, certificate: certificate, now: Int64(F.now.timeIntervalSince1970),
+                          allowanceWire: allowanceWire)
+        let stub = StubTransport([decisionReply(F.confWire(noteId: note.noteId, status: 1), note.noteId,
+                                                jsonStatus: "settled")])
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: gate.keyHash), signer: gate, ledger: ledger,
+                                 settlementClient: client(stub, clock: FakeClock().clock), deployment: F.deployment,
+                                 serverPublicKey: F.serverKey, now: { F.now })
+        let row = try #require(model.unsettledPayments.first)
+        #expect(row.ack == nil && model.canSettle(row))
+        let settling = Task { await model.settleUnsettled(noteId: note.noteId) }
+        try await gate.waitUntilStarted()  // the receipt prompt is open
+        model.stopWaiting()  // the merchant leaves the screen
+        gate.open()
+        await settling.value
+        #expect(stub.requests.isEmpty, "nothing uploaded for a screen nobody sees")
+        #expect(model.phase == .received)
+        #expect(model.payment?.ack != nil)
+        #expect(!model.isWorking && !model.isWaitingForChain)
+        // Shown again: the Settle tap uploads and ends on Paid.
+        model.screenShown()
+        await model.settle()
+        #expect(stub.requests.count == 1)
+        #expect(model.settlement?.status == .paid)
+    }
+
+    @Test("cancelling the task that called Settle cancels the wait too (Codex finding 3)", .timeLimit(.minutes(1)))
+    func cancelledCallerStopsTheWait() async throws {
+        let id = try noteId()
+        let stub = StubTransport([pendingReply(id)])
+        let held = HeldClock()
+        let (model, _, _) = try await received(client(stub, clock: held.clock))
+        let settling = Task { await model.settle() }
+        var sleeps = held.started.makeAsyncIterator()
+        _ = await sleeps.next()  // the wait sleeps before its first poll
+        settling.cancel()
+        await settling.value
+        #expect(!model.isWorking && !model.isWaitingForChain, "the wait ended with its caller")
+        #expect(stub.requests.count == 1, "no poll after the caller was cancelled")
+        #expect(model.offersCheckAgain)
+    }
 }

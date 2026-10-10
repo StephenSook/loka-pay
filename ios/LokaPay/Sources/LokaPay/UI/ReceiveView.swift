@@ -54,10 +54,13 @@ public struct ReceiveView: View {
             isBadNews(new)
         }
         // Bluetooth codes are taken only while this screen is shown; others wait in the inbox.
-        .onAppear { model.startInbox() }
+        .onAppear {
+            model.screenShown()
+            model.startInbox()
+        }
         .onDisappear {
             model.stopInbox()
-            // A Settle wait stops with the screen: nothing polls for a screen nobody sees.
+            // A Settle wait stops with the screen: nothing polls or uploads for a screen nobody sees.
             model.stopWaiting()
         }
         .announcesIssue(model.issue)

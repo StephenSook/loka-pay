@@ -132,8 +132,12 @@ public final class ReceiveModel {
     public private(set) var isWaitingForChain = false
     /// The Settle wait in progress, kept so `stopWaiting` can cancel it.
     @ObservationIgnored private var settleWait: Task<Void, Never>?
-    /// True once the server answered HTTP 202 for the note during the Settle wait in progress.
-    @ObservationIgnored private var settleWaitSawPending = false
+    /// True while the latest request of the Settle wait in progress was answered with HTTP 202;
+    /// false before the upload is answered and while a poll is out (`onPoll`).
+    @ObservationIgnored private var settleWaitAnswered = false
+    /// False from the moment the screen goes away (`stopWaiting`) until it is shown again
+    /// (`screenShown`): Settle then starts no upload, so nothing is sent for a screen nobody sees.
+    @ObservationIgnored private var onScreen = true
     /// This merchant's pending total for the allowance on screen (OfflineLedger); nil when the
     /// ledger could not be read. Read it through `unsettled(for:)`, which checks the pairing.
     public private(set) var unsettledTotal: UInt64?
@@ -636,23 +640,26 @@ public final class ReceiveModel {
     /// refusal, a 503 or a dropped connection leaves the note pending in the ledger. Each 202 shows
     /// as pending during the wait; when the budget runs out with the note still in flight, the
     /// screen keeps that 202 and offers Check again. The wait runs as its own task, so
-    /// `stopWaiting` (the screen went away) cancels it and no poll starts after that.
+    /// `stopWaiting` (the screen went away) cancels it and no poll starts after that; so does
+    /// cancelling the task that called `settle`. A screen that has gone away starts no upload.
     public func settle() async {
-        guard phase == .received, let current = payment, let ack = current.ack, !isWorking else { return }
+        guard phase == .received, let current = payment, let ack = current.ack, !isWorking, onScreen else { return }
         guard let client = settlementClient else { return report(.serverNotConnected) }
         // Set before the first suspension, so a second tap (or Next payment) sees the wait at once.
         isWorking = true
         isWaitingForChain = true
-        settleWaitSawPending = false
+        settleWaitAnswered = false
         let budget = Self.settleWaitBudget
         let wait = Task {
             do {
-                let decision = try await client.settleAndWait(note: current.note, ack: ack, timeout: budget) {
-                    @MainActor [weak self] pending in
-                    guard let self else { return }
-                    self.settleWaitSawPending = true
-                    self.handle(.pending(pending), for: current, ack: ack)
-                }
+                let decision = try await client.settleAndWait(
+                    note: current.note, ack: ack, timeout: budget,
+                    onPending: { @MainActor [weak self] pending in
+                        guard let self else { return }
+                        self.settleWaitAnswered = true
+                        self.handle(.pending(pending), for: current, ack: ack)
+                    },
+                    onPoll: { @MainActor [weak self] in self?.settleWaitAnswered = false })
                 handle(.decided(decision), for: current, ack: ack)
             } catch {
                 settleWaitEnded(error, for: current, ack: ack)
@@ -662,31 +669,43 @@ public final class ReceiveModel {
             settleWait = nil
         }
         settleWait = wait
-        await wait.value
+        // The wait is its own task (so `stopWaiting` can reach it): a cancelled caller cancels it too.
+        await withTaskCancellationHandler {
+            await wait.value
+        } onCancel: {
+            wait.cancel()
+        }
     }
 
-    /// Stops a Settle wait in progress. ReceiveView calls it when the screen goes away, so nothing
-    /// keeps polling for a screen nobody sees. The note stays reserved in the ledger: a 202 seen
-    /// during the wait keeps Check again, and without one the outcome is unknown (Check again,
-    /// Settle again). A decision that already arrived is kept.
+    /// Stops a Settle wait in progress and marks the screen gone. ReceiveView calls it when the
+    /// screen goes away, so nothing keeps polling, or starts uploading (for example once a Face ID
+    /// prompt for a held note's receipt finishes), for a screen nobody sees. The note stays
+    /// reserved in the ledger: a 202 that was the latest answer keeps Check again, and otherwise the
+    /// outcome is unknown (Check again, Settle again). A decision that already arrived is kept.
     public func stopWaiting() {
+        onScreen = false
         settleWait?.cancel()
     }
 
+    /// The Receive screen is shown again (ReceiveView calls it on appear): Settle works again.
+    public func screenShown() {
+        onScreen = true
+    }
+
     /// A Settle wait that ended without a decision. Cancelled (the screen went away): no banner,
-    /// and if no 202 came back during the wait, nothing this phone can trust answered the upload,
-    /// so the outcome is unknown. The budget ran out after a 202: the note is in flight, so the
-    /// screen keeps the server's last 202, as a single 202 did before. The budget ran out before
-    /// any answer to the upload (`settleAndWait` then reports a pending with no body): the upload
-    /// timed out, which leaves the outcome unknown. Every other error is shown as for one call.
+    /// and unless the latest request was answered with a 202, the outcome is unknown. The budget ran
+    /// out right after a 202 (no further poll fit): the note is in flight, so the screen keeps the
+    /// server's last 202, as a single 202 did before. The budget ran out while the latest request
+    /// was unanswered (the upload, or a poll whose answer may have carried the decision): that
+    /// request timed out, which leaves the outcome unknown. Every other error is shown as for one call.
     private func settleWaitEnded(_ error: Error, for current: ReceivedPayment, ack: Ack) {
         guard phase == .received, payment?.note.noteId == current.note.noteId else { return }
         if Task.isCancelled {
-            if !settleWaitSawPending { settlementOutcomeUnknown = true }
+            if !settleWaitAnswered { settlementOutcomeUnknown = true }
             return
         }
         if case SettlementError.stillPending(let pending) = error {
-            guard settleWaitSawPending else { return reportSettlement(SettlementError.network(.timedOut)) }
+            guard settleWaitAnswered else { return reportSettlement(SettlementError.network(.timedOut)) }
             return handle(.pending(pending), for: current, ack: ack)
         }
         reportSettlement(error)

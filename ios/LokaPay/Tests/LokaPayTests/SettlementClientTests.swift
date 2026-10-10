@@ -77,8 +77,13 @@ final class FakeClock: @unchecked Sendable {
     }
 }
 
-/// Time stands still and every sleep lasts until its task is cancelled, so a wait on this clock
-/// ends only by cancellation. `started` yields once each time a sleep begins.
+/// How long `HeldClock` and `HeldTransport` hold: far longer than any test needs, short enough that a
+/// wait that is never cancelled fails within the CI job's time instead of hanging it.
+let heldSeconds: UInt64 = 30
+
+/// Time stands still and every sleep lasts until its task is cancelled (or `heldSeconds`, so a
+/// regression fails the test instead of hanging the suite), so a wait on this clock ends by
+/// cancellation. `started` yields once each time a sleep begins.
 final class HeldClock: @unchecked Sendable {
     let started: AsyncStream<Void>
     private let continuation: AsyncStream<Void>.Continuation
@@ -88,13 +93,14 @@ final class HeldClock: @unchecked Sendable {
     var clock: SettlementClock {
         SettlementClock(now: { 0 }, sleep: { [continuation] _ in
             continuation.yield()
-            try await Task.sleep(nanoseconds: 3_600 * 1_000_000_000)
+            try await Task.sleep(nanoseconds: heldSeconds * 1_000_000_000)
         })
     }
 }
 
-/// A transport whose exchange never answers: it holds each request until its task is cancelled and
-/// then fails the way URLSession does (`URLError(.cancelled)`). `started` yields once per request.
+/// A transport whose exchange does not answer: it holds each request until its task is cancelled
+/// and then fails the way URLSession does (`URLError(.cancelled)`); after `heldSeconds` it fails
+/// with `URLError(.unknown)`. `started` yields once per request.
 final class HeldTransport: HTTPTransport, @unchecked Sendable {
     let started: AsyncStream<Void>
     private let continuation: AsyncStream<Void>.Continuation
@@ -109,7 +115,7 @@ final class HeldTransport: HTTPTransport, @unchecked Sendable {
         lock.withLock { count += 1 }
         continuation.yield()
         do {
-            try await Task.sleep(nanoseconds: 3_600 * 1_000_000_000)
+            try await Task.sleep(nanoseconds: heldSeconds * 1_000_000_000)
         } catch {
             throw URLError(.cancelled)
         }
@@ -645,16 +651,19 @@ struct SettlementPendingTests {
         #expect(clock.sleeps == [1])
     }
 
-    @Test("settleAndWait reports each 202 to onPending in order, the upload's first, and never the decision")
+    @Test("settleAndWait reports each 202 to onPending and each poll to onPoll, in order, and never the decision")
     func settleAndWaitReportsPending() async throws {
         let stub = StubTransport([APIFixtures.pending(retryAfter: 1), APIFixtures.pending(retryAfter: 3),
                                   APIFixtures.settled()])
         let seen = PendingLog()
         let decision = try await APIFixtures.client(stub, clock: FakeClock())
-            .settleAndWait(note: APIFixtures.note(0), timeout: 30) { seen.append($0) }
+            .settleAndWait(note: APIFixtures.note(0), timeout: 30,
+                           onPending: { seen.append($0) }, onPoll: { seen.poll() })
         #expect(decision.status == .settled)
         #expect(seen.values.map(\.retryAfter) == [1, 3])
         #expect(seen.values.allSatisfy { $0.noteId == APIFixtures.note(0).noteId })
+        // The upload's 202, a poll, its 202, the poll that brought the decision.
+        #expect(seen.events == ["202", "poll", "202", "poll"])
     }
 
     @Test("a cancelled wait sends no further poll, even when the clock's sleep does not notice the cancellation")
@@ -675,12 +684,15 @@ struct SettlementPendingTests {
     }
 }
 
-/// Collects the pending bodies `settleAndWait` reports.
+/// Collects the pending bodies and polls `settleAndWait` reports, in order.
 final class PendingLog: @unchecked Sendable {
     private let lock = NSLock()
     private var log: [PendingSettlement] = []
+    private var order: [String] = []
     var values: [PendingSettlement] { lock.withLock { log } }
-    func append(_ pending: PendingSettlement) { lock.withLock { log.append(pending) } }
+    var events: [String] { lock.withLock { order } }
+    func append(_ pending: PendingSettlement) { lock.withLock { log.append(pending); order.append("202") } }
+    func poll() { lock.withLock { order.append("poll") } }
 }
 
 @Suite("settlement client: one time budget")
