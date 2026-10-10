@@ -91,9 +91,8 @@ public struct LokaPayHomeView: View {
     /// accepted, reserved or signed unseen; codes wait in the inbox. The models keep their state.
     private let isActive: Bool
     private let meshLinkReady: Bool?
-    /// The timed retry for replies that failed for a passing reason, and how many have run.
-    @State private var replyRetry: Task<Void, Never>?
-    @State private var replyRetryAttempt = 0
+    /// Times retries of replies that failed for a passing reason, bound to the payment presentation.
+    @State private var replyRetry = MeshReplyRetry()
     /// Reply keys (`MeshReturns.replyKey`) `meshReply` settled, newest last and bounded, so each reply
     /// goes once per presentation of its payment.
     @State private var repliesSent: [String] = []
@@ -145,15 +144,14 @@ public struct LokaPayHomeView: View {
         .onDisappear {
             connectivity.stop()
             meshReturns?.detach(payModel)
-            replyRetry?.cancel()
-            replyRetry = nil
+            replyRetry.cancel()
         }
         // A reply that could not be queued is offered again when Receive is shown again and when a
         // local link or the radio comes back.
         .onChange(of: tab) { if tab == .receive { sendDueReplies() } }
         .onChange(of: isActive) {
             if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
-            if isActive { sendDueReplies() }
+            if isActive { sendDueReplies() } else { replyRetry.cancel() }
         }
         .onChange(of: meshLinkReady) { if meshLinkReady == true { sendDueReplies() } }
         .onChange(of: bluetoothOn) { if bluetoothOn == true { sendDueReplies() } }
@@ -170,24 +168,15 @@ public struct LokaPayHomeView: View {
         let presentation = receiveModel.paymentPresentation
         let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText, receipt: receiveModel.settlement?.receiptText,
                                          presentation: presentation, sent: repliesSent)
-        let settled = due.filter { meshReply($0, origin) }
-        repliesSent = Array((repliesSent + settled.map { MeshReturns.replyKey($0, presentation: presentation) }).suffix(32))
-        guard settled.count < due.count else {
-            // Nothing waits: the next failure starts the timer from its first step.
-            replyRetry?.cancel()
-            replyRetry = nil
-            replyRetryAttempt = 0
-            return
+        var failed: [String] = []
+        for text in due {
+            let key = MeshReturns.replyKey(text, presentation: presentation)
+            if meshReply(text, origin) { repliesSent = Array((repliesSent + [key]).suffix(32)) } else { failed.append(key) }
         }
-        // A passing failure: try again on a short bounded timer, unless one is already set.
-        guard replyRetry == nil, let delay = MeshReturns.replyRetryDelay(attempt: replyRetryAttempt) else { return }
-        replyRetryAttempt += 1
-        replyRetry = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            replyRetry = nil
-            sendDueReplies()
-        }
+        // A passing failure: a timed retry for this presentation only (MeshReplyRetry).
+        let model = receiveModel
+        replyRetry.passFinished(presentation: presentation, failed: failed,
+                                stillCurrent: { model.paymentPresentation == presentation }) { sendDueReplies() }
     }
 }
 

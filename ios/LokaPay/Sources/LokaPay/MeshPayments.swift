@@ -404,6 +404,91 @@ public final class MeshPaymentRouter {
     }
 }
 
+/// A cancellable timer for `MeshReplyRetry`.
+public protocol MeshRetryTimer: AnyObject {
+    func cancel()
+}
+
+/// Times the retries of the merchant's replies that failed for a passing reason (a locked phone, a
+/// full queue), for one payment presentation at a time:
+/// - a pass for a new presentation cancels the pending timer and starts fresh budgets, and a timer
+///   that outlives its presentation (or its activation) never fires;
+/// - each reply has its own budget (`MeshReturns.replyRetryDelay`: 5, 20, 60 s), so a receipt
+///   still gets its timed retries after the ack used up its own;
+/// - `cancel()` (the screens are hidden or gone) stops the timer and resets the budgets.
+@MainActor
+public final class MeshReplyRetry {
+    public typealias Schedule = @MainActor (_ delay: TimeInterval, _ fire: @escaping @MainActor () -> Void) -> any MeshRetryTimer
+
+    private let schedule: Schedule
+    /// The presentation whose replies the budgets and the timer belong to.
+    public private(set) var presentation: UInt64?
+    /// Timed retries used per reply key in this presentation.
+    public private(set) var attempts: [String: Int] = [:]
+    private var timer: (any MeshRetryTimer)?
+    /// Changes whenever the pending timer is replaced or stopped, so a stale one never fires.
+    private var timerID: UInt64 = 0
+
+    public init(schedule: @escaping Schedule = MeshReplyRetry.taskTimer) {
+        self.schedule = schedule
+    }
+
+    /// True while a timed retry is pending.
+    public var isScheduled: Bool { timer != nil }
+
+    /// Called after each pass that offered `presentation`'s replies. `failed` holds the reply keys
+    /// that hit a passing failure in that pass. When the timer fires it asks `stillCurrent` (is that
+    /// presentation still on screen) before calling `retry`, which runs the next pass.
+    public func passFinished(presentation: UInt64, failed: [String], stillCurrent: @escaping @MainActor () -> Bool,
+                             retry: @escaping @MainActor () -> Void) {
+        if self.presentation != presentation {
+            cancel()
+            self.presentation = presentation
+        }
+        guard !failed.isEmpty else { return stopTimer() }
+        guard timer == nil else { return }
+        let budgets = failed.compactMap { key in MeshReturns.replyRetryDelay(attempt: attempts[key] ?? 0).map { (key, $0) } }
+        guard let delay = budgets.map(\.1).min() else { return }
+        for (key, _) in budgets { attempts[key, default: 0] += 1 }
+        timerID &+= 1
+        let id = timerID
+        timer = schedule(delay) { [weak self] in
+            guard let self, self.timerID == id, self.presentation == presentation else { return }
+            self.timer = nil
+            guard stillCurrent() else { return }
+            retry()
+        }
+    }
+
+    /// The screens are hidden or gone: no timer stays pending and the budgets start again.
+    public func cancel() {
+        stopTimer()
+        attempts = [:]
+        presentation = nil
+    }
+
+    private func stopTimer() {
+        timer?.cancel()
+        timer = nil
+        timerID &+= 1
+    }
+
+    /// The real timer: a main-actor task that sleeps, then fires unless cancelled.
+    public nonisolated static func taskTimer(_ delay: TimeInterval, _ fire: @escaping @MainActor () -> Void) -> any MeshRetryTimer {
+        TaskTimer(Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            fire()
+        })
+    }
+
+    private final class TaskTimer: MeshRetryTimer {
+        let task: Task<Void, Never>
+        init(_ task: Task<Void, Never>) { self.task = task }
+        func cancel() { task.cancel() }
+    }
+}
+
 /// The screens' half of the mesh glue.
 public enum MeshReturns {
     /// Hands the inbox's acks and receipts to `model`, held ones first. Only a text about the note on
