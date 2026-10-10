@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T08:33:00+00:00"
+    "updated_at": "2026-10-10T17:05:00+00:00"
   },
   "facts": {
     "ble_direct_hop_seconds_median": {
@@ -658,19 +658,36 @@
       "display": "$22.13 billion"
     },
     "senegal_mobile_money_adults_pct_2021": {
-      "value": null,
+      "value": 44.8898717927942,
       "unit": "% of adults",
       "kind": "sourced",
-      "status": "pending",
-      "source": "GSMA Senegal brief; re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d \"Mobile money account (% age 15+)\", Senegal 2021: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:05:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "45%"
+    },
+    "senegal_mobile_money_adults_pct_2024": {
+      "value": 66.912648954156,
+      "unit": "% of adults",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d \"Mobile money account (% age 15+)\", Senegal 2024, the latest survey year: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:05:00+00:00",
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ],
+      "display": "67%"
     },
     "senegal_adults_15plus_2025": {
       "value": 11786511,
@@ -685,19 +702,20 @@
       "display": "11.8 million"
     },
     "people_count_estimate": {
-      "value": null,
+      "value": 7886667,
       "unit": "people",
       "kind": "computed",
-      "status": "pending",
-      "source": "ESTIMATE: senegal_adults_15plus_2025 x senegal_mobile_money_adults_pct_2021, task 0.10; Senegalese adults with mobile money",
-      "as_of": null,
+      "status": "computed",
+      "source": "ESTIMATE: senegal_adults_15plus_2025 (11,786,511) x senegal_mobile_money_adults_pct_2024 (66.912648954156%) = 7,886,666.7, rounded; Senegalese adults with a mobile money account, task 0.10. Two survey years apart (2025 population, 2024 Findex survey)",
+      "as_of": "2026-10-10T17:05:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "about 7.9 million"
     },
     "helene_grocer_stores_cash_only": {
       "value": null,
