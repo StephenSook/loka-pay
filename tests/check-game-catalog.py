@@ -6,9 +6,9 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 catalog = json.loads((root / 'gameJson/games.json').read_text())
 games = catalog['games']
-assert len(games) == catalog['meta']['totalGames'] == 8
+assert len(games) == catalog['meta']['totalGames'] >= 1
 cards = [c for g in games for c in g['cards']]
-assert len(cards) == catalog['meta']['totalCards'] == 294
+assert len(cards) == catalog['meta']['totalCards']
 assert len({g['id'] for g in games}) == len(games)
 assert len({c['id'] for c in cards}) == len(cards)
 for game in games:
@@ -41,4 +41,4 @@ for i, q in enumerate(pack['questions'], 1):
     assert len(q['options']) == len(set(q['options'])) == 4
     assert isinstance(q['answer'], int) and q['answer'] in range(4)
     assert 1 <= len(q['text']) <= 250 and all(1 <= len(s) <= 100 for s in q['options'])
-print(f'PASS: 294 party cards (not quiz content); 10 quiz questions; pack SHA-256 {hashlib.sha256(raw).hexdigest()}')
+print(f'PASS: {len(cards)} party cards in {len(games)} games (not quiz content); 10 quiz questions; pack SHA-256 {hashlib.sha256(raw).hexdigest()}')

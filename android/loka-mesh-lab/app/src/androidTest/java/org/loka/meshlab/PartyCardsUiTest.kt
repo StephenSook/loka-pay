@@ -45,7 +45,7 @@ class PartyCardsUiTest {
         engines.getValue(ids[0]).invite(ids.drop(1),PartySettings("never_have_i_ever","group"));pump()
         ids.drop(1).forEach{engines.getValue(it).accept();pump()}
         ui.setContent{MaterialTheme(colorScheme=LokaColors.scheme){Surface(modifier=Modifier.safeDrawingPadding()){Column(Modifier.fillMaxSize()){Box(Modifier.weight(1f)){PartyCardsContent(rendered.value,PartyUiActions({_,_->},{engines.getValue(ids[0]).accept();pump()},{engines.getValue(ids[0]).act(it);pump()},{engines.getValue(ids[0]).resume();pump()},{engines.getValue(ids[0]).end();pump()}),{})};Text("Emulator fixture · In-memory delivery")}}}}
-        ui.onNodeWithText("Up next").assertExists();ui.onNodeWithText("Playing").assertExists();ui.onNodeWithText("Card 1").assertExists();ui.onNodeWithText("Take a sip").assertIsNotEnabled();photo("card-play")
+        ui.onNodeWithText("Up next").assertExists();ui.onNodeWithText("Playing").assertExists();ui.onNodeWithText("Card 1").assertExists();ui.onNodeWithText("Take a sip").assertDoesNotExist();photo("card-play")
         tap("Done / Next");ui.onNodeWithText("Card 2").assertExists();ui.onNodeWithText("Done / Next").assertIsNotEnabled()
         ui.runOnIdle{ids.drop(1).forEach{engines.getValue(it).act("done");pump()}}
         tap("Shuffle");ui.onNodeWithText("Card 5").assertExists()

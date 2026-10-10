@@ -1,7 +1,7 @@
 # web.yml: the judge site: lint, typecheck, build, Playwright.
-# Draft from the pre-event kit. Each TODO names the task that fills it in.
-# Gates run bare: no pipe on any exit path. This job stays red until web/ exists
-# (task 1.8); make it a required check once it is green (task 1.7).
+# Drafted in the pre-event kit; its TODOs were filled in by task 1.8.
+# Gates run bare: no pipe on any exit path. Make this a required check once it is
+# green on main (task 1.7).
 # Production checks (no-login judge path on the deployed origin) belong to the
 # scheduled probe, tracked apart from this verdict.
 name: web
@@ -23,16 +23,19 @@ jobs:
     name: web (lint, typecheck, build, Playwright)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
-          # TODO(1.8): match "packageManager" in web/package.json.
-          version: 10
+          # No "version" here: the action reads "packageManager" (pnpm@12.3.4).
+          # The path is relative to the repository root, not the working directory.
+          package_json_file: web/package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -46,8 +49,16 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      - name: No build-time font downloads (fonts are committed in app/fonts)
+        run: |
+          set -euo pipefail
+          if grep -rnE --include='*.ts' --include='*.tsx' "from ['\"]next/font/google['\"]" app components lib; then
+            echo "::error::next/font/google downloads fonts during the build; use next/font/local with app/fonts"
+            exit 1
+          fi
+
       - name: Typecheck
-        # TODO(1.8): script name from web/package.json (for example "tsc --noEmit").
+        # next typegen writes next-env.d.ts and the route types, then tsc --noEmit.
         run: pnpm run typecheck
 
       - name: Build
@@ -57,7 +68,8 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Playwright (local build)
-        # TODO(1.8): web/e2e/judge.spec.ts covers the no-login judge path.
+        # e2e/judge.spec.ts: the no-login judge path (200, no cookie, no third-party
+        # request). With CI set, the web server starts the build from the step above.
         run: pnpm exec playwright test
 
       - name: Keep the Playwright report on failure
