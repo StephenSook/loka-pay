@@ -73,3 +73,61 @@ struct InboxArrivalTimeTests {
         #expect(inbox.held == ["fresh"])
     }
 }
+
+@Suite("another payer's waiting note is never dropped by a payment that goes through (low finding 2)")
+@MainActor
+struct WaitingNoteKeptTests {
+    let payerA = SoftwareP256Signer()
+    let payerB = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func makeModel() -> ReceiveModel {
+        ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                     ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                     deployment: F.deployment, serverPublicKey: F.serverKey, now: { F.now })
+    }
+
+    func text(_ kind: PaymentTransport.Kind, _ wire: Data) -> String { PaymentTransport.encode(kind, wire) }
+
+    /// Payer B's note (allowance 88) waits; then payer A's allowance (77) is scanned.
+    func noteBWaitsThenAllowanceA(_ model: ReceiveModel) async throws -> SignedNote {
+        let noteB = try F.note(payer: payerB, payee: merchant.keyHash, amount: 700_000, serial: 0, allowanceId: 88)
+        await model.accept(text: text(.note, noteB.wire))
+        #expect(model.waitingNote == noteB)
+        #expect(model.issue?.kind == .allowanceNeeded)
+        await model.accept(text: text(.allowance, F.allowanceWire(payer: payerA.keyHash, id: 77)))
+        return noteB
+    }
+
+    @Test("A's allowance keeps B's 'scan the allowance' step on screen")
+    func allowanceKeepsStep() async throws {
+        let model = makeModel()
+        let noteB = try await noteBWaitsThenAllowanceA(model)
+        #expect(model.lastAllowance?.allowanceId == 77)
+        #expect(model.waitingNote == noteB)
+        #expect(model.readyStep == .noteWaitingForAllowance)
+        #expect(model.issue?.kind == .allowanceNeeded)
+    }
+
+    @Test("A pays while B's note waits: B's note is kept through Next payment and pays when 88 arrives")
+    func paymentKeepsWaitingNote() async throws {
+        let model = makeModel()
+        let noteB = try await noteBWaitsThenAllowanceA(model)
+        let noteA = try F.note(payer: payerA, payee: merchant.keyHash, amount: 1_000_000, serial: 0, allowanceId: 77)
+        await model.accept(text: text(.note, noteA.wire))
+        #expect(model.phase == .received)
+        #expect(model.payment?.note == noteA)
+        #expect(model.waitingNote == noteB, "B's note was dropped when A's note went through")
+
+        model.nextPayment()
+        #expect(model.phase == .ready)
+        #expect(model.waitingNote == noteB)
+        #expect(model.readyStep == .noteWaitingForAllowance)
+        #expect(model.issue?.kind == .allowanceNeeded)
+
+        await model.accept(text: text(.allowance, F.allowanceWire(payer: payerB.keyHash, id: 88)))
+        #expect(model.phase == .received)
+        #expect(model.payment?.note == noteB)
+        #expect(model.waitingNote == nil)
+    }
+}

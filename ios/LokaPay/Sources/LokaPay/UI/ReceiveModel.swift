@@ -57,7 +57,8 @@ public final class ReceiveModel {
     /// The allowance the ready card shows for the payer at the till: set only while ready (from
     /// an allowance code, or the allowance a note was checked against), cleared by Next payment.
     public private(set) var lastAllowance: AllowanceCertificate?
-    /// A valid note that arrived before its allowance certificate.
+    /// A valid note that arrived before its allowance certificate. It keeps waiting through another
+    /// payer's payment, until its allowance arrives or the merchant taps Clear the waiting note.
     public private(set) var waitingNote: SignedNote?
     public private(set) var payment: ReceivedPayment?
     public private(set) var settlement: SettledPayment?
@@ -297,11 +298,18 @@ public final class ReceiveModel {
             // them. The certificate is kept, so the next payer's note still finds it.
             guard phase == .ready else { return }
             show(certificate)
-            issue = nil
             refreshUnsettled(certificate.allowanceId)
-            if let waiting = waitingNote, waiting.note.allowanceId == certificate.allowanceId {
+            guard let waiting = waitingNote else {
+                issue = nil
+                return
+            }
+            if waiting.note.allowanceId == certificate.allowanceId {
                 waitingNote = nil
+                issue = nil
                 await process(waiting, certificate: certificate)
+            } else if issue?.kind != .allowanceNeeded {
+                // Another payer's note still waits for its own allowance: its next step stays.
+                report(.allowanceNeeded)
             }
         } catch {
             report(PayModel.kind(of: error))
@@ -349,7 +357,8 @@ public final class ReceiveModel {
             return report(PayModel.kind(of: error))
         }
         conflictAllowanceId = nil
-        waitingNote = nil
+        // Only this note stops waiting. Another payer's waiting note is kept for after this payment.
+        if waitingNote?.noteId == note.noteId { waitingNote = nil }
         let zeroBars = internetState?().map { $0 == InternetState.none } ?? false
         payment = ReceivedPayment(note: note, certificate: certificate,
                                   receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
@@ -491,13 +500,14 @@ public final class ReceiveModel {
         + "screen afterwards, so settle first when there is signal."
 
     /// Clears the screen for the next payer. The ledger keeps every accepted note; Bluetooth codes
-    /// that arrived during the payment are checked now, in arrival order.
+    /// that arrived during the payment are checked now, in arrival order. A note still waiting for
+    /// its allowance belongs to a payer who has not paid yet, so it stays and its next step shows
+    /// again (Clear the waiting note drops it).
     public func nextPayment() {
         guard phase != .unavailable, !isWorking else { return }
         payment = nil
         settlement = nil
         pendingSettlement = nil
-        waitingNote = nil
         issue = nil
         conflictAllowanceId = nil
         // The previous payer's allowance is not progress for the next one.
@@ -505,6 +515,7 @@ public final class ReceiveModel {
         unsettledTotal = nil
         unsettledAllowanceId = nil
         phase = .ready
+        if waitingNote != nil { report(.allowanceNeeded) }
         inbox?.release()
     }
 
