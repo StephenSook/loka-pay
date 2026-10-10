@@ -225,9 +225,9 @@ public final class ReceiveModel {
     /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
         guard phase != .unavailable else { return }
-        inbox?.attach(self) { [weak self] text in
+        inbox?.attach(self) { [weak self] text, arrivedAt in
             guard let self else { return false }
-            self.enqueueFromInbox(text)
+            self.enqueueFromInbox(text, arrivedAt: arrivedAt)
             return true
         }
     }
@@ -237,11 +237,11 @@ public final class ReceiveModel {
         inbox?.detach(self)
     }
 
-    private func enqueueFromInbox(_ text: String) {
+    private func enqueueFromInbox(_ text: String, arrivedAt: Date) {
         let previous = inboxTail
         inboxTail = Task { [weak self] in
             await previous?.value
-            await self?.acceptFromInbox(text)
+            await self?.acceptFromInbox(text, arrivedAt: arrivedAt)
         }
     }
 
@@ -249,7 +249,7 @@ public final class ReceiveModel {
     /// is ready for a payer: during a payment it goes back to the inbox until Next payment, and never
     /// replaces that payment's issue (a settlement error, a ledger write that failed). Protocol texts
     /// for other steps are counted, not reported.
-    private func acceptFromInbox(_ text: String) async {
+    private func acceptFromInbox(_ text: String, arrivedAt: Date) async {
         guard phase != .unavailable, merchant != nil else { return }
         if case .failure(.wrongKind) = ScanParser.parse(text, accepting: [.allowance, .note]) {
             // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
@@ -258,7 +258,8 @@ public final class ReceiveModel {
             return
         }
         guard phase == .ready else {
-            inbox?.hold(text)
+            // Back with its first arrival time, so the inbox age limit still counts from then.
+            inbox?.hold(text, arrivedAt: arrivedAt)
             return
         }
         await accept(text: text)

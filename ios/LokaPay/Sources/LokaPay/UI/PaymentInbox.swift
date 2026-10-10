@@ -36,8 +36,9 @@ public final class PaymentInbox {
     public let maxAge: TimeInterval
     private let now: @MainActor () -> Date
     @ObservationIgnored private var listener: ObjectIdentifier?
-    /// Returns false when its model is gone; the inbox then detaches and holds the text.
-    @ObservationIgnored private var handler: (@MainActor (String) -> Bool)?
+    /// Takes a text and the time it first arrived. Returns false when its model is gone; the inbox
+    /// then detaches and holds the text.
+    @ObservationIgnored private var handler: (@MainActor (String, Date) -> Bool)?
 
     public init(maxAge: TimeInterval = PaymentInbox.defaultMaxAge, now: @escaping @MainActor () -> Date = { Date() }) {
         self.maxAge = maxAge
@@ -49,19 +50,22 @@ public final class PaymentInbox {
 
     /// Hands one received transport text to the attached Receive model, or holds it.
     public func deliver(_ text: String) {
+        let arrived = now()
         if let handler {
-            if handler(text) { return }
+            if handler(text, arrived) { return }
             listener = nil
             self.handler = nil
         }
-        hold(text)
+        hold(text, arrivedAt: arrived)
     }
 
     /// Keeps `text` until a Receive screen can take it: none is attached, or the attached one is
-    /// on a payment and calls `release()` when it is ready for the next payer.
-    func hold(_ text: String) {
+    /// on a payment and calls `release()` when it is ready for the next payer. `arrivedAt` is when
+    /// the text first reached this inbox: a text handed over and given back keeps its first time,
+    /// so going round a payment never restarts its `maxAge`.
+    func hold(_ text: String, arrivedAt: Date) {
+        waiting.append(Held(text: text, at: arrivedAt))
         dropExpired()
-        waiting.append(Held(text: text, at: now()))
         if waiting.count > Self.capacity {
             waiting.removeFirst()
             droppedWhileDetached += 1
@@ -75,7 +79,7 @@ public final class PaymentInbox {
         waiting = []
         for item in texts {
             if let handler {
-                if handler(item.text) { continue }
+                if handler(item.text, item.at) { continue }
                 listener = nil
                 self.handler = nil
             }
@@ -85,7 +89,7 @@ public final class PaymentInbox {
     }
 
     /// Makes `owner` the listener and hands it every held text in arrival order.
-    func attach(_ owner: AnyObject, handler: @escaping @MainActor (String) -> Bool) {
+    func attach(_ owner: AnyObject, handler: @escaping @MainActor (String, Date) -> Bool) {
         listener = ObjectIdentifier(owner)
         self.handler = handler
         release()
