@@ -198,6 +198,9 @@ test("a send that stays pending: no repost starts past 30 s, then Still pending 
   await expect(page.getByTestId("send-explorer")).toHaveAttribute("href", `https://explorer.solana.com/tx/${TEST_TX}?cluster=devnet`);
   await expect(page.getByTestId("send-retry")).toHaveCount(1);
   await expect(page.getByTestId("allowance-qr")).toHaveCount(0);
+  // Past one more retryAfter: nothing else was sent after the page said Still pending.
+  await page.waitForTimeout(11_000);
+  expect(posts.length).toBe(3);
 });
 
 test("a repeat (200) says the server returned the recipient's existing send, with its first terms", async ({ page }) => {
