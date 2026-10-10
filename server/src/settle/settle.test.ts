@@ -1,0 +1,235 @@
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, test, vi } from 'vitest';
+import Fastify from 'fastify';
+import { PGlite } from '@electric-sql/pglite';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { base58 } from '@scure/base';
+import * as P from '@lokapay/protocol';
+import { SettlementStore } from './store.js';
+import { SettlementService } from './service.js';
+import { registerSettlementRoutes } from './routes.js';
+import { testDatabase } from './test-database.js';
+import type { ChainGateway, PreparedAttempt, ChainDecision } from './types.js';
+
+const vectors = JSON.parse(readFileSync(new URL('../../../protocol/vectors/payment-v1.json', import.meta.url), 'utf8'));
+const deployment: P.Deployment = {
+  programId: P.fromHex(vectors.constants.programIdHex), clusterId: 0,
+  mint: P.fromHex(vectors.constants.mintHex),
+};
+const note = P.base64urlEncode(P.fromHex(vectors.notes[0].wireHex));
+const ack = P.base64urlEncode(P.fromHex(vectors.acks[0].wireHex));
+const noteId = P.toHex(P.noteId(P.fromHex(vectors.notes[0].noteHex)));
+const closers: (() => Promise<unknown>)[] = [];
+afterEach(async () => { while (closers.length) await closers.pop()!(); });
+
+class Chain implements ChainGateway {
+  prepare = vi.fn(async (validated: P.ValidatedNote): Promise<PreparedAttempt> => ({
+    signature: base58.encode(new Uint8Array([...validated.noteId, ...validated.noteId])),
+    rawTransaction: 'test-only', blockhash: base58.encode(new Uint8Array(32).fill(1)), lastValidBlockHeight: 100,
+  }));
+  send = vi.fn(async (_attempt: PreparedAttempt): Promise<void> => {});
+  observe = vi.fn(async (_signature: string): Promise<ChainDecision | null> => this.decision);
+  decision: ChainDecision | null = { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 };
+}
+
+async function fixture() {
+  const db = await testDatabase();
+  closers.push(() => db.close());
+  const store = new SettlementStore(db);
+  await store.migrate();
+  const chain = new Chain();
+  const seed = randomBytes(32);
+  const sign = vi.fn((fields: P.ConfFields) => P.signConfWire(fields, seed));
+  const service = new SettlementService({ deployment, store, chain, signConfirmation: sign, now: () => 1800000001 });
+  const app = Fastify({ logger: false });
+  registerSettlementRoutes(app, service);
+  closers.push(() => app.close());
+  const post = (body: unknown = { note }) => app.inject({ method: 'POST', url: '/v1/notes', payload: body as object });
+  const count = async () => (await db.query<{ count: number }>('SELECT COUNT(*)::int AS count FROM settlement_attempts')).rows[0].count;
+  return { db, store, chain, seed, sign, service, app, post, count };
+}
+
+test('vector upload produces a verified CONF; repeats return the original result', async () => {
+  const f = await fixture();
+  const first = await f.post({ note, ack });
+  expect(first.statusCode).toBe(200);
+  const body = first.json();
+  expect(body).toMatchObject({ noteId, status: 'settled', error: null, errorCode: 0, replayed: false });
+  const conf = P.verifyConfWire(P.base64urlDecode(body.conf), ed25519.getPublicKey(f.seed));
+  expect(P.toHex(conf.noteId)).toBe(noteId);
+  expect(conf.status).toBe(1);
+  expect(conf.uploadedAt).toBe(1800000001n);
+  expect(base58.encode(conf.txSignature)).toBe(body.signature);
+  expect((await f.post()).json()).toEqual({ ...body, replayed: true });
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(f.sign).toHaveBeenCalledTimes(1);
+  expect(await f.count()).toBe(1);
+});
+
+test.each(vectors.invalidNotes.map((v: { name: string; wireHex: string; error: string }): [string, string, string] => [v.name, v.wireHex, v.error]) as [string, string, string][])(
+  'refuses %s before any store access, signing or RPC', async (_name, wireHex, error) => {
+    const f = await fixture();
+    const claim = vi.spyOn(f.store, 'claim');
+    const get = vi.spyOn(f.store, 'get');
+    const response = await f.post({ note: P.base64urlEncode(P.fromHex(wireHex)) });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({ error, message: error });
+    expect(claim).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(f.chain.prepare).not.toHaveBeenCalled();
+    expect(f.sign).not.toHaveBeenCalled();
+    expect(await f.count()).toBe(0);
+  },
+);
+
+test('bad signature cannot poison the same note id, including after settlement', async () => {
+  const f = await fixture();
+  const wire = P.base64urlDecode(note);
+  wire[141] ^= 1;
+  const bad = { note: P.base64urlEncode(wire) };
+  expect((await f.post(bad)).statusCode).toBe(422);
+  expect((await f.app.inject(`/v1/notes/${noteId}`)).statusCode).toBe(404);
+  expect((await f.post()).statusCode).toBe(200);
+  expect((await f.post(bad)).statusCode).toBe(422);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('bad ACK is unsigned and unsaved; a later valid ACK preserves the original CONF', async () => {
+  const f = await fixture();
+  const bad = P.base64urlDecode(ack);
+  bad[56] ^= 1;
+  expect((await f.post({ note, ack: P.base64urlEncode(bad) })).json().error).toBe('bad_ack');
+  expect(await f.count()).toBe(0);
+  expect(f.sign).not.toHaveBeenCalled();
+  const first = (await f.post()).json();
+  const again = (await f.post({ note, ack })).json();
+  expect(again).toEqual({ ...first, replayed: true });
+  expect((await f.store.get(noteId))?.ack).toBe(ack);
+});
+
+test('two service instances sharing the database prepare and send only once', async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  f.chain.send.mockImplementation(async () => { await barrier; });
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  const first = f.service.submit({ note });
+  await vi.waitFor(() => expect(f.chain.send).toHaveBeenCalledTimes(1));
+  f.chain.decision = null;
+  const second = await other.submit({ note });
+  expect(second.statusCode).toBe(202);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+  release();
+  await first;
+  f.chain.decision = { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 };
+  expect((await other.get(noteId)).statusCode).toBe(200);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('signature is durable before broadcast; uncertain send remains pending across service restart', async () => {
+  const f = await fixture();
+  f.chain.decision = null;
+  f.chain.send.mockImplementation(async attempt => {
+    expect((await f.store.get(noteId))?.attempt).toEqual(attempt);
+    throw new Error('timeout after broadcast');
+  });
+  expect((await f.post()).statusCode).toBe(202);
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  for (let i = 0; i < 3; i++) {
+    expect((await other.submit({ note })).statusCode).toBe(202);
+    expect((await other.get(noteId)).statusCode).toBe(202);
+  }
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(f.sign).not.toHaveBeenCalled();
+  f.chain.decision = { slot: 13, blockTime: 1800000002, error: null, errorCode: 0 };
+  expect((await other.get(noteId)).statusCode).toBe(200);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('confirmed cheat produces status 2, its named program error and its own signature', async () => {
+  const f = await fixture();
+  f.chain.decision = { slot: 13, blockTime: 1800000002, error: 'SerialUsed', errorCode: 6011 };
+  const body = (await f.post()).json();
+  expect(body).toMatchObject({ status: 'failed', error: 'SerialUsed', errorCode: 6011 });
+  expect(body.explorer).toContain(`/tx/${body.signature}?cluster=devnet`);
+  expect(P.verifyConfWire(P.base64urlDecode(body.conf), ed25519.getPublicKey(f.seed)).status).toBe(2);
+  expect((await f.post()).json()).toEqual({ ...body, replayed: true });
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a claim without a saved signature is never resumed or automatically released', async () => {
+  const f = await fixture();
+  await f.store.claim({ noteId, note, ack: null, uploadedAt: 1800000001 });
+  expect((await f.post()).json()).toEqual({ noteId, status: 'pending', signature: null, retryAfter: 2 });
+  expect(f.chain.prepare).not.toHaveBeenCalled();
+});
+
+test('failure saving the signed attempt never broadcasts and never signs a confirmation', async () => {
+  const f = await fixture();
+  vi.spyOn(f.store, 'saveAttempt').mockRejectedValue(new Error('database unavailable'));
+  expect((await f.post()).statusCode).toBe(202);
+  expect(f.chain.send).not.toHaveBeenCalled();
+  expect(f.sign).not.toHaveBeenCalled();
+  expect((await f.post()).statusCode).toBe(202);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+});
+
+test('malformed bodies, noncanonical encoding and oversized payloads are rejected', async () => {
+  const f = await fixture();
+  for (const body of [{}, { note, cheat: true }, { note, ack: null }, { note: 12 }]) {
+    expect((await f.post(body)).statusCode).toBe(400);
+  }
+  expect((await f.post({ note: note + '=' })).json().error).toBe('bad_base64url');
+  expect((await f.post({ note: 'A'.repeat(4096) })).statusCode).toBe(413);
+  expect(await f.count()).toBe(0);
+});
+
+test('a disk journal survives database restart and still never rebroadcasts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'loka-settle-test-'));
+  const seed = randomBytes(32);
+  const chain = new Chain();
+  chain.decision = null;
+  let database = new PGlite(directory);
+  try {
+    let store = new SettlementStore(database);
+    await store.migrate();
+    const options = { deployment, chain, signConfirmation: (fields: P.ConfFields) => P.signConfWire(fields, seed) };
+    expect((await new SettlementService({ ...options, store }).submit({ note })).statusCode).toBe(202);
+    await database.close();
+    database = new PGlite(directory);
+    store = new SettlementStore(database);
+    const resumed = new SettlementService({ ...options, store });
+    expect((await resumed.submit({ note })).statusCode).toBe(202);
+    expect(chain.send).toHaveBeenCalledTimes(1);
+    chain.decision = { slot: 99, blockTime: 1800000050, error: null, errorCode: 0 };
+    expect((await resumed.get(noteId)).statusCode).toBe(200);
+    expect(chain.prepare).toHaveBeenCalledTimes(1);
+  } finally {
+    await database.close();
+    // Only this test's generated directory is removed.
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('claim failure never reaches the transaction signer', async () => {
+  const f = await fixture();
+  vi.spyOn(f.store, 'claim').mockRejectedValue(new Error('database unavailable'));
+  expect((await f.post()).statusCode).toBe(500);
+  expect(f.chain.prepare).not.toHaveBeenCalled();
+  expect(f.chain.send).not.toHaveBeenCalled();
+});
+
+test('unavailable confirmation metadata stays pending without a signed decision', async () => {
+  const f = await fixture();
+  f.chain.observe.mockRejectedValue(new Error('RPC timeout'));
+  expect((await f.post()).statusCode).toBe(202);
+  expect((await f.post()).statusCode).toBe(202);
+  expect(f.sign).not.toHaveBeenCalled();
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
