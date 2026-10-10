@@ -31,7 +31,13 @@ interface Devnet {
   requests: number;
 }
 
-async function routeDevnet(page: Page, list: string[], status?: number): Promise<Devnet> {
+/** A TEST FIXTURE transaction that is not in the recording: its signature list entry and its getTransaction answer. */
+interface Extra {
+  entry: { signature: string; slot: number; err: unknown; blockTime: number | null };
+  tx: unknown;
+}
+
+async function routeDevnet(page: Page, list: string[], status?: number, extra: Record<string, Extra> = {}): Promise<Devnet> {
   const devnet: Devnet = { list, status, calls: {}, requests: 0 };
   await page.route(DEVNET, async (route: Route) => {
     devnet.requests += 1;
@@ -46,11 +52,12 @@ async function routeDevnet(page: Page, list: string[], status?: number): Promise
       if (msg.method === "getAccountInfo" && forAllowance) return { jsonrpc: "2.0", id: msg.id, result: recorded.getAccountInfo.result };
       if (msg.method === "getSignaturesForAddress" && forAllowance) {
         const all = recorded.getSignaturesForAddress.result as Array<{ signature: string }>;
-        return { jsonrpc: "2.0", id: msg.id, result: devnet.list.map((s) => all.find((x) => x.signature === s)) };
+        return { jsonrpc: "2.0", id: msg.id, result: devnet.list.map((s) => extra[s]?.entry ?? all.find((x) => x.signature === s)) };
       }
       if (msg.method === "getTransaction") {
-        const tx = recorded.getTransaction[msg.params[0] as string];
-        return { jsonrpc: "2.0", id: msg.id, result: tx ? tx.result : null };
+        const signature = msg.params[0] as string;
+        const tx = recorded.getTransaction[signature];
+        return { jsonrpc: "2.0", id: msg.id, result: extra[signature] ? extra[signature].tx : tx ? tx.result : null };
       }
       return { jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "not in the test fixture (wrong address?)" } };
     };
@@ -139,6 +146,47 @@ test("/watch: the cheat landing while the page is open appears within one read, 
   await expect(cheat.getByTestId("watch-headline")).toHaveText("Refused: SerialUsed (6011)", { timeout: 10_000 });
   await expect(cheat.getByTestId("watch-new")).toHaveText("New");
   await expect(page.getByTestId("watch-row").first()).toHaveAttribute("data-signature", REFUSED_IPHONE);
+});
+
+test("/watch: another program's 6011 at instruction 0 is not shown as a refusal, and never as SerialUsed", async ({ page }) => {
+  // TEST FIXTURE, the attack: a transaction on this allowance whose instruction 0 is another
+  // program failing with Custom 6011, and whose instruction 1 is a loka_vault redeem_note (the
+  // recorded refusal's bytes) that never ran. Built from the recorded refusal 3XtQtnHR.
+  const base = recorded.getTransaction[REFUSED_IPHONE].result;
+  const OTHER = "Another1111111111111111111111111111111111111";
+  const CRAFTED = "Crafted1111111111111111111111111111111111111111111111111111111111111111111111111111111";
+  const err = { InstructionError: [0, { Custom: 6011 }] };
+  const message = base.transaction.message;
+  const tx = {
+    ...base,
+    slot: 509_700_000,
+    meta: { ...base.meta, err, logMessages: [`Program ${OTHER} invoke [1]`, `Program ${OTHER} failed: custom program error: 0x177b`] },
+    transaction: {
+      ...base.transaction,
+      signatures: [CRAFTED],
+      message: { ...message, accountKeys: [...message.accountKeys, OTHER], instructions: [{ ...message.instructions[0], programIdIndex: message.accountKeys.length }, message.instructions[1]] },
+    },
+  };
+  await routeDevnet(page, [CRAFTED, SETTLED_IPHONE, OPEN], undefined, {
+    [CRAFTED]: { entry: { signature: CRAFTED, slot: 509_700_000, err, blockTime: base.blockTime }, tx },
+  });
+  await page.goto(`/watch?a=${ID}`);
+  await expect(row(page, SETTLED_IPHONE)).toHaveAttribute("data-kind", "paid");
+  await expect(page.getByTestId("watch-list-state")).toContainText("2 are not a payment");
+  await expect(row(page, CRAFTED)).toHaveCount(0);
+  await expect(page.getByTestId("watch-row")).toHaveCount(1);
+  await expect(page.locator("main")).not.toContainText("SerialUsed");
+  await expect(page.getByTestId("watch-list")).not.toContainText("Refused");
+});
+
+test("/watch: with no payment among the transactions read, it says how many it read, and that the meter's payments are further back", async ({ page }) => {
+  // TEST FIXTURE: devnet lists only the open_allowance, while the recorded meter shows 2 serials used.
+  await routeDevnet(page, [OPEN]);
+  await page.goto(`/watch?a=${ID}`);
+  await expect(page.getByTestId("watch-empty")).toHaveText(
+    "The one transaction devnet lists on this allowance is not a payment. The meter shows 2 serials used, so its earlier payments are beyond the one transaction this page reads. A new payment shows here within about 5 s of settling on devnet.",
+  );
+  await expect(page.getByTestId("watch-empty")).not.toContainText("No payments");
 });
 
 test("/watch: a hidden page stops reading devnet, and reads again when shown", async ({ page }) => {

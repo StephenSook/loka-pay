@@ -117,26 +117,78 @@ test.describe("one transaction on the allowance", () => {
     expect(summarizeAllowanceTx(tx(REFUSED_RUN2), P, ID)).toMatchObject({ kind: "refused", error: { name: "SerialUsed" } });
   });
 
-  test("a refusal whose logs lost the error line is named from its error code", () => {
-    // TEST FIXTURE: the recorded refusal with the AnchorError log line removed.
+  test("a refusal whose logs lost the error line is named from its error code, at loka_vault's own instruction 1", () => {
+    // TEST FIXTURE: the recorded refusal with the AnchorError log line removed. Its err is
+    // InstructionError [1, Custom 6011], and instruction 1 is addressed to loka_vault.
     const raw = tx(REFUSED_IPHONE) as { meta: { logMessages: string[] } };
     const cut = { ...raw, meta: { ...raw.meta, logMessages: raw.meta.logMessages.filter((l) => !l.includes("AnchorError")) } };
     expect(summarizeAllowanceTx(cut, P, ID)).toMatchObject({ kind: "refused", error: { name: "SerialUsed", number: 6011 }, errorWords: null });
   });
 
-  test("a refusal with an error the program does not define is said in words", () => {
-    // TEST FIXTURE: the recorded refusal, failing at the precompile instead.
+  test("a failure at loka_vault's instruction with no program error is refused, said in words", () => {
+    // TEST FIXTURES: the recorded refusal, failing at instruction 1 with a runtime error, then with
+    // a code the program does not define, and no AnchorError line.
     const raw = tx(REFUSED_IPHONE) as { meta: { logMessages: string[] } };
-    const other = { ...raw, meta: { ...raw.meta, err: { InstructionError: [0, "InvalidInstructionData"] }, logMessages: [`Program ${P} invoke [1]`, "Program log: Instruction: RedeemNote"] } };
-    expect(summarizeAllowanceTx(other, P, ID)).toMatchObject({ kind: "refused", error: null, errorWords: "InvalidInstructionData at instruction 0." });
+    const logs = [`Program ${P} invoke [1]`, "Program log: Instruction: RedeemNote"];
+    const runtime = { ...raw, meta: { ...raw.meta, err: { InstructionError: [1, "InvalidAccountData"] }, logMessages: logs } };
+    expect(summarizeAllowanceTx(runtime, P, ID)).toMatchObject({ kind: "refused", error: null, errorWords: "InvalidAccountData at instruction 1." });
+    const undefinedCode = { ...raw, meta: { ...raw.meta, err: { InstructionError: [1, { Custom: 3012 }] }, logMessages: logs } };
+    expect(summarizeAllowanceTx(undefinedCode, P, ID)).toMatchObject({
+      kind: "refused",
+      error: null,
+      errorWords: "Error code 3012 at instruction 1, which this program does not define.",
+    });
+  });
+
+  test("a hand-built transaction whose instruction 0 is another program failing with 6011 is not a refusal, and not SerialUsed", () => {
+    // TEST FIXTURE, the attack: instruction 0 is another program that fails with Custom 6011, and
+    // instruction 1 is a loka_vault redeem_note (the recorded one's bytes) listing this
+    // allowance, so the transaction is on the allowance's signature list. loka_vault never ran.
+    const raw = tx(REFUSED_IPHONE) as {
+      meta: Record<string, unknown>;
+      transaction: { message: { accountKeys: string[]; instructions: Array<Record<string, unknown>> } };
+    };
+    const OTHER = "Another1111111111111111111111111111111111111";
+    const { accountKeys, instructions } = raw.transaction.message;
+    const crafted = {
+      ...raw,
+      meta: {
+        ...raw.meta,
+        err: { InstructionError: [0, { Custom: 6011 }] },
+        logMessages: [`Program ${OTHER} invoke [1]`, `Program ${OTHER} consumed 300 of 400000 compute units`, `Program ${OTHER} failed: custom program error: 0x177b`],
+      },
+      transaction: {
+        ...raw.transaction,
+        message: { ...raw.transaction.message, accountKeys: [...accountKeys, OTHER], instructions: [{ ...instructions[0], programIdIndex: accountKeys.length }, instructions[1]] },
+      },
+    };
+    expect(accountKeys[instructions[1].programIdIndex as number]).toBe(P);
+    expect(accountKeys).toContain(ADDRESS);
+    const summary = summarizeAllowanceTx(crafted, P, ID);
+    expect(summary).toMatchObject({ kind: "other", result: "failed", error: null, errorWords: null });
+    expect(JSON.stringify(summary)).not.toContain("SerialUsed");
+    // The same with no logs at all.
+    expect(summarizeAllowanceTx({ ...crafted, meta: { ...crafted.meta, logMessages: [] } }, P, ID)).toMatchObject({ kind: "other", error: null });
+    // A real redeem_note failing at the precompile (instruction 0): loka_vault never ran either.
+    const precompile = { ...raw, meta: { ...raw.meta, err: { InstructionError: [0, { Custom: 2 }] }, logMessages: [] } };
+    expect(summarizeAllowanceTx(precompile, P, ID)).toMatchObject({ kind: "other", error: null });
   });
 
   test("the open_allowance is not a payment", () => {
     expect(summarizeAllowanceTx(tx(OPEN), P, ID)).toMatchObject({ kind: "other", amountUnits: null, error: null });
   });
 
-  test("a settled redeem whose event names another allowance shows no amount for this one", () => {
-    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, "1")).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
+  test("a settled redeem whose complete logs name only another allowance is not a payment from this one", () => {
+    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, "1")).toMatchObject({ kind: "other", amountUnits: null, serial: null });
+  });
+
+  test("a settled redeem with no NoteRedeemed event to read is paid, amount unknown", () => {
+    // TEST FIXTURES: the recorded payment with its event lines removed, then with its logs cut short.
+    const raw = tx(SETTLED_IPHONE) as { meta: { logMessages: string[] } };
+    const noEvent = { ...raw, meta: { ...raw.meta, logMessages: raw.meta.logMessages.filter((l) => !l.startsWith("Program data: ")) } };
+    expect(summarizeAllowanceTx(noEvent, P, ID)).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
+    const truncated = { ...raw, meta: { ...raw.meta, logMessages: [...raw.meta.logMessages, "Log truncated"] } };
+    expect(summarizeAllowanceTx(truncated, P, "1")).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
   });
 
   test("an answer of the wrong shape is null", () => {

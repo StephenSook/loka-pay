@@ -61,11 +61,7 @@ export function WatchPanel({ allowanceId, programId }: { allowanceId: string; pr
           </h2>
           <ListLine list={list} reading={reading} notPayments={notPayments} />
         </div>
-        {list.kind === "ok" && reading === 0 && shown.length === 0 ? (
-          <p className="rounded-card border-2 border-dashed border-ink p-5" data-testid="watch-empty">
-            No payments from this allowance yet. A payment shows here within about {POLL_MS / 1000} s of settling on devnet.
-          </p>
-        ) : null}
+        {list.kind === "ok" && reading === 0 && shown.length === 0 ? <EmptyList count={list.count} account={account} /> : null}
         <ul className="flex flex-col gap-4" data-testid="watch-list">
           {shown.map((entry) => (
             <EntryRow key={entry.signature} entry={entry} />
@@ -197,6 +193,30 @@ function PollingLine({ polling }: { polling: Polling }) {
         )}
         {polling.kind === "failed" && <>Stopped: {polling.reason}.</>}
       </span>
+    </p>
+  );
+}
+
+/**
+ * No payment among what this page read. It reads only the newest transactions on the allowance
+ * (lib/watch.ts WATCH_SIGNATURES), so it says how many, and when the meter shows serials used,
+ * that the allowance's payments lie beyond them.
+ */
+function EmptyList({ count, account }: { count: number; account: AccountState }) {
+  const read = account.kind === "ok" ? account.read : account.kind === "failed" ? (account.previous?.read ?? null) : null;
+  const used = read?.kind === "found" ? read.meter.serialsUsed : 0;
+  const what = count === 1 ? "the one transaction" : `the newest ${count} transactions`;
+  return (
+    <p className="rounded-card border-2 border-dashed border-ink p-5" data-testid="watch-empty">
+      {count === 0
+        ? "Devnet lists no transactions on this allowance."
+        : count === 1
+          ? "The one transaction devnet lists on this allowance is not a payment."
+          : `None of the newest ${count} transactions on this allowance is a payment.`}
+      {count > 0 && used > 0
+        ? ` The meter shows ${used} serial${used === 1 ? "" : "s"} used, so its earlier payments are beyond ${what} this page reads.`
+        : ""}{" "}
+      A new payment shows here within about {POLL_MS / 1000} s of settling on devnet.
     </p>
   );
 }

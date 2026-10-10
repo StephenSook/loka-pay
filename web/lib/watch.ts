@@ -11,8 +11,12 @@
 // rate-limited answer, which also pauses the poll. While the page is hidden nothing is sent.
 //
 // A settled redeem_note is "paid", with the amount and serial from its NoteRedeemed event for
-// this allowance; a failed one is "refused", named by the program's own log line or, without
-// one, by its error code (lib/program-errors.ts). Other transactions on the account (its
+// this allowance; one whose events name only other allowances is not a payment from this one. A
+// failed redeem_note is "refused" only when loka_vault itself raised the failure: its own log
+// line names the error, or the failing top-level instruction is addressed to loka_vault (then
+// its error code names it, lib/program-errors.ts). A transaction that failed in another
+// program's instruction, or for the whole transaction, was not refused by loka_vault, whatever
+// its instruction data says. Those and the other transactions on the account (its
 // open_allowance) are "other" and are not payments. Nothing is invented while a read is pending
 // or failed: the page says what it is waiting for and what failed.
 
@@ -20,10 +24,10 @@ import { readAllowanceAnswer, type AllowanceRead } from "./allowance-read";
 import { parseProgramLogs, resultOf, summarizeTransaction, type ProgramError, type TxResult } from "./logs";
 import { allowanceAddress } from "./pda";
 import { DETAIL_ATTEMPTS, DETAIL_BATCH, DETAIL_BUDGET, DETAIL_WINDOW_MS, RATE_LIMIT_PAUSE_MS } from "./program-feed";
-import { describeTxError, programErrorOf } from "./program-errors";
+import { describeTxError, failureOwner, ownInstructionsOf, programErrorOf } from "./program-errors";
 import { RpcError, describeFailure, rpcBatch, type RpcOutcome, type RpcRequest } from "./solana";
 import { isUnixSeconds } from "./time";
-import { formatUnits } from "./vault";
+import { formatUnits, type VaultEvent } from "./vault";
 
 /** How often the page reads devnet while it is visible. */
 export const POLL_MS = 5000;
@@ -58,7 +62,10 @@ interface RawTx {
 /**
  * One getTransaction answer (encoding json) for a transaction on the allowance. Null for an
  * answer of the wrong shape. The amount and serial come only from a settled redeem_note's
- * NoteRedeemed event naming this allowance: a failed transaction moved nothing.
+ * NoteRedeemed event naming this allowance: a failed transaction moved nothing. A settled one
+ * whose complete logs carry NoteRedeemed events, none for this allowance, paid another allowance
+ * and is "other"; with no event to read (cut-short logs, or none logged) it is paid, amount
+ * unknown. A failed one is "refused" only when loka_vault raised the failure (see above).
  */
 export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceId: string): AllowanceTx | null {
   const summary = summarizeTransaction(raw, programId);
@@ -79,20 +86,26 @@ export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceI
   if (!summary.actions.includes("redeem_note")) return base;
   if (summary.result === "succeeded") {
     const logs = Array.isArray(metaObj?.logMessages) ? metaObj.logMessages.filter((l): l is string => typeof l === "string") : [];
-    const event = parseProgramLogs(logs, programId).events.find(
-      (e) => e.kind === "NoteRedeemed" && e.allowanceId.toString() === allowanceId,
-    );
+    const parsed = parseProgramLogs(logs, programId);
+    const redeemed = parsed.events.filter((e): e is Extract<VaultEvent, { kind: "NoteRedeemed" }> => e.kind === "NoteRedeemed");
+    const event = redeemed.find((e) => e.allowanceId.toString() === allowanceId);
+    // Complete logs that name only other allowances: this allowance paid nothing here.
+    if (!event && redeemed.length > 0 && !parsed.truncated) return base;
     return {
       ...base,
       kind: "paid",
-      amountUnits: event?.kind === "NoteRedeemed" ? event.amount.toString() : null,
-      serial: event?.kind === "NoteRedeemed" ? event.serial : null,
+      amountUnits: event ? event.amount.toString() : null,
+      serial: event ? event.serial : null,
     };
   }
   if (summary.result === "failed") {
     const err = metaObj && "err" in metaObj ? metaObj.err : undefined;
-    const error = summary.error ?? programErrorOf(err);
-    return { ...base, kind: "refused", error, errorWords: error ? null : describeTxError(err) };
+    const own = ownInstructionsOf(raw, programId);
+    // Its own log line, or a failing instruction addressed to it: otherwise loka_vault did not
+    // refuse this transaction (it may never have run), so it is not a refused payment.
+    if (summary.error === null && failureOwner(err, own) !== "ours") return base;
+    const error = summary.error ?? programErrorOf(err, own);
+    return { ...base, kind: "refused", error, errorWords: error ? null : describeTxError(err, own) };
   }
   return { ...base, kind: "unknown" };
 }
