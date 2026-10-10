@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T17:45:00+00:00"
+    "updated_at": "2026-10-10T20:45:00+00:00"
   },
   "facts": {
     "zero_bar_payments_settled": {
@@ -937,6 +937,58 @@
         "home",
         "/verify",
         "README"
+      ]
+    },
+    "proof_pair_iphone_settled_tx": {
+      "value": "2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 4:44 PM ET: slot 509659589, meta.err null, loka_vault logged \"Instruction: RedeemNote\", fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries the 141-byte note: sha256 equals proof_pair_iphone_settled_note_id, amount 250000 base units, serial 0, allowance 10652706154269594633. The signing device and transport (a teammate's iPhone and its Secure Enclave key, a camera QR between two offline phones, settled when the merchant phone came online) come from the team's first two-phone test, Sat Oct 10; the chain shows the payer's P-256 key, not the device",
+      "as_of": "2026-10-10T20:23:21+00:00",
+      "caveat": "Signed on an iPhone (Secure Enclave key), paid offline by camera QR, Sat Oct 10 4:23 PM ET. Sandbox tokens on devnet.",
+      "surfaces": [
+        "/judge",
+        "home",
+        "README"
+      ]
+    },
+    "proof_pair_iphone_refused_tx": {
+      "value": "3XtQtnHRKC3QvhBGye8gTMWimPg3iPXuBskf3LMsQEhJPdzeGiqEEjrmjFLqXFTJMQ9JFAitWoCbuEGFSLKjZc9n",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 4:44 PM ET: slot 509661581, meta.err InstructionError [1, Custom 6011], loka_vault logged \"Error Code: SerialUsed. Error Number: 6011\", fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries the 141-byte note: sha256 equals proof_pair_iphone_refused_note_id, amount 250000 base units, serial 0, allowance 10652706154269594633, the same payer key as proof_pair_iphone_settled_tx and a different payee key hash. Signed on the same iPhone with the app's \"Try to cheat\" control for a different merchant phone (the team's first two-phone test, Sat Oct 10)",
+      "as_of": "2026-10-10T20:31:16+00:00",
+      "caveat": "Same allowance and serial signed again on that iPhone, refused by Solana: SerialUsed (6011), Sat Oct 10 4:31 PM ET.",
+      "surfaces": [
+        "/judge",
+        "home",
+        "README"
+      ]
+    },
+    "proof_pair_iphone_settled_note_id": {
+      "value": "f4cba02c37e62469a56252bdc7feb7ba82b974e32a71878cc354e32d29570cb9",
+      "unit": "note id (sha256 of the 141-byte NOTE_V1, hex)",
+      "kind": "measured",
+      "status": "measured",
+      "source": "sha256 of the 141-byte message in the secp256r1 precompile instruction of proof_pair_iphone_settled_tx, read with getTransaction on https://api.devnet.solana.com 2026-10-10 4:44 PM ET (protocol/PAYMENT-V1.md section 2: note id = sha256(NOTE_V1)). Matches the note id recorded in the team's first two-phone test",
+      "as_of": "2026-10-10T20:23:21+00:00",
+      "surfaces": [
+        "/judge",
+        "home"
+      ]
+    },
+    "proof_pair_iphone_refused_note_id": {
+      "value": "5ecdc8dc27d8ed9ecaf952efce6f6aedb206fd8c480d3f7b46fcb280d34ac0da",
+      "unit": "note id (sha256 of the 141-byte NOTE_V1, hex)",
+      "kind": "measured",
+      "status": "measured",
+      "source": "sha256 of the 141-byte message in the secp256r1 precompile instruction of proof_pair_iphone_refused_tx, read with getTransaction on https://api.devnet.solana.com 2026-10-10 4:44 PM ET (protocol/PAYMENT-V1.md section 2: note id = sha256(NOTE_V1)). Matches the note id recorded in the team's first two-phone test",
+      "as_of": "2026-10-10T20:31:16+00:00",
+      "surfaces": [
+        "/judge",
+        "home"
       ]
     }
   }
