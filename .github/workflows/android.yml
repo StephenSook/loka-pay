@@ -1,0 +1,50 @@
+# android.yml: LOKA core tests, the debug build and lint for the Android relay app.
+# Draft from the pre-event kit. Each TODO names the task that fills it in.
+# Gates run bare: no pipe on any exit path.
+name: android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  android:
+    name: android (core tests, debug build, lint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: android/loka-mesh-lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK check
+        # TODO(1.7): the image ships an Android SDK; if platform 36 is missing, install it here with sdkmanager.
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms"
+
+      - name: Core tests, debug build, lint
+        run: ./gradlew --no-daemon :core:test :app:assembleDebug :app:lintDebug
+
+      - name: Upload the debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: loka-relay-debug-apk
+          path: android/loka-mesh-lab/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

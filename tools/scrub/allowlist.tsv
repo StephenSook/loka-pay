@@ -1,0 +1,183 @@
+# Reviewed exceptions for scrub_sweep.py on the public LOKA Pay repo.
+# Format: <pattern_id><TAB><path glob relative to the repo root><TAB><sha256 of the exact
+# matched value>. A rule allows ONE value of ONE pattern in matching paths: any other
+# value, even in the same file, still fails. Values never appear here, only their hashes.
+# Hashes were computed by a read-only sweep of the original LOKA v0.6.66 tree
+# (commit 3377240a, the files that survive the scrub, post-move paths). To add a rule,
+# run the sweep with --suggest-allowlist OUT, review each candidate, copy it here.
+# Every rule must name a value that the public tree itself carries: a plain hash of a
+# short value (serial, team id, email) can be brute-forced. Never add a rule for a value
+# the scrub removes. The import publishes only the rules its tree uses, and audits them.
+#
+# Font designer contact inside the SIL Open Font License text (attribution the license requires).
+email	android/loka-mesh-lab/app/src/main/res/raw/lilita_one_license.txt	3829459cf1bfde23363a92f4805e9a64b5b04ce3bd33afd72797b054d1c9da7e
+email	ios/Fonts/OFL-LilitaOne.txt	3829459cf1bfde23363a92f4805e9a64b5b04ce3bd33afd72797b054d1c9da7e
+# Unit-test phone numbers, all in the reserved fictional 555 range.
+phone_e164	android/loka-mesh-lab/app/src/androidTest/java/org/loka/meshlab/PhoneContactNameTest.kt	c14aafd1291b1cae6e7ab7623f081703d71e758ee14fd499d3c1484e98548d75
+phone_e164	android/loka-mesh-lab/app/src/androidTest/java/org/loka/meshlab/PhoneContactNameTest.kt	d5ab8b77e69a81dfc634c3556c620d5d6753df6fc28c73c88c79a9332b705382
+phone_e164	android/loka-mesh-lab/app/src/androidTest/java/org/loka/meshlab/PhoneContactNameTest.kt	fe8726675d660e66cb02014aa0276bba66cd6b1769029e4e62bc091564f2d72e
+phone_nanp	android/loka-mesh-lab/app/src/androidTest/java/org/loka/meshlab/PhoneContactNameTest.kt	716f4294e8916d16909ac3c5d74eb8b3a364ea7c8f5e95699366cadcde48836d
+# Protocol test vectors and the test that reads them: SHA-256 hashes of fixed test data.
+hex64	protocol/test-vectors/avatar-catalog-v1.json	031f3cd3f8946201ea54063285d8710867b317853843f188125f333beff227fc
+hex64	protocol/test-vectors/avatar-catalog-v1.json	0a992b873346f881414fbb8f33578a9e96b29dfc3b848e538be2ff9495b5abc5
+hex64	protocol/test-vectors/avatar-catalog-v1.json	0bd43e0a01745adaa84086d9a9a27b1b3bf941409311bb079632269377536f57
+hex64	protocol/test-vectors/avatar-catalog-v1.json	105e35713dbe273eb3110a8bf87e94568179f717c4c8871b3f9746fb4c770dc2
+hex64	protocol/test-vectors/avatar-catalog-v1.json	17cc3a72212d8cb7ba9348b22cf86c23df58d00b1c0983c3fc9a349a96ee4fa4
+hex64	protocol/test-vectors/avatar-catalog-v1.json	1b82f1cf4ba129cca7948abe6bf79e9804d3c9ca12c25891d558e323077de8ac
+hex64	protocol/test-vectors/avatar-catalog-v1.json	1cc40da83bfe30f668092a2ec64b18d62d18cd3d94a0e2ab4c730d8e177a24f9
+hex64	protocol/test-vectors/avatar-catalog-v1.json	21eb656e5d17e0810c69ac11aa53f7caaf807363c75e5b18659eaa41b1a25ab4
+hex64	protocol/test-vectors/avatar-catalog-v1.json	22f6a2e55c0dc63d5e7e8f7727b0003fa47be8a9400431c9f5ccfcefe0e584f3
+hex64	protocol/test-vectors/avatar-catalog-v1.json	306f239d11a707afe63e776f50b864677ddff585cbad14473f83579611466169
+hex64	protocol/test-vectors/avatar-catalog-v1.json	38f0ada650e565ce29ff6f47959c17acb382f44b792a360596a3f0e29253ff5b
+hex64	protocol/test-vectors/avatar-catalog-v1.json	546c2ccfa14719281aadff5bb7dc6596be087ec9802405028f278aec53c4ce78
+hex64	protocol/test-vectors/avatar-catalog-v1.json	5b4d6db8517cfcd80e511bdb4102e42b575f462e91e7df8dddc255a0e508a8dc
+hex64	protocol/test-vectors/avatar-catalog-v1.json	5bc8bfc1a46b83c0a038777151944b1660b6ba64e6b46d53f0996e057584c609
+hex64	protocol/test-vectors/avatar-catalog-v1.json	5d3d016ed1767f0a66886f3690fbb1a55d380245360d50e4e7759fcab8f9c7be
+hex64	protocol/test-vectors/avatar-catalog-v1.json	646c8880203209ffc01d9de71773e04fd2302d6318506ed96d6702c79977348e
+hex64	protocol/test-vectors/avatar-catalog-v1.json	6a3dd186fbb716fd5be40a06c05eb492eaa0a28f235d0e25840376cb6658160f
+hex64	protocol/test-vectors/avatar-catalog-v1.json	75a7e7e9bc9643ebff8bc4949ce5b21944f469c47c7bbc9f1acb975c0aa14e18
+hex64	protocol/test-vectors/avatar-catalog-v1.json	7619f2a346168aba1d36a209986d14655bbfff99781bdad23655440ab15b1831
+hex64	protocol/test-vectors/avatar-catalog-v1.json	8994c9ecc540852fd646247f737ba54484b638d62cc71aa916b4888f072fd3f5
+hex64	protocol/test-vectors/avatar-catalog-v1.json	8bad2cd206cdaaecbfac810c177813b4558a2e04db23ce74d873590bed0a8d94
+hex64	protocol/test-vectors/avatar-catalog-v1.json	8f3ea904484a8e7420e77993e9e99dfccec017cf53639ce35e565ac9d76ea8ec
+hex64	protocol/test-vectors/avatar-catalog-v1.json	9a45b1ee25abc927a34e3da6edd01072e989437d7b6c234fbc4b9024100d7f6d
+hex64	protocol/test-vectors/avatar-catalog-v1.json	a59ab0628784b65558d35afa4e9275d032a2b7ac608e150124488fb6d58490c5
+hex64	protocol/test-vectors/avatar-catalog-v1.json	a78ab62932acf1a2d5376b8e7903e8e7d275871863b9743a58ee3d51de35c0d1
+hex64	protocol/test-vectors/avatar-catalog-v1.json	acac179cfed7d1662805f5283803ea072b04b89d4716eb4f0f19ab60aa91c216
+hex64	protocol/test-vectors/avatar-catalog-v1.json	b306e26140967be831849384b0e3cf5f2b787a2a49581045dc375f42fd20e33c
+hex64	protocol/test-vectors/avatar-catalog-v1.json	b37d5ce5a469bb69231e16065e8799befddae71b2adc480e038e5fa2411f6407
+hex64	protocol/test-vectors/avatar-catalog-v1.json	c4a881e9bee8c1141c933a6fc2451323001d20bf218737f38f014813c14e704d
+hex64	protocol/test-vectors/avatar-catalog-v1.json	cefd3def01c31b8b380b8e576d756a69170547d403dc650ae50d1aabbb2a6423
+hex64	protocol/test-vectors/avatar-catalog-v1.json	d61b677f5828987d2830e2e822cb25740cafd0e879db23481877ffd18adbddd2
+hex64	protocol/test-vectors/avatar-catalog-v1.json	d806436c9bd7eab0cc0787b8133f7b64c4d3cc4d4cf23cd47eab76c6b537938d
+hex64	protocol/test-vectors/avatar-catalog-v1.json	d913ad61e03d2f9775575e062a59d6b7873449e361805fa02454b4a94e09d407
+hex64	protocol/test-vectors/avatar-catalog-v1.json	dab2fa07aca658ecc9c8d1b65f43074fbe76b1d7cff68ffba326c8b8347fc356
+hex64	protocol/test-vectors/avatar-catalog-v1.json	dd732561df94016f09e7ba58916f360a7e7239759aaf0ffd4dacf07c3e800283
+hex64	protocol/test-vectors/avatar-catalog-v1.json	ddcc0bf45aec986a0d865b13dee7404cdda2d0a8071a2250251eebca366af4ec
+hex64	protocol/test-vectors/avatar-catalog-v1.json	e45aecf337de8db64ac7be83a71b05dadb8ab2c98b53e31a40efa0fe112e8e10
+hex64	protocol/test-vectors/avatar-catalog-v1.json	e8204ee6649668d51aa63fc89e9593792803decbd21aae392a4ce0aa81d1f0a6
+hex64	protocol/test-vectors/avatar-catalog-v1.json	ee3e9400b0c242a40bad3be3af407561472dcb62b51f0b7f8ad4026abf09df0f
+hex64	protocol/test-vectors/avatar-catalog-v1.json	f11a3f40794c8fbd2a5d211ed6c8db7bd195755828755fe8cdacdac04a260c1a
+hex64	protocol/test-vectors/avatar-catalog-v1.json	f5b2f6ab9d501ea283c573587b750512af01c9b1116a6debe80a3302af0fbe14
+hex64	protocol/test-vectors/avatar-catalog-v1.json	fcb3358738ebcad32b9a188b708c8a94a98934b221722d72dcfd980c4e797a40
+hex64	protocol/test-vectors/contact-v1-ios.json	c8644098131d298bcd8fcf15fd1080452ba951241cd6a64c98d7cb8834d8e853
+hex64	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/IosContactCompatibilityTest.kt	c8644098131d298bcd8fcf15fd1080452ba951241cd6a64c98d7cb8834d8e853
+# Payment vectors written during the event (note ids are SHA-256 hex by design) are added
+# here value by value, after review, with --suggest-allowlist. No path-wide exception.
+# A documentation URL whose path has a "home" segment; it is not a home directory.
+home_path	docs/OFFLINE-NETWORKING-RESEARCH.md	ef489b0eaa19634023022d1729abc3a01c259b31e2280ecdffd77b61e66bf7eb
+# Public phone model numbers in written reports. These name a product, not a device.
+device_model	*.md	4d3141f2236cfee37004bf8ce64e977c18fda87360aa7eb488d8f143bfdffc75
+device_model	*.md	ba225ea5e752fe5a0c67103daf3cca8c54d3b04b7ed3bb1b8584b1ebc456c8d8
+# The sweep tool names the pattern it searches for.
+private_key	tools/scrub/scrub_sweep.py	1fe821ee5ae62e931b202ac1c0ef3298b1e4d80e788558a346a75937deae4e65
+# Bluetooth protocol constants that ship in source and in protocol/BLE-LINK-V1.md: LOKA's BLE
+# service and characteristic UUIDs, the standard Bluetooth SIG CCCD descriptor UUID, and the
+# Bluetooth Classic service id. Protocol constants, not device identifiers.
+uuid	android/loka-mesh-lab/app/src/main/java/org/loka/meshlab/BleTransport.kt	2cec4bc8ad2d06710a5688ff167c5017e8a1a149f15438299df83ee5aabe012e
+uuid	android/loka-mesh-lab/app/src/main/java/org/loka/meshlab/BleTransport.kt	533ecc39f03371fa3ac77489c1e2eb3bd99597c5ef932379e83102671d522d69
+uuid	android/loka-mesh-lab/app/src/main/java/org/loka/meshlab/BleTransport.kt	87bdeb9658bbb01837be87ffe2874d736af8a934d017acf5042439d4f2e96bda
+uuid	android/loka-mesh-lab/app/src/main/java/org/loka/meshlab/BleTransport.kt	eda3f26d85f5b5893aaee68bc4ffbcaecebd3442471334fe6b53c5650fab4dbb
+uuid	android/loka-mesh-lab/app/src/main/java/org/loka/meshlab/BluetoothTransport.kt	084181fab4b7d77e191756bf8c476014db2069647eb65d2931c5441a70f6a35c
+uuid	ios/Network/BleLink.swift	2cec4bc8ad2d06710a5688ff167c5017e8a1a149f15438299df83ee5aabe012e
+uuid	ios/Network/BleLink.swift	533ecc39f03371fa3ac77489c1e2eb3bd99597c5ef932379e83102671d522d69
+uuid	ios/Network/BleLink.swift	eda3f26d85f5b5893aaee68bc4ffbcaecebd3442471334fe6b53c5650fab4dbb
+uuid	protocol/BLE-LINK-V1.md	2cec4bc8ad2d06710a5688ff167c5017e8a1a149f15438299df83ee5aabe012e
+uuid	protocol/BLE-LINK-V1.md	533ecc39f03371fa3ac77489c1e2eb3bd99597c5ef932379e83102671d522d69
+uuid	protocol/BLE-LINK-V1.md	eda3f26d85f5b5893aaee68bc4ffbcaecebd3442471334fe6b53c5650fab4dbb
+# Synthetic test fixture ids (repeated digits or 12345678-...) in unit tests and a protocol vector.
+uuid	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/AwareDiscoveryTest.kt	ae1908d5eef6b8c28eabe4fa8de4651e385766446731b918a3dfdaeaed5ece16
+uuid	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/ChatContentTest.kt	bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9
+uuid	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/ContactConsentTest.kt	b454f82c5857ebabf342b7258e5cf7def78b7cd975814119462973de9a38df10
+uuid	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/ContactConsentTest.kt	bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9
+uuid	android/loka-mesh-lab/core/src/test/kotlin/org/loka/core/NearbyPeopleTest.kt	12b9377cbe7e5c94e8a70d9d23929523d14afa954793130f8a3959c7b849aca8
+uuid	ios/Tests/ChatContentChecks.swift	7ac1b8d7010bb6cd3a3e84e7f90136b880bbc899e428ece49333372911ab9052
+uuid	ios/Tests/ChatContentChecks.swift	90d5b0a26955772ebda61cd86cef90ec4f0a4efd29b8a7099df640bc94a8cc0a
+uuid	ios/Tests/ChatContentChecks.swift	bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9
+uuid	ios/Tests/ChatContentChecks.swift	c67f2fc391b678929fa47eccbc9e5838712c50f95307f40e7edaf8a3677d5b7e
+uuid	ios/Tests/ContactConsentChecks.swift	bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9
+uuid	ios/Tests/NearbyPeopleChecks.swift	12b9377cbe7e5c94e8a70d9d23929523d14afa954793130f8a3959c7b849aca8
+uuid	protocol/CONTACT-CONSENT-EXPERIMENT.md	bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9
+# Public citations: a library record id in a cited dspace.mit.edu URL, and the public commit of
+# an open-source project that two LOKA reviews pin.
+uuid	docs/LOCAL-CALLING-MASTER-SPEC.md	1ee915c8016577db97973ed4268a0a2dad0c7354e278fa69f066b5822ca78f29
+hex40	docs/CROSS-PLATFORM-MESH-AUDIT.md	354bcb7941e45cd81aa73db57d6cf234c241add11efd847842a0a0c22b9ffd1f
+hex40	docs/KNIT-REVIEW.md	354bcb7941e45cd81aa73db57d6cf234c241add11efd847842a0a0c22b9ffd1f
+# The same font designer contact inside the two Lilita One font files (the font's own name table).
+email	android/loka-mesh-lab/app/src/main/res/font/lilita_one.ttf	3829459cf1bfde23363a92f4805e9a64b5b04ce3bd33afd72797b054d1c9da7e
+email	ios/Fonts/LilitaOne-Regular.ttf	3829459cf1bfde23363a92f4805e9a64b5b04ce3bd33afd72797b054d1c9da7e
+# Content Credentials (C2PA) ids inside AI-generated PNG art: the manifest label and the XMP
+# instance id that the image generator embeds. Per-image provenance ids, not device or user ids.
+uuid	UX/LOKA Offline Chat with Bingo.png	2b440c9769da841d4fea88c003b76e5541047115a12adde0f3f3693aa980354e
+uuid	UX/LOKA Offline Chat with Bingo.png	bf4ec0c0da9a001ece9e8612bea572ef5c8cf1d6ed618b31978d95b61ff385fb
+uuid	UX/LOKA onboarding trio_ nearby, notifications, backup.png	00d4d53c8bd51ddfe9073a6c1c102d954c4fb276b00f20af1fb6affb4218016d
+uuid	UX/LOKA onboarding trio_ nearby, notifications, backup.png	a222be5dea3b30a3547d07a9eccc7aac17c27668e5ca7d450273ca7410112ece
+uuid	UX/LOKA premium dark-mode app board.png	bd3fc5a1ea5355c35b8b6a412f0ab1788d4a237140d31d68487b889c536913a1
+uuid	UX/LOKA premium dark-mode app board.png	c8bfa90a1bca388bab6822940624e0afd82646426ca0aeea685cc36820685582
+uuid	UX/LOKA sharing with 500 MB mobile limit.png	5dc86f323cb82ce459e4daae5723ccdb588249c924e6a3322c173e77dbd010f5
+uuid	UX/LOKA sharing with 500 MB mobile limit.png	c3889ef185f0e2503b21c8fb9edc1a01801fcde6b35683ebd6687685ec6ac46e
+uuid	UX/LOKA three-screen card game UI (1).png	5c0a06f9cb3060f5c83e09fd88ce2c58d3e396c04c286b065bf8e3b74a9c7fcd
+uuid	UX/LOKA three-screen card game UI (1).png	bf39427e5dadb282c2add05e0c78ce2e68f8e1d1044c51d50998d853d48c317f
+uuid	UX/LOKA's playful offline community app redesign.png	4c67e4c3ffeb993ee31a0e035c76fb449d01d3af5a3a3b6fccd5759d90b19766
+uuid	UX/LOKA's playful offline community app redesign.png	9602bf7e64579a377b7ccb124d774320ed0ba9c529845b01f71ce50d7d879f9c
+uuid	UX/Midnight Bingo chat with game invite.png	7da9ca1e62e54d2bd1ad39b3a8b54107bf6f3a353e2bf23b1671c1d3f1300c20
+uuid	UX/Midnight Bingo chat with game invite.png	ede61d3ad3c73e4835a1127728e835d988a8498376508caf3a41702ffa8557c3
+uuid	UX/Playful LOKA dark onboarding screen.png	199628978249d8496b112117d3e39b6f35a09423f69603f8fe235b1747510ab1
+uuid	UX/Playful LOKA dark onboarding screen.png	7f5a356240f1215a35907bfb6e6225905e1c700e7f792b4b5bfc1e0cc2629e76
+uuid	UX/appIcon/Loka controller bubble app icon.png	19c05d9456ce9ded3585ddec29f57996bdb6c214894e3557475c4eeadc9e71bd
+uuid	UX/appIcon/Loka controller bubble app icon.png	e12e731fe1e6d86cdc1d97d5bb62607e437989ac4fbd5246cf68431bbd40efe9
+uuid	UX/avators/LOKA's Twelve-Avatar Community Grid (1).png	805ef50b11efcc32e2234f394d6bac06d80222f5cd64441a1c55be117024e643
+uuid	UX/avators/LOKA's Twelve-Avatar Community Grid (1).png	ddb6a67447365d9e7c2d5518bb1c67d4b6da76ab1d4444ad6c5a94f23242580a
+uuid	UX/avators/LOKA’s Twelve Fantasy Avatar Icons.png	a2402da46a34bf3a075a49d4b43e8344134b95ed6f9ba64854c0ae46d6ca42d1
+uuid	UX/avators/LOKA’s Twelve Fantasy Avatar Icons.png	f0b357411dd32d144acf0809d8d9e05a34b25b296428b4bfd9345ebbff21db03
+uuid	UX/avators/Twelve diverse 3D profile avatars.png	4ddfc0a6b6ccf675824ba8736d976d526cc0bf29349fd8b37e9752924fe4116d
+uuid	UX/avators/Twelve diverse 3D profile avatars.png	5dccdf91335ed2ce9de979ea5f56a4a2ea41fa96f8adb9cf5b40fe06295672de
+uuid	UX/cardGameGraphic/Mint Clean Card with Smiling Suns.png	6052b4a0be95acd564820f4465475f655aae428693fe0d3cc1f1a9ed5923ebf9
+uuid	UX/cardGameGraphic/Mint Clean Card with Smiling Suns.png	ced3e7a793c64b58bf9a2c1f69184cf856640a57ef8577fa38f741631e9b5a65
+uuid	UX/cardGameGraphic/Mint green smiling sun sticker.png	51e755685b72d9a92be1be959bd0e17ae159374de0f39f405ba2c0d0d39ab75a
+uuid	UX/cardGameGraphic/Mint green smiling sun sticker.png	e90272b55b6deeaaabaaa75e23c5c6604c841f7fb3927bac919bb28642140176
+uuid	UX/graphic/Colorful Ludo Board with Pawns.png	27d027393bf9ed8cd525c25ac8a568b2e896f06c16a6657c19108699b8115507
+uuid	UX/graphic/Colorful Ludo Board with Pawns.png	4abdc0c8a3388ec1f0af1f4c185f553e9d2860d40dde1c9b83fb63a1f06f08ab
+uuid	UX/graphic/Curly-haired woman with notification icons.png	557fd70e846d505abdf8e260640be3e64227f6e4fa35b7e6b27515da67548a4b
+uuid	UX/graphic/Curly-haired woman with notification icons.png	fb4c9cc7bad0d6e5fc086f29807d89b89aea6e3242e44b7229a024d9d6dd775f
+uuid	UX/graphic/Friendly illustrated trio with playful speech bubbles.png	15beaf27af187b639e1cb27ef8f4c79b55b65a8f2bd32e3af8c584a78bf28070
+uuid	UX/graphic/Friendly illustrated trio with playful speech bubbles.png	6006bcc1dae10e6b900731980d78cf7ca6a68e61f67e81e5179f71c7022b3c07
+uuid	UX/graphic/Playful fanned ace card artwork.png	71195c4082f493e6b229b345ef1bf04d1f5a6d302e815608c916605610c47d4f
+uuid	UX/graphic/Playful fanned ace card artwork.png	fd10d7129d17c63678a9d520f135b203251f8e5fa023c9456bed665d2384b4d7
+uuid	UX/graphic/Purple knight and ivory pawn.png	9bc23172ac07fbfdd79f05a4c64d6df3461a8200699f870f790aaea43612cd29
+uuid	UX/graphic/Purple knight and ivory pawn.png	e5107dfc3481f14ec78e633945cce6950bb5134f132df135310ca0cd5098f3a2
+uuid	UX/graphic/Purple phone and secure shield.png	7cd4f448e15c31a357fd211d66937863818ab1421448860d0d26e9754a69c6dc
+uuid	UX/graphic/Purple phone and secure shield.png	969a87a5b6e62ef8ee953d7ca125b58668f9b3e93b4538f702a20af135b486bc
+uuid	UX/graphic/Sunny lightbulb quiz tile.png	59f3f9e409777f7be9b16c2abd5395f02827963187ed344b7b38c841242eb894
+uuid	UX/graphic/Sunny lightbulb quiz tile.png	c7971aac3237799932dbe130b75dc72c31f9aceb340b5d42347c209be5e7a78e
+uuid	UX/graphic/Three friends connected by Wi-Fi.png	8876e83afe35ec2ff842c95c5db9c94e1175e061ecacfe95680bb6d06c32087c
+uuid	UX/graphic/Three friends connected by Wi-Fi.png	e1ba6d1f32cd16049117e697ada6f7eac04efd381c852e904f2a5d12c9417f16
+uuid	UX/graphic/Two friends, one local connection.png	afe23c5bffd55e1608cb3b56c480f5882b6324ae8d22b8bbc24484db8a7a945c
+uuid	UX/graphic/Two friends, one local connection.png	ff51b810c3f59ef56c243a506b2cd25af98cd68af7ce89ec96b51a50fc35e365
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_clean.png	6052b4a0be95acd564820f4465475f655aae428693fe0d3cc1f1a9ed5923ebf9
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_clean.png	ced3e7a793c64b58bf9a2c1f69184cf856640a57ef8577fa38f741631e9b5a65
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_dirty.png	8024502fc0f09c94e4875a57e187c8016e30b7849c1ec2c830391725ae784ced
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_dirty.png	f3c6073a7cf70d007d8636169308a51daa6a2c2fd354ee21b366c73bbc007c8d
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_drinking.png	ec93eca9ff3c26ce5b78309fea63d304f8d9e0dc8597ea9370b50120b8b84e38
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_card_drinking.png	f31ad8604ca4f18fb5f7343c2369da6db4d339a9a1493d22e0a748c7a8e65cd4
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_clean.png	51e755685b72d9a92be1be959bd0e17ae159374de0f39f405ba2c0d0d39ab75a
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_clean.png	e90272b55b6deeaaabaaa75e23c5c6604c841f7fb3927bac919bb28642140176
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_dirty.png	c521e29a137a9d334eaef37cea1148e2b5dc81a0330e427b5e9826c497a4489f
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_dirty.png	ffe4045205bda948e8a1282a81fc4bc0641e441acdd6e83c586f4c285e6f38a1
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_drinking.png	00d3bf92ec1a3bbac8740d6d5482b5b5ec070292b029dd12351c295934331e98
+uuid	android/loka-mesh-lab/app/src/main/res/drawable-nodpi/loka_mascot_drinking.png	d31f4a6a214fbfdec917c75e30ce1b0c2f55ce79a9cbdb53e12ab79453c766b1
+uuid	ios/Design.xcassets/loka_card_clean.imageset/art.png	6052b4a0be95acd564820f4465475f655aae428693fe0d3cc1f1a9ed5923ebf9
+uuid	ios/Design.xcassets/loka_card_clean.imageset/art.png	ced3e7a793c64b58bf9a2c1f69184cf856640a57ef8577fa38f741631e9b5a65
+uuid	ios/Design.xcassets/loka_card_dirty.imageset/art.png	8024502fc0f09c94e4875a57e187c8016e30b7849c1ec2c830391725ae784ced
+uuid	ios/Design.xcassets/loka_card_dirty.imageset/art.png	f3c6073a7cf70d007d8636169308a51daa6a2c2fd354ee21b366c73bbc007c8d
+uuid	ios/Design.xcassets/loka_card_drinking.imageset/art.png	ec93eca9ff3c26ce5b78309fea63d304f8d9e0dc8597ea9370b50120b8b84e38
+uuid	ios/Design.xcassets/loka_card_drinking.imageset/art.png	f31ad8604ca4f18fb5f7343c2369da6db4d339a9a1493d22e0a748c7a8e65cd4
+uuid	ios/Design.xcassets/loka_mascot_clean.imageset/art.png	51e755685b72d9a92be1be959bd0e17ae159374de0f39f405ba2c0d0d39ab75a
+uuid	ios/Design.xcassets/loka_mascot_clean.imageset/art.png	e90272b55b6deeaaabaaa75e23c5c6604c841f7fb3927bac919bb28642140176
+uuid	ios/Design.xcassets/loka_mascot_dirty.imageset/art.png	c521e29a137a9d334eaef37cea1148e2b5dc81a0330e427b5e9826c497a4489f
+uuid	ios/Design.xcassets/loka_mascot_dirty.imageset/art.png	ffe4045205bda948e8a1282a81fc4bc0641e441acdd6e83c586f4c285e6f38a1
+uuid	ios/Design.xcassets/loka_mascot_drinking.imageset/art.png	00d3bf92ec1a3bbac8740d6d5482b5b5ec070292b029dd12351c295934331e98
+uuid	ios/Design.xcassets/loka_mascot_drinking.imageset/art.png	d31f4a6a214fbfdec917c75e30ce1b0c2f55ce79a9cbdb53e12ab79453c766b1
+# Added by import-and-scrub.sh for this import (values named in the tree itself).
+hex40	docs/IMPORT-SCRUB.md	15f4278b9c9b0e9f6d9c7c109f24b3eeeda7803f6edfe3ac7c91323d03177cc0
+hex40	docs/IMPORT-SCRUB.md	ae0a051cb136a6d9ef457d3e27f9e53d5fb434f93f56fb9b09ea1b85ba4a8c64

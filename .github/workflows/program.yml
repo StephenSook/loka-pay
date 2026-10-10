@@ -1,0 +1,86 @@
+# program.yml: the loka_vault Anchor program, tested on a local validator after
+# asserting that the secp256r1 precompile feature is active there.
+# Draft from the pre-event kit. Each TODO names the task that fills it in.
+# Gates run bare: no pipe on any exit path. This job refuses to run with unpinned
+# versions, so it stays red until task 0.4 records them in programs/TOOLCHAIN.md.
+name: program
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: program-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  program:
+    name: program (secp256r1 feature check, anchor test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # TODO(0.4): copy the pinned versions from programs/TOOLCHAIN.md.
+      SOLANA_VERSION: TODO-0.4
+      ANCHOR_VERSION: TODO-0.4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse an unpinned toolchain
+        run: |
+          case "${SOLANA_VERSION}${ANCHOR_VERSION}" in
+            *TODO*) echo "::error::pin SOLANA_VERSION and ANCHOR_VERSION from programs/TOOLCHAIN.md (task 0.4)"; exit 1 ;;
+          esac
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.avm
+            ~/.local/share/solana
+          key: solana-${{ env.SOLANA_VERSION }}-anchor-${{ env.ANCHOR_VERSION }}
+
+      - name: Install the Solana CLI (Agave)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/solana-install.sh" "https://release.anza.xyz/v${SOLANA_VERSION}/install"
+          sh "$RUNNER_TEMP/solana-install.sh"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor through avm
+        run: |
+          set -euo pipefail
+          if ! command -v avm > /dev/null; then
+            cargo install --git https://github.com/coral-xyz/anchor avm --locked
+          fi
+          avm install "$ANCHOR_VERSION"
+          avm use "$ANCHOR_VERSION"
+
+      - name: Toolchain versions
+        run: |
+          solana --version
+          anchor --version
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assert the secp256r1 precompile feature is active on the local validator
+        # TODO(1.4): write this script; it starts solana-test-validator, reads the feature
+        # account id recorded in programs/TOOLCHAIN.md, and exits non-zero unless it is active.
+        run: bash programs/scripts/assert-secp256r1-active.sh
+
+      - name: anchor test
+        # TODO(1.4): the Anchor workspace root; T1 needs redeem.ts, withdraw.ts and the units vector.
+        working-directory: programs
+        run: anchor test

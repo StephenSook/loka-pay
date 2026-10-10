@@ -1,40 +1,112 @@
-# Gradle files
+# LOKA Pay .gitignore (pre-event kit). Includes every rule from LOKA's original .gitignore.
+
+# ---- Private material: never in this repo ----
+# Anchored at the root: LOKA's own docs/research/ notes are public and stay tracked.
+/research/
+/submissions/
+/video/
+/team-pdf/
+*.pdf
+*strategy*.md
+*-private.md
+
+# ---- Secrets and signing assets ----
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+AuthKey_*.p8
+service-account*.json
+*-keypair.json
+*.keypair.json
+# Keystore files (LOKA)
+*.jks
+*.keystore
+# Google Services (LOKA)
+google-services.json
+
+# ---- Node / TypeScript / Next.js / Vercel ----
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+.vercel/
+playwright-report/
+test-results/
+blob-report/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# ---- Rust / Solana / Anchor ----
+target/
+**/*.rs.bk
+.anchor/
+test-ledger/
+
+# ---- Xcode / Swift ----
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dSYM
+*.dSYM.zip
+.build/
+.swiftpm/xcode/
+
+# ---- Gradle / Android (LOKA rules) ----
 .gradle/
 build/
-
-# Local configuration file (sdk path, etc)
 local.properties
-
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
 captures/
 .externalNativeBuild/
 .cxx/
 *.aab
 *.apk
 output-metadata.json
+*.hprof
 
-# IntelliJ
+# ---- IDE (LOKA rules plus common editors) ----
 *.iml
 .idea/
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
+.vscode/
+*.swp
+*.swo
 
-# Keystore files
-*.jks
-*.keystore
+# ---- OS ----
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
 
-# Google Services (e.g. APIs or Firebase)
-google-services.json
+# ---- Logs (LOKA rule) ----
+*.log
 
-# Android Profiling
-*.hprof
-
-# Xcode
-DerivedData/
-*.xcuserstate
-xcuserdata/
-*.ipa
+# ---- Local agent and tool state ----
+.claude/settings.local.json
+.claude/worktrees/
+*.import-logs/

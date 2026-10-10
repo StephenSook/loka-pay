@@ -1,0 +1,781 @@
+{
+  "_meta": {
+    "about": "Every judge-facing number for LOKA Pay. The README, /judge, slides, video and Devpost read values from this file, and a test checks they match (task 4.2).",
+    "rules": [
+      "Fill a value only from a real run, the code, or a primary source page. Never from memory or from the plan.",
+      "status is one of: pending, measured, computed, config, sourced, not_verified. A value stays null while status is pending.",
+      "Record how the value was produced in source and when in as_of (ISO 8601).",
+      "A number that is not in this file does not appear on any judge-facing surface."
+    ],
+    "schema_version": 1,
+    "updated_at": null
+  },
+  "facts": {
+    "ble_direct_hop_seconds_median": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 3.6: one pre-connected hop, payer to merchant, on our phones (record n)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides"
+      ]
+    },
+    "ble_direct_hop_seconds_p95": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 3.6",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "slides"
+      ]
+    },
+    "ble_direct_hop_runs_n": {
+      "value": null,
+      "unit": "runs",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 3.6",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "slides"
+      ]
+    },
+    "note_to_settle_seconds_p50": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats (Tiger continuous aggregate), task 2.10; runs from task 3.6",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "/live",
+        "slides"
+      ]
+    },
+    "note_to_settle_seconds_p95": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats, task 2.10",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live",
+        "slides"
+      ]
+    },
+    "offline_seconds_median": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats?run=EXP-PAY-001: time each payment was held offline, from the ACK received-at to the confirmation slot time, task 3.41",
+      "as_of": null,
+      "surfaces": [
+        "/live",
+        "/judge",
+        "slides"
+      ]
+    },
+    "baseline_consecutive_passes": {
+      "value": null,
+      "unit": "runs",
+      "kind": "measured",
+      "status": "pending",
+      "source": "Sat 12 PM checkpoint log and rehearsal log, task 4.4",
+      "as_of": null,
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ]
+    },
+    "relay_upgrade_forward_seconds_max": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 2.9 (only if the upgrade passed its gate)",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live",
+        "slides"
+      ]
+    },
+    "relay_upgrade_reverse_seconds_max": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 2.9 (only if the upgrade passed its gate)",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live",
+        "slides"
+      ]
+    },
+    "p2p_wifi_round_trip_seconds_p95": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-P2P-001.md, task 1.6 (only if GO)",
+      "as_of": null,
+      "surfaces": [
+        "/judge"
+      ]
+    },
+    "live_feed_latency_seconds_p95": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "SSE test against production, task 2.10 / 2.19",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live"
+      ]
+    },
+    "payments_settled_total": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats (canary rows excluded)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "/live",
+        "/proof"
+      ]
+    },
+    "settled_volume_sandbox_usd": {
+      "value": null,
+      "unit": "USD (sandbox)",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats, converted from mint base units",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live",
+        "/proof"
+      ]
+    },
+    "double_spends_refused_total": {
+      "value": null,
+      "unit": "attempts",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats: redeem attempts refused for a reused serial",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/proof",
+        "slides"
+      ]
+    },
+    "sms_rail_settlements": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats: settlements tagged sms_rail, tasks 3.43 and 3.44 (only if the SMS rail passed its Accept test)",
+      "as_of": null,
+      "surfaces": [
+        "/judge",
+        "/live"
+      ]
+    },
+    "batch_max_notes_per_tx": {
+      "value": null,
+      "unit": "notes",
+      "kind": "measured",
+      "status": "pending",
+      "source": "programs/loka_vault/tests/batch.ts on devnet, task 3.25",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "fee_per_payment_lamports": {
+      "value": null,
+      "unit": "lamports",
+      "kind": "measured",
+      "status": "pending",
+      "source": "measured devnet transaction fees, task 3.25",
+      "as_of": null,
+      "surfaces": [
+        "/proof",
+        "slides"
+      ]
+    },
+    "bounty_earned_total_base_units": {
+      "value": null,
+      "unit": "mint base units",
+      "kind": "measured",
+      "status": "pending",
+      "source": "on-chain bounty records read by /proof, task 3.26",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "reserves_assets_base_units": {
+      "value": null,
+      "unit": "mint base units",
+      "kind": "measured",
+      "status": "pending",
+      "source": "vault token account read at one slot, task 3.24",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "reserves_liabilities_base_units": {
+      "value": null,
+      "unit": "mint base units",
+      "kind": "measured",
+      "status": "pending",
+      "source": "allowance remainders + merchant balances + bonds + credits at the same slot, task 3.24",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "mainnet_proof_fee_lamports": {
+      "value": null,
+      "unit": "lamports",
+      "kind": "measured",
+      "status": "pending",
+      "source": "the mainnet proof transaction on the explorer, task 3.35",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "compute_units_per_redeem": {
+      "value": null,
+      "unit": "compute units",
+      "kind": "measured",
+      "status": "pending",
+      "source": "meta.computeUnitsConsumed of the 20 real devnet redeems listed in measurements/redeem.json, task 3.50 (the median; the range stays in that file); GET /api/volume recomputes it",
+      "as_of": null,
+      "surfaces": [
+        "/proof",
+        "slides"
+      ]
+    },
+    "fee_per_redeem_lamports": {
+      "value": null,
+      "unit": "lamports",
+      "kind": "measured",
+      "status": "pending",
+      "source": "meta.fee of the same 20 devnet redeems in measurements/redeem.json, task 3.50; each must equal 5,000 lamports x signatures (the secp256r1 signature counts) + any priority fee; GET /api/volume recomputes it",
+      "as_of": null,
+      "surfaces": [
+        "/proof",
+        "slides"
+      ]
+    },
+    "p256_verifies_per_second_vps_noble": {
+      "value": null,
+      "unit": "verifications/s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "bench/p256-verify.mjs with @noble/curves on our VPS, task 3.50; nproc, CPU model and Node version recorded in measurements/",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "p256_verifies_per_second_vps_node_crypto": {
+      "value": null,
+      "unit": "verifications/s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "bench/p256-verify.mjs with node:crypto on our VPS, task 3.50; nproc, CPU model and Node version recorded in measurements/",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "drain_run_notes_settled": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-DRAIN-001.md, task 3.51: 256 notes signed with a labelled software P-256 key across one allowance's serial space, settled after going online once (record the exact count and every failure reason); devnet load test, rows tagged source=load_test, excluded from the headline",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "drain_run_settle_seconds": {
+      "value": null,
+      "unit": "s",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-DRAIN-001.md, task 3.51: wall time from going online to the last settlement; devnet load test, excluded from the headline",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "drain_run_payments_per_second": {
+      "value": null,
+      "unit": "payments/s",
+      "kind": "computed",
+      "status": "pending",
+      "source": "experiments/EXP-DRAIN-001.md, task 3.51: drain_run_notes_settled / drain_run_settle_seconds; devnet load test, excluded from the headline",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "lighthouse_judge_score": {
+      "value": null,
+      "unit": "score",
+      "kind": "measured",
+      "status": "pending",
+      "source": "Lighthouse on production /judge, task 3.2",
+      "as_of": null,
+      "surfaces": [
+        "/judge"
+      ]
+    },
+    "lighthouse_live_score": {
+      "value": null,
+      "unit": "score",
+      "kind": "measured",
+      "status": "pending",
+      "source": "Lighthouse on production /live, task 3.2",
+      "as_of": null,
+      "surfaces": [
+        "/judge"
+      ]
+    },
+    "secp256r1_devnet_activation_slot": {
+      "value": null,
+      "unit": "slot",
+      "kind": "measured",
+      "status": "pending",
+      "source": "feature account read from devnet RPC, re-checked in task 0.4",
+      "as_of": null,
+      "surfaces": [
+        "/proof",
+        "/trust"
+      ]
+    },
+    "secp256r1_mainnet_activation_slot": {
+      "value": null,
+      "unit": "slot",
+      "kind": "measured",
+      "status": "pending",
+      "source": "feature account read from mainnet RPC, re-checked before task 3.35",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "note_v1_bytes": {
+      "value": null,
+      "unit": "bytes",
+      "kind": "computed",
+      "status": "pending",
+      "source": "protocol/PAYMENT-V1.md, asserted by the vector tests (task 1.2)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/proof"
+      ]
+    },
+    "note_wire_bytes": {
+      "value": null,
+      "unit": "bytes",
+      "kind": "computed",
+      "status": "pending",
+      "source": "protocol/PAYMENT-V1.md, asserted by the vector tests (task 1.2)",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "serials_per_allowance": {
+      "value": null,
+      "unit": "serials",
+      "kind": "computed",
+      "status": "pending",
+      "source": "program constant, programs/loka_vault (task 1.4)",
+      "as_of": null,
+      "surfaces": [
+        "/trust"
+      ]
+    },
+    "program_commit": {
+      "value": null,
+      "unit": "git SHA",
+      "kind": "computed",
+      "status": "pending",
+      "source": "the tagged commit built by solana-verify at Saturday's code freeze, task 3.45",
+      "as_of": null,
+      "surfaces": [
+        "/trust",
+        "README"
+      ]
+    },
+    "program_executable_hash": {
+      "value": null,
+      "unit": "sha256 hex",
+      "kind": "computed",
+      "status": "pending",
+      "source": "solana-verify build output for program_commit, task 3.45",
+      "as_of": null,
+      "surfaces": [
+        "/trust"
+      ]
+    },
+    "program_hash": {
+      "value": null,
+      "unit": "sha256 hex",
+      "kind": "measured",
+      "status": "pending",
+      "source": "on-chain program hash read from devnet (solana-verify get-program-hash), task 3.45; must equal program_executable_hash",
+      "as_of": null,
+      "surfaces": [
+        "/trust",
+        "README"
+      ]
+    },
+    "weekend_commits": {
+      "value": null,
+      "unit": "commits",
+      "kind": "computed",
+      "status": "pending",
+      "source": "git log --oneline pre-hacklanta-kit..<submitted SHA> | count",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "Devpost"
+      ]
+    },
+    "weekend_files_changed": {
+      "value": null,
+      "unit": "files",
+      "kind": "computed",
+      "status": "pending",
+      "source": "git diff --shortstat pre-hacklanta-kit <submitted SHA>",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "Devpost"
+      ]
+    },
+    "weekend_lines_added": {
+      "value": null,
+      "unit": "lines",
+      "kind": "computed",
+      "status": "pending",
+      "source": "git diff --shortstat pre-hacklanta-kit <submitted SHA>",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "Devpost"
+      ]
+    },
+    "ci_tests_passing": {
+      "value": null,
+      "unit": "tests",
+      "kind": "computed",
+      "status": "pending",
+      "source": "CI logs of the six jobs on the submitted SHA",
+      "as_of": null,
+      "surfaces": [
+        "/judge"
+      ]
+    },
+    "fee_total_bps": {
+      "value": null,
+      "unit": "basis points",
+      "kind": "config",
+      "status": "pending",
+      "source": "program constant, task 3.26",
+      "as_of": null,
+      "surfaces": [
+        "/proof",
+        "slides"
+      ]
+    },
+    "fee_bounty_bps": {
+      "value": null,
+      "unit": "basis points",
+      "kind": "config",
+      "status": "pending",
+      "source": "program constant, task 3.26",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "fee_operator_bps": {
+      "value": null,
+      "unit": "basis points",
+      "kind": "config",
+      "status": "pending",
+      "source": "program constant, task 3.26",
+      "as_of": null,
+      "surfaces": [
+        "/proof"
+      ]
+    },
+    "bond_percent_of_cap": {
+      "value": null,
+      "unit": "%",
+      "kind": "config",
+      "status": "pending",
+      "source": "program and server config, task 1.4",
+      "as_of": null,
+      "surfaces": [
+        "/trust"
+      ]
+    },
+    "allowance_cap_sandbox_usd": {
+      "value": null,
+      "unit": "USD (sandbox)",
+      "kind": "config",
+      "status": "pending",
+      "source": "server config used by POST /v1/payers, task 1.9b",
+      "as_of": null,
+      "surfaces": [
+        "/trust"
+      ]
+    },
+    "offline_limit_sandbox_usd": {
+      "value": null,
+      "unit": "USD (sandbox)",
+      "kind": "config",
+      "status": "pending",
+      "source": "allowance certificate config, task 2.6",
+      "as_of": null,
+      "surfaces": [
+        "/trust",
+        "slides"
+      ]
+    },
+    "onboarding_allowance_sandbox_usd": {
+      "value": null,
+      "unit": "USD (sandbox)",
+      "kind": "config",
+      "status": "pending",
+      "source": "server config, task 2.18",
+      "as_of": null,
+      "surfaces": [
+        "/judge"
+      ]
+    },
+    "send_cap_sandbox_usd": {
+      "value": null,
+      "unit": "USD (sandbox)",
+      "kind": "config",
+      "status": "pending",
+      "source": "server config, task 3.3",
+      "as_of": null,
+      "surfaces": [
+        "/send"
+      ]
+    },
+    "send_rate_limit_per_ip_per_hour": {
+      "value": null,
+      "unit": "sends",
+      "kind": "config",
+      "status": "pending",
+      "source": "server config, tasks 3.3 and 3.55: an in-memory burst guard only, keyed by HMAC-SHA256 with a per-boot secret and never persisted, sized for a judging line on a shared venue Wi-Fi (D15)",
+      "as_of": null,
+      "surfaces": [
+        "/send"
+      ]
+    },
+    "senegal_remittances_pct_gdp_2023": {
+      "value": null,
+      "unit": "% of GDP",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "World Bank API (BX.TRF.PWKR.DT.GD.ZS); re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "senegal_remittances_usd_2023": {
+      "value": null,
+      "unit": "USD",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "World Bank API (BX.TRF.PWKR.CD.DT); re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "nigeria_remittances_usd_2024": {
+      "value": null,
+      "unit": "USD",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "World Bank API (BX.TRF.PWKR.CD.DT); re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "senegal_mobile_money_adults_pct_2021": {
+      "value": null,
+      "unit": "% of adults",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "GSMA Senegal brief; re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "senegal_adults_15plus_2025": {
+      "value": null,
+      "unit": "people",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "World Bank API, Senegal population aged 15+ (2025); re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "slides"
+      ]
+    },
+    "people_count_estimate": {
+      "value": null,
+      "unit": "people",
+      "kind": "computed",
+      "status": "pending",
+      "source": "ESTIMATE: senegal_adults_15plus_2025 x senegal_mobile_money_adults_pct_2021, task 0.10; Senegalese adults with mobile money",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "helene_grocer_stores_cash_only": {
+      "value": null,
+      "unit": "stores",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "Ingles Markets' own published statement after Hurricane Helene; find and cite the exact document before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "helene_grocer_lost_sales_usd": {
+      "value": null,
+      "unit": "USD",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "Ingles Markets' own published statement after Hurricane Helene; find and cite the exact document before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "square_outage_2023_duration_minutes": {
+      "value": null,
+      "unit": "minutes",
+      "kind": "sourced",
+      "status": "pending",
+      "source": "Square status page incident, Sept 2023; re-verify before use",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "georgia_power_customers_out": {
+      "value": null,
+      "unit": "customers",
+      "kind": "measured",
+      "status": "pending",
+      "source": "Georgia Power's own outage map (Total Customers Affected), read Sat 9 to 11 PM, task 3.54; record the map URL here and the map's own Last Updated time in as_of; a second teammate re-opens the URL within 15 minutes. Never a screenshot of the map and never PowerOutage.us",
+      "as_of": null,
+      "surfaces": [
+        "Devpost",
+        "slides"
+      ]
+    },
+    "georgia_power_customers_served": {
+      "value": null,
+      "unit": "customers",
+      "kind": "measured",
+      "status": "pending",
+      "source": "Georgia Power's own outage map (Total Customers Served), the same reading and Last Updated time as georgia_power_customers_out, task 3.54",
+      "as_of": null,
+      "surfaces": [
+        "Devpost",
+        "slides"
+      ]
+    },
+    "fcc_helene_georgia_cell_sites_out_pct": {
+      "value": 17.7,
+      "unit": "% of cell sites",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "FCC DOC-406099A1, https://docs.fcc.gov/public/attachments/DOC-406099A1.pdf: \"17.7% ... of cell sites reported as being out of service in the areas of Georgia impacted by Hurricane Helene\" (quote verified verbatim 2026-10-09). The cell-site fallback line for task 3.54; say \"cell sites\", never \"people\", and always show the caveat",
+      "as_of": "2024-10-02T09:00:00-04:00",
+      "caveat": "The number of cell site outages in a specific area does not necessarily correspond to the availability of wireless service to consumers in that area.",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ]
+    }
+  }
+}

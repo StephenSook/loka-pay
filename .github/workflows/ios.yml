@@ -1,0 +1,79 @@
+# ios.yml: LokaPay package tests, the app build, and the iOS release checks.
+# Draft from the pre-event kit. Each TODO names the task that fills it in.
+# Gates run bare: no pipe on any exit path. This job stays red until ios/LokaPay
+# exists (task 1.1b); make it a required check once it is green (task 1.7).
+name: ios
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Branch pushes supersede each other; every main SHA keeps its own verdict.
+  group: ios-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ios:
+    name: ios (package tests, app build, release checks)
+    # TODO(1.7): use the runner image that ships Xcode 26.x (we build with 26.6 locally).
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        # TODO(1.7): pin with `sudo xcode-select -s /Applications/Xcode_<version>.app` once the image's list is checked.
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: LokaPay package tests
+        # TODO(1.1b): ios/LokaPay/Package.swift exists after task 1.1b.
+        run: swift test --package-path ios/LokaPay
+
+      - name: App build (simulator, unsigned)
+        run: |
+          xcodebuild -project ios/LOKA.xcodeproj -scheme LOKA \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-sim \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: App build (device, Release, unsigned) for the binary checks
+        run: |
+          xcodebuild -project ios/LOKA.xcodeproj -scheme LOKA -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-device \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Release checks (usage strings, export compliance, no OpenSSL)
+        # TODO(0.5, 1.1b): NSFaceIDUsageDescription, NSLocalNetworkUsageDescription and
+        # ITSAppUsesNonExemptEncryption=NO are added during the event; this step is red until then.
+        # TODO(1.1b): update the app path if the product name changes from LOKA.
+        run: |
+          set -euo pipefail
+          app="build/ios-device/Build/Products/Release-iphoneos/LOKA.app"
+          test -f "$app/Info.plist" || { echo "::error::built app not found at $app"; exit 1; }
+          for key in NSBluetoothAlwaysUsageDescription NSCameraUsageDescription NSFaceIDUsageDescription NSLocalNetworkUsageDescription; do
+            if ! plutil -extract "$key" raw -o - "$app/Info.plist" > /dev/null; then
+              echo "::error::Info.plist is missing $key"
+              exit 1
+            fi
+          done
+          encryption="$(plutil -extract ITSAppUsesNonExemptEncryption raw -o - "$app/Info.plist")"
+          if [ "$encryption" != "false" ]; then
+            echo "::error::ITSAppUsesNonExemptEncryption must be NO (got: $encryption)"
+            exit 1
+          fi
+          binary="$app/LOKA"
+          test -s "$binary" || { echo "::error::app binary missing at $binary"; exit 1; }
+          strings -a "$binary" > "$RUNNER_TEMP/app-strings.txt"
+          if grep -E -q 'OpenSSL [0-9]|BoringSSL|OPENSSL_init' "$RUNNER_TEMP/app-strings.txt"; then
+            echo "::error::OpenSSL or BoringSSL strings found in the app binary"
+            exit 1
+          fi
+          echo "release checks passed"

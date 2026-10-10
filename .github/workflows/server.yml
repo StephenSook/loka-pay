@@ -1,0 +1,68 @@
+# server.yml: settlement API typecheck and Vitest (unit, integration with Postgres, vectors).
+# Draft from the pre-event kit. Each TODO names the task that fills it in.
+# Gates run bare: no pipe on any exit path. This job stays red until server/ exists
+# (tasks 1.9, 1.9b); make it a required check once it is green (task 1.7).
+name: server
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  server:
+    name: server (typecheck, unit, integration, vectors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        # TODO(1.9): match the Tiger Cloud Postgres and TimescaleDB versions, and pin the image digest.
+        image: timescale/timescaledb:latest-pg17
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-throwaway
+          POSTGRES_DB: loka_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d loka_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://ci:ci-only-throwaway@localhost:5432/loka_test
+      SOLANA_CLUSTER: localnet
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # TODO(1.9): match "packageManager" in server/package.json.
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: server/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        # TODO(1.9): script names come from server/package.json.
+        run: pnpm run typecheck
+
+      - name: Tests (unit, integration, vectors)
+        # Must include server/test/replay.test.ts, certs.test.ts, codec.test.ts (T2) and reserves.test.ts (T2).
+        run: pnpm run test
