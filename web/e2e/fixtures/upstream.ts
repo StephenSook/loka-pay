@@ -5,6 +5,7 @@
 // in the layouts the pages decode; none is a real devnet account. The values the tests
 // expect are written out here as literals (EXPECTED), not computed by the app.
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -42,7 +43,22 @@ export const EXPECTED = {
   filesWithoutLineCount: 1,
   mainCommit: MAIN_SHA.slice(0, 7),
   ci: { ios: "success", android: "success", program: "success", server: "failure", web: "success", hygiene: "success" } as Record<string, string>,
+  /** /call: the newest settled payment in the recorded history (the refused redeem above it is skipped). */
+  callSignature: recorded.redeem.transaction.signatures[0] as string,
+  callAmount: "0.10",
 };
+
+/** Every recorded devnet transaction, newest first: getSignaturesForAddress answers this list. */
+const RECORDED_TXS = [recorded.refusedRedeem, recorded.redeem, recorded.registerMerchant, recorded.initializeVault, recorded.deploy];
+
+/** TEST FIXTURE: the bytes the ElevenLabs stand-in answers in place of an MP3. */
+export const E2E_AUDIO = Buffer.from("ID3 e2e stand-in audio, not a real mp3");
+
+/** What the Vonage and ElevenLabs stand-ins received (GET /__seen). */
+interface CallSeen {
+  vonage: Array<{ authorization: string; body: unknown }>;
+  speech: Array<{ apiKey: string; voice: string; outputFormat: string | null; body: unknown }>;
+}
 
 interface Account {
   owner: string;
@@ -114,7 +130,18 @@ function rpcAnswer(state: { slot: number; accounts: Map<string, Account> }, meth
     case "getTokenAccountBalance":
       return { context, value: { amount: "9500000", decimals: 6, uiAmount: 9.5, uiAmountString: "9.5" } };
     case "getTransaction":
-      return params[0] === recorded.initializeVault.transaction.signatures[0] ? recorded.initializeVault : null;
+      return RECORDED_TXS.find((tx) => tx.transaction.signatures[0] === params[0]) ?? null;
+    case "getSignaturesForAddress":
+      return params[0] === pins.programId
+        ? RECORDED_TXS.map((tx) => ({
+            signature: tx.transaction.signatures[0],
+            slot: tx.slot,
+            err: tx.meta.err,
+            memo: null,
+            blockTime: tx.blockTime,
+            confirmationStatus: "finalized",
+          }))
+        : [];
     case "getBlockTime":
       return 1_791_608_000;
     default:
@@ -161,17 +188,42 @@ function githubAnswer(pathname: string): unknown {
   return null;
 }
 
-/** Starts the stand-in. GET /__seen reports the Authorization headers GitHub requests carried. */
+/**
+ * Starts the stand-in. GET /__seen reports the Authorization headers GitHub requests carried
+ * and what the Vonage (/vonage/v1/calls) and ElevenLabs (/elevenlabs/v1/text-to-speech/:voice)
+ * stand-ins received, for the /call tests.
+ */
 export async function startUpstream(port = UPSTREAM_PORT): Promise<Server> {
   const state = { slot: 600_000_000, accounts: accounts() };
   const githubAuthorization: string[] = [];
+  const calls: CallSeen = { vonage: [], speech: [] };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
     const send = (status: number, body: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
-    if (req.method === "GET" && url.pathname === "/__seen") return send(200, { githubAuthorization });
+    const readJson = (then: (body: unknown) => void) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => then(JSON.parse(raw)));
+    };
+    if (req.method === "GET" && url.pathname === "/__seen") return send(200, { githubAuthorization, ...calls });
+    if (req.method === "POST" && url.pathname === "/vonage/v1/calls") {
+      return readJson((body) => {
+        calls.vonage.push({ authorization: req.headers.authorization ?? "", body });
+        send(201, { uuid: randomUUID(), status: "started", direction: "outbound", conversation_uuid: `CON-${randomUUID()}` });
+      });
+    }
+    const tts = url.pathname.match(/^\/elevenlabs\/v1\/text-to-speech\/([A-Za-z0-9]+)$/);
+    if (req.method === "POST" && tts) {
+      return readJson((body) => {
+        const apiKey = req.headers["xi-api-key"];
+        calls.speech.push({ apiKey: typeof apiKey === "string" ? apiKey : "", voice: tts[1], outputFormat: url.searchParams.get("output_format"), body });
+        res.writeHead(200, { "content-type": "audio/mpeg" });
+        res.end(E2E_AUDIO);
+      });
+    }
     if (req.method === "GET" && url.pathname.startsWith("/github/")) {
       githubAuthorization.push(req.headers.authorization ?? "");
       const body = githubAnswer(url.pathname);

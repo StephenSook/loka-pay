@@ -24,7 +24,7 @@ const browserRpc =
     : `the Solana devnet RPC server at ${BROWSER_HOSTS.join(" and ")}`;
 const serverHosts = hostsOf(SERVER_RPC_URL).join(" and ");
 
-// What the settlement server stores, read from its code on Oct 10.
+// What the settlement server stores, read from its code on Oct 10, then the two /call rows (PLAN.md 3.9).
 const STORED = [
   // registration_jobs.key_hash and .plan (publicKey, keyHash, kind, pool, allowanceId, expiry,
   // policy), .result (the signed certificate), registration_attempts (server/src/remit/store.ts).
@@ -71,6 +71,16 @@ const STORED = [
     field: "Payment notes and acks: amount, key hashes, signatures and when the merchant received it",
     where: "The settlement server; each settled payment is also public on Solana devnet",
     why: "To settle each payment once and show how long it was held offline",
+  },
+  {
+    field: "Your phone number, if you ask for a call on /call",
+    where: "Stored nowhere. Our server passes it once to Vonage to place one call; Vonage keeps a record of the call",
+    why: "To place the one call you asked for",
+  },
+  {
+    field: "The words the call says",
+    where: "Sent to ElevenLabs to make the voice: public payment details only (the amount, when it settled, that the signature was checked)",
+    why: "To read the payment out loud",
   },
 ];
 
@@ -127,18 +137,45 @@ export default function PrivacyPage() {
           this site&apos;s own address.
         </p>
         <p>
-          One page makes your browser contact another website, and only to show public data: /live
-          connects to {browserRpc} to read the program&apos;s transactions. That site sees your
-          browser&apos;s request, as any website does; this site sends it nothing about you. Every
-          other page makes no request to any other website.
+          Two pages make your browser contact another website, and only to read public data: /live
+          connects to {browserRpc} to read the program&apos;s transactions, and /call connects to the
+          same server to watch for the next settled payment, only after you press &quot;Call me when
+          the next payment settles&quot;. That site sees your browser&apos;s request, as any website
+          does; this site sends it nothing about you, and never your phone number. Every other page
+          makes no request to any other website.
         </p>
         <p>
           The /judge, /proof and /trust pages read public data from Solana devnet ({serverHosts}) and
           GitHub (api.github.com) on our server, not from your browser, and those reads carry
-          nothing about you.
+          nothing about you. /call also reads public payment data from Solana devnet on our server,
+          to find the payment the call reads out.
         </p>
         <p>
           It is hosted on Vercel. We have not turned on Vercel Web Analytics or Speed Insights.
+        </p>
+      </Section>
+
+      <Section title="Phone calls (/call)">
+        <p>
+          If you enter a phone number on /call and press a button, your browser sends it once to our
+          server, in the body of one request. Our server uses it to ask Vonage, the phone company we
+          use, to place one call, and does not store or log it. Vonage keeps a record of the call.
+        </p>
+        <p>
+          To enforce the call limits, our server&apos;s memory keeps a keyed hash of the number (not
+          the number) for up to 24 hours. It is never written to disk and is gone when the server
+          restarts.
+        </p>
+        <p>
+          Calls need a desk code we give out at the LOKA Pay table. If a request carries a wrong or
+          missing code, our server&apos;s memory keeps a keyed hash of your network address (not the
+          address, and made with a random key that changes whenever the server restarts) for up to
+          10 minutes, to limit guessing. It is never written to disk or logged.
+        </p>
+        <p>
+          The voice is made by ElevenLabs from public payment details only: the amount, how long ago
+          the payment settled, and that the chain checked the payer&apos;s signature. Your number
+          is never sent to ElevenLabs.
         </p>
       </Section>
 
@@ -149,11 +186,11 @@ export default function PrivacyPage() {
           the shop name a merchant types.
         </p>
         <p>
-          The table below lists what it stores, read from its code (server/ in the repository). Its
-          log has one line per response, with the method, the route and the status code, and no
-          address, header or body. The /proof page reads its public health check
-          (api.zerobars.us/api/health) from our web server, not from your browser, and that read
-          carries nothing about you.
+          All but the last two rows of the table below are what it stores, read from its code
+          (server/ in the repository); the last two are what the /call page handles. Its log has one
+          line per response, with the method, the route and the status code, and no address, header
+          or body. The /proof page reads its public health check (api.zerobars.us/api/health) from
+          our web server, not from your browser, and that read carries nothing about you.
         </p>
       </Section>
 
