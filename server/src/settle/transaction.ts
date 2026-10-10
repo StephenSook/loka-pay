@@ -3,7 +3,7 @@ import { base58 } from '@scure/base';
 import { BorshAccountsCoder } from '@anchor-lang/core';
 import * as P from '@lokapay/protocol';
 import {
-  ComputeBudgetProgram, Connection, PublicKey, Transaction, TransactionInstruction,
+  ComputeBudgetProgram, Connection, PublicKey, SendTransactionError, Transaction, TransactionInstruction,
   type Signer, type TransactionError,
 } from '@solana/web3.js';
 import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt, FeeQuote } from './types.js';
@@ -59,6 +59,26 @@ export function decodeChainError(error: TransactionError | null): { error: strin
   return { error: named?.name ?? `ProgramError${code}`, errorCode: code };
 }
 
+// web3.js keeps only the RPC message and logs of a preflight refusal, not its structured err. The RPC prints a
+// Custom instruction error exactly like this; the index and code are parsed from it, never matched loosely.
+const PREFLIGHT_CUSTOM_ERROR = /^Transaction simulation failed: Error processing Instruction (\d{1,3}): custom program error: 0x([0-9a-f]{1,8})$/;
+
+/** The loka_vault IDL error code of a preflight refusal raised by this transaction's redeem_note instruction, else null. */
+export function preflightProgramError(error: unknown, rawTransaction: Buffer): number | null {
+  if (!(error instanceof SendTransactionError)) return null;
+  const match = PREFLIGHT_CUSTOM_ERROR.exec(error.transactionError.message);
+  if (!match) return null;
+  let instructions: TransactionInstruction[];
+  try { instructions = Transaction.from(rawTransaction).instructions; } catch { return null; }
+  const discriminator = Buffer.from(redeem.discriminator);
+  const redeems = instructions.flatMap((ix, index) => ix.data.length === discriminator.length + P.SIZES.NOTE_V1
+    && ix.data.subarray(0, discriminator.length).equals(discriminator) ? [index] : []);
+  // The precompile and compute-budget instructions report Custom codes too. Only redeem_note's codes are ours.
+  if (redeems.length !== 1 || Number(match[1]) !== redeems[0]) return null;
+  const code = Number.parseInt(match[2], 16);
+  return idl.errors.some((entry: { code: number }) => entry.code === code) ? code : null;
+}
+
 export class SolanaGateway implements ChainGateway {
   constructor(private readonly connection: Connection, private readonly feePayer: Signer,
     private readonly options: { deliberateCheat?: boolean } = {}) {}
@@ -110,9 +130,19 @@ export class SolanaGateway implements ChainGateway {
   }
 
   async send(attempt: PreparedAttempt): Promise<void> {
-    // Normal uploads use RPC preflight. Only the operator's deliberate devnet cheat bypasses it.
-    const signature = await this.connection.sendRawTransaction(Buffer.from(attempt.rawTransaction, 'base64'),
-      { skipPreflight: this.options.deliberateCheat === true, maxRetries: 0 });
+    // Normal uploads use RPC preflight. Only the operator's deliberate devnet cheat bypasses it up front.
+    const raw = Buffer.from(attempt.rawTransaction, 'base64');
+    const skipPreflight = this.options.deliberateCheat === true;
+    let signature: string;
+    try {
+      signature = await this.connection.sendRawTransaction(raw, { skipPreflight, maxRetries: 0 });
+    } catch (error) {
+      // A loka_vault refusal must land on chain: the failed CONF and its explorer link come from that transaction.
+      // Resend the same signed bytes once without preflight. A refused preflight was never forwarded or charged,
+      // and one signature lands at most once, so the fee this attempt already reserved covers it.
+      if (skipPreflight || preflightProgramError(error, raw) === null) throw error;
+      signature = await this.connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 });
+    }
     if (signature !== attempt.signature) throw new Error('RPC returned a different transaction signature');
   }
 
