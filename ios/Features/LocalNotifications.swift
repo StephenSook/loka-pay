@@ -44,6 +44,15 @@ import UIKit
         content.categoryIdentifier = allowReply ? "message" : ""; content.userInfo = ["friend": friend, "message": id]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "chat." + friend, content: content, trigger: nil))
     }
+    /// A neutral notice for an encrypted frame that cannot be read while the phone is locked. It names
+    /// no contact and opens no chat: the frame may be a LOKA Pay text, not a message. Real messages
+    /// get their own notification once LOKA reads them after unlock, which clears this one.
+    func lockedActivity() {
+        let content = UNMutableNotificationContent(); content.title = "LOKA"
+        content.body = "Local activity. Unlock to check."; content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "locked.activity", content: content, trigger: nil))
+    }
+    func clearLockedActivity() { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["locked.activity"]) }
     private var waitingFriends = Set<String>()
     func waitingToSend(friend: String, name: String) {
         guard UIApplication.shared.applicationState != .active, waitingFriends.insert(friend).inserted else { return }

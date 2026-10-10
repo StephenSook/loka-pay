@@ -451,7 +451,9 @@ import UIKit
             if UIApplication.shared.isProtectedDataAvailable, mesh?.receive(frame, from: handle) == true { saveOrReport(); return }
             guard inbox.count < 128, !inbox.contains(frame) else { return }
             inbox.append(frame); try saveInbox()
-            LocalNotifications.shared.show(friend: packet.source, name: "LOKA", id: packet.id, detail: "Local activity · unlock to check messages", allowReply: false)
+            // Locked: the frame cannot be read yet and may be a LOKA Pay text, so the notice names no
+            // contact and opens no chat. A real message is notified when it is read after unlock.
+            LocalNotifications.shared.lockedActivity()
         } catch { notice = "Could not verify or save an incoming message" }
     }
     private func saveInbox() throws {
@@ -461,6 +463,7 @@ import UIKit
     }
     private func drainInbox() {
         guard ready, UIApplication.shared.isProtectedDataAvailable else { return }
+        if !inbox.isEmpty { LocalNotifications.shared.clearLockedActivity() }
         inbox = inbox.filter { frame in
             guard let packet = try? LokaPacket.decode(frame), packet.expiresAt > Int64(Date().timeIntervalSince1970 * 1000) else { return false }
             return mesh?.receive(frame) != true
@@ -504,6 +507,23 @@ import UIKit
             try persist(); updateWaitingNotifications(); return true
         } catch { contacts.error = error.localizedDescription; return false }
     }
+    /// LOKA Pay: queues one payment text (`L1|P|1|...`, PAYMENT-V1 section 5) for one contact as
+    /// ordinary encrypted LOKA content. No chat bubble, no archive message, no notification. The
+    /// packet lives 5 minutes, the Receive inbox's age limit. Returns the packet id, or why not.
+    func sendPayment(to contactID: String, text: String) -> Result<String, ContactCodeError> {
+        guard text.hasPrefix("L1|P|1|"), text.utf8.count <= 2048 else { return .failure(ContactCodeError(text: "This is not a payment code.")) }
+        guard ready, let mesh, UIApplication.shared.isProtectedDataAvailable else { return .failure(ContactCodeError(text: "Unlock your iPhone and open LOKA to send over Bluetooth.")) }
+        guard let contact = contacts.contacts.first(where: { $0.id == contactID }) else { return .failure(ContactCodeError(text: "That person is not a LOKA contact on this phone.")) }
+        do {
+            guard try mesh.queued().count < 120 else { return .failure(ContactCodeError(text: "LOKA's send queue is full. Wait for a connection.")) }
+            let packet = try mesh.send(recipient: contact.publicKey, text: text, automatic: true, lifetimeMs: 300_000)
+            meshEvent("CARRY \(packet.id.prefix(8)) outgoing kind=P dst=\(contact.id.prefix(8))")
+            saveOrReport()
+            return .success(packet.id)
+        } catch { return .failure(ContactCodeError(text: "LOKA could not queue it (\(error.localizedDescription)).")) }
+    }
+    /// LOKA Pay: stops retrying payment packets the merchant has answered (its ack verified).
+    func discardPaymentPackets(_ ids: [String]) { guard !ids.isEmpty else { return }; mesh?.discard(ids) }
     private func updateWaitingNotifications() {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let waiting = Set(messages.filter { $0.outgoing && !$0.delivered && $0.expiresAt > now }.map(\.friendID))
@@ -601,6 +621,11 @@ import UIKit
     func resumeQuiz() { gameAction { try $0.resume() } }
     func endQuiz() { gameAction { try $0.end() } }
     private func receiveContent(_ packet: LokaPacket, text: String) throws {
+        // LOKA Pay (PAYMENT-V1 section 5): `L1|P` texts go to the payment glue and never become a
+        // chat bubble, an archive entry or a chat notification. Only contacts reach here today
+        // (receiveFrame drops other senders); the glue drops any `L1|P` that is not `L1|P|1|`.
+        if LokaPayStore.takeMeshText(text, from: packet.source, packetID: packet.id,
+                                     fromContact: contacts.contacts.contains { $0.id == packet.source }) { return }
         if text.hasPrefix("L1|G|2|") {
             guard let party else { throw QuizError.invalid }
             let oldKeys = partyKeys, event = try PartyEvent.decode(text)

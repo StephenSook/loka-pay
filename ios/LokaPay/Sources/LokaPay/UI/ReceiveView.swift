@@ -7,12 +7,17 @@ public struct ReceiveView: View {
     @Bindable var model: ReceiveModel
     @ObservedObject var connectivity: ConnectivityMonitor
     let bluetoothOn: Bool?
+    /// Non-nil only while a Bluetooth reply (the ack or the receipt) of the payment on screen could
+    /// not be queued for a passing reason: the card then offers to send it again by hand.
+    let resendReply: (() -> Void)?
     @State private var scanning = false
 
-    public init(model: ReceiveModel, connectivity: ConnectivityMonitor, bluetoothOn: Bool? = nil) {
+    public init(model: ReceiveModel, connectivity: ConnectivityMonitor, bluetoothOn: Bool? = nil,
+                resendReply: (() -> Void)? = nil) {
         self.model = model
         self.connectivity = connectivity
         self.bluetoothOn = bluetoothOn
+        self.resendReply = resendReply
     }
 
     /// The screen without its scroll view (also rendered on its own at a 390 pt phone width by
@@ -197,6 +202,7 @@ public struct ReceiveView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let ackText = payment.ackText {
                     PaymentQRView(text: ackText, caption: "Receipt for the payer, signed by this phone")
+                    resendReplyButton
                 } else if model.isWorking {
                     ProgressView()
                     Text(ReceiveModel.ackSigningText(secureEnclave: model.signerIsSecureEnclave))
@@ -260,10 +266,24 @@ public struct ReceiveView: View {
                         .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
                 }
                 PaymentQRView(text: settlement.receiptText, caption: settlement.receiptCaption)
+                resendReplyButton
                 inboxNotes
                 Button("Next payment") { model.nextPayment() }.buttonStyle(LokaButtonStyle())
             }
             .lokaCard()
+        }
+    }
+
+    /// Shown under the code only after a Bluetooth reply of this payment could not be queued for a
+    /// passing reason (a locked phone, a full queue). The code above works either way.
+    @ViewBuilder private var resendReplyButton: some View {
+        if let resendReply {
+            Text("The reply to the payer could not be queued over Bluetooth just now. The code above still works.")
+                .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+            Button { resendReply() } label: {
+                Label("Send the reply again over Bluetooth", systemImage: "dot.radiowaves.left.and.right")
+            }
+            .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
         }
     }
 

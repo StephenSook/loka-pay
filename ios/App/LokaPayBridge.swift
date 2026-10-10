@@ -1,3 +1,5 @@
+import Combine
+import CoreBluetooth
 import Foundation
 import LokaPay
 import SwiftUI
@@ -247,9 +249,16 @@ final class LokaPayStore: ObservableObject {
     private(set) var serials: SerialReservations?
     private(set) var ledger: OfflineLedger?
     let connectivity = ConnectivityMonitor()
-    /// The one Bluetooth inbox for the app's lifetime. Nothing feeds it yet (the mesh glue is a
-    /// later task), so the screens are not given it: Receive mentions Bluetooth only when it is.
-    let inbox = PaymentInbox()
+    /// Payment texts over LOKA's Bluetooth mesh (PAYMENT-V1 section 5): the Receive inbox, the Pay
+    /// returns inbox, and which contact each note came from. One for the app's lifetime, so it
+    /// outlives LOKA's view resets like this store.
+    let mesh: MeshPaymentRouter
+    /// The LOKA side of the glue, set by `LokaPayTab` when it appears (a LOKA reset rebuilds it).
+    weak var meshChat: ChatStore?
+    weak var meshContacts: ContactStore?
+    /// The picker and the status line. Kept out of this store's published state, so a status
+    /// change never rebuilds the Pay and Receive models.
+    let meshNotes = LokaPayMeshNotes()
     /// Only when config/pins.json pins the server key: without it nothing the server signs can be
     /// checked, so the app does not call the server at all.
     let settlementClient: SettlementClient?
@@ -282,6 +291,13 @@ final class LokaPayStore: ObservableObject {
 
     init(bundle: Bundle = .main) {
         pins = Self.loadPins(bundle: bundle)
+        // Admission checks payment texts against the pinned deployment and server key. With no server
+        // key pinned, allowances and receipts are counted as unverifiable and never queued.
+        if case .ready(let deployment, let serverKey) = pins {
+            mesh = MeshPaymentRouter(deployment: deployment, serverPublicKey: serverKey)
+        } else {
+            mesh = MeshPaymentRouter(deployment: nil, serverPublicKey: nil)
+        }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("LokaPay", isDirectory: true)
         if case .ready(let deployment, let serverKey?) = pins {
@@ -308,16 +324,134 @@ final class LokaPayStore: ObservableObject {
     /// Both certificates verified with the pinned server key and naming this phone's key.
     var isReady: Bool { keyState == .ready && allowance == .verified && merchant == .verified }
 
-    /// What `LokaPayHomeView` needs, or nil until setup is complete. Bluetooth stays off in this
-    /// build (meshSend and meshInbox nil): camera codes are the transport.
-    var homeDependencies: LokaPayDependencies? {
+    /// What `LokaPayHomeView` needs, or nil until setup is complete. Camera codes always work; the
+    /// Bluetooth glue sends over LOKA's mesh to one contact at a time (`queueMeshSend`,
+    /// `sendMeshReply`). `bluetoothOn` is the radio state LOKA's BleLink reports, or nil.
+    func homeDependencies(bluetoothOn: Bool?, meshLinkReady: Bool? = nil) -> LokaPayDependencies? {
         guard isReady, case .ready(let deployment, let serverKey?) = pins, let signer, let serials, let ledger else {
             return nil
         }
         return LokaPayDependencies(deployment: deployment, serverPublicKey: serverKey, signer: signer,
                                    allowanceWire: allowanceWire, merchantWire: merchantWire,
                                    serials: serials, ledger: ledger, settlementClient: settlementClient,
-                                   connectivity: connectivity, meshSend: nil, meshInbox: nil, bluetoothOn: nil)
+                                   connectivity: connectivity,
+                                   meshSend: { [weak self] text in self?.queueMeshSend(text) },
+                                   meshInbox: mesh.receiveInbox, bluetoothOn: bluetoothOn,
+                                   meshReturns: mesh.payInbox,
+                                   meshReply: { [weak self] text, origin in self?.sendMeshReply(text, origin: origin) ?? true },
+                                   meshLinkReady: meshLinkReady)
+    }
+
+    // MARK: Bluetooth over LOKA's mesh (tasks 2.1, 2.2 glue, 2.7)
+
+    /// How the status lines name the transport: LOKA picks Bluetooth or local Wi-Fi per link.
+    static let meshWords = "over LOKA (Bluetooth or local Wi-Fi)"
+
+    /// ChatStore calls this with every decrypted text before LOKA's own handling. True: it was
+    /// payment family text (`L1|P`), delivered, skipped as a retry or dropped here, so ChatStore must
+    /// not show, store or notify it. False: not payment content; LOKA handles it as before.
+    static func takeMeshText(_ text: String, from peer: String, packetID: String, fromContact: Bool) -> Bool {
+        // Chat, games and receipts never touch the payment store.
+        guard MeshPaymentText.isPaymentFamily(text) else { return false }
+        let store = shared
+        guard store.mesh.receive(text, from: peer, fromContact: fromContact, packetID: packetID) else { return false }
+        // An ack that verifies for a note this phone sent: LOKA stops retrying that payment's packets.
+        let answered = store.mesh.answered(by: text)
+        if !answered.isEmpty {
+            store.meshChat?.discardPaymentPackets(answered)
+            store.meshNotes.status = "A signed ack for the payment this phone sent arrived from "
+                + store.contactName(peer) + " " + meshWords + "."
+        }
+        return true
+    }
+
+    /// Pay's Bluetooth button hands over the allowance, then the note, in one go. They wait in the
+    /// router while the payer picks the one LOKA contact (the merchant's phone) for this payment.
+    func queueMeshSend(_ text: String) {
+        mesh.queueOutgoing(text)
+        if meshNotes.picker == nil { meshNotes.picker = LokaPayMeshPickerRequest() }
+    }
+
+    /// Sends what Pay handed over for this payment to `contactID` only, in order, through ChatStore.
+    /// If any text cannot be queued, the ones already queued are withdrawn, so "not sent" is true.
+    func sendQueuedMesh(to contactID: String) {
+        let texts = mesh.takeOutgoing(for: contactID)
+        meshNotes.picker = nil
+        let name = contactName(contactID)
+        guard !texts.isEmpty else { return }
+        guard let chat = meshChat else {
+            meshNotes.status = "Nothing was sent: LOKA's mesh is not running. Show the two codes instead."
+            return
+        }
+        var packetIDs: [String] = []
+        for text in texts {
+            switch chat.sendPayment(to: contactID, text: text) {
+            case .success(let id):
+                packetIDs.append(id)
+            case .failure(let problem):
+                chat.discardPaymentPackets(packetIDs)
+                meshNotes.status = "Not sent to " + name + ": " + problem.text + " Show the two codes instead."
+                return
+            }
+        }
+        if let note = texts.last(where: { $0.hasPrefix(MeshPaymentText.prefix + "N|") }) {
+            mesh.sent(noteText: note, packetIDs: packetIDs)
+        }
+        meshNotes.status = "Allowance and note queued for " + name + " " + Self.meshWords
+            + " (sandbox). LOKA tries for 5 minutes while " + name
+            + "'s phone is in reach; Pay shows Received when the signed ack comes back. The codes still work."
+    }
+
+    /// The picker closed without a choice: nothing is sent.
+    func cancelMeshSend() {
+        guard !mesh.outgoing.isEmpty || meshNotes.picker != nil else { return }
+        mesh.cancelOutgoing()
+        meshNotes.picker = nil
+        meshNotes.status = "Not sent over Bluetooth. Show the two codes instead."
+    }
+
+    /// Receive's replies (the ack, then the receipt) for the payment on screen go only to the
+    /// sender of the one Bluetooth delivery its note was first accepted from (`MeshPaymentRouter.replyTarget`).
+    /// Camera, an unknown delivery or the same note from two contacts: nothing is sent, and the
+    /// status says why so the merchant shows the code. Returns false only for a passing failure
+    /// (locked phone, full queue), so the reply is offered again later.
+    func sendMeshReply(_ text: String, origin: MeshOrigin) -> Bool {
+        let what = text.hasPrefix(MeshPaymentText.prefix + "X|") ? "Receipt" : "Ack"
+        let peer: String
+        switch mesh.replyTarget(for: text, origin: origin) {
+        case .peer(let id):
+            peer = id
+        case .notOverBluetooth:
+            meshNotes.status = what + " not sent over Bluetooth: this payment's note came by camera. Show the code to the payer."
+            return true
+        case .ambiguous:
+            meshNotes.status = what + " not sent over Bluetooth: the same payment note arrived from more than one contact, "
+                + "so it is not clear who paid. Show the code to the payer."
+            return true
+        case .unknown:
+            meshNotes.status = what + " not sent over Bluetooth: this note was accepted before the app restarted, and this "
+                + "phone does not know which contact first sent it. Show the code to the payer."
+            return true
+        }
+        let name = contactName(peer)
+        guard let chat = meshChat else {
+            meshNotes.status = what + " not sent: LOKA's mesh is not running. Show the code to the payer."
+            return false
+        }
+        switch chat.sendPayment(to: peer, text: text) {
+        case .success:
+            meshNotes.status = what + " queued for " + name + " " + Self.meshWords
+                + " (sandbox), the contact this payment's note came from. LOKA tries for 5 minutes."
+            return true
+        case .failure(let problem):
+            meshNotes.status = what + " not sent to " + name + ": " + problem.text + " Show the code to the payer."
+            return false
+        }
+    }
+
+    /// A contact's LOKA name, or a neutral word when it is not known here.
+    func contactName(_ id: String) -> String {
+        meshContacts?.contacts.first(where: { $0.id == id })?.name ?? "the other phone"
     }
 
     // MARK: Key
@@ -1048,6 +1182,12 @@ private struct LokaPaySetupButtonBody: View {
 /// a game in progress survives a trip back to Pay.
 struct LokaPayTab<OfflineCorner: View>: View {
     @ObservedObject var store: LokaPayStore
+    /// LOKA's own stores (LokaRootView puts them in the environment): the Bluetooth glue sends
+    /// payment texts through ChatStore and names contacts from ContactStore.
+    @EnvironmentObject private var chat: ChatStore
+    @EnvironmentObject private var contacts: ContactStore
+    /// False while another LOKA tab is selected (LokaRootView sets it per tab).
+    @Environment(\.lokaTabActive) private var tabActive
     @Binding var showOfflineCorner: Bool
     private let offlineCorner: OfflineCorner
 
@@ -1061,7 +1201,9 @@ struct LokaPayTab<OfflineCorner: View>: View {
         ZStack {
             VStack(spacing: 0) {
                 payBar
-                payments
+                LokaPayMeshBanner(notes: store.meshNotes, store: store, contacts: contacts, chat: chat)
+                // Pay and Receive are live only while shown: not behind the Offline corner, not on another tab.
+                LokaPayHomeHost(store: store, link: chat.link, isActive: tabActive && !showOfflineCorner, chat: chat)
             }
             .background(LokaColor.paper.ignoresSafeArea())
             .opacity(showOfflineCorner ? 0 : 1)
@@ -1075,15 +1217,10 @@ struct LokaPayTab<OfflineCorner: View>: View {
             .allowsHitTesting(showOfflineCorner)
             .accessibilityHidden(!showOfflineCorner)
         }
-        .onAppear { store.prepareKey() }
-    }
-
-    /// Pay and Receive once setup is complete; until then, setup (which says what is missing).
-    @ViewBuilder private var payments: some View {
-        if let dependencies = store.homeDependencies {
-            LokaPayHomeView(dependencies: dependencies).id(store.wiresVersion)
-        } else {
-            LokaPaySetupView(store: store)
+        .onAppear {
+            store.meshChat = chat
+            store.meshContacts = contacts
+            store.prepareKey()
         }
     }
 
@@ -1123,5 +1260,185 @@ struct LokaPayTab<OfflineCorner: View>: View {
         }
         .padding(.horizontal, 16)
         .background(LokaStyle.background)
+    }
+}
+
+// MARK: - Bluetooth over LOKA's mesh (tasks 2.1, 2.2 glue, 2.7)
+
+/// Pay and Receive once setup is complete, with the Bluetooth radio state LOKA's BleLink reports
+/// (the zero-bars meter follows it); until then, setup (which says what is missing).
+private struct LokaPayHomeHost: View {
+    @ObservedObject var store: LokaPayStore
+    /// Only its radio state is read: observing all of BleLink would rebuild the payment models on
+    /// every signal-strength update.
+    let link: BleLink
+    /// Pay and Receive are on screen (`LokaPayHomeView`'s `isActive`).
+    let isActive: Bool
+    /// LOKA's own report that a local link is up, so waiting replies are offered again.
+    let chat: ChatStore
+    @State private var bluetoothOn: Bool?
+    @State private var linkReady: Bool?
+
+    var body: some View {
+        Group {
+            if let dependencies = store.homeDependencies(bluetoothOn: bluetoothOn, meshLinkReady: linkReady) {
+                LokaPayHomeView(dependencies: dependencies, isActive: isActive).id(store.wiresVersion)
+            } else {
+                LokaPaySetupView(store: store)
+            }
+        }
+        .onReceive(link.$bluetoothState.map(LokaPayHomeHost.bluetoothOn).removeDuplicates()) { bluetoothOn = $0 }
+        .onReceive(chat.$localConnectionReady.removeDuplicates()) { linkReady = $0 }
+    }
+
+    /// On or off only when the radio says so; unknown and resetting leave Bluetooth unmentioned.
+    static func bluetoothOn(_ state: CBManagerState) -> Bool? {
+        switch state {
+        case .poweredOn: return true
+        case .poweredOff, .unauthorized, .unsupported: return false
+        default: return nil
+        }
+    }
+}
+
+/// One open contact picker for a Bluetooth payment.
+struct LokaPayMeshPickerRequest: Identifiable {
+    let id = UUID()
+}
+
+/// The Bluetooth glue's picker and status line, observed only by the views that show them.
+@MainActor
+final class LokaPayMeshNotes: ObservableObject {
+    /// Non-nil while the contact picker for a Bluetooth payment is open.
+    @Published var picker: LokaPayMeshPickerRequest?
+    /// The last thing the Bluetooth glue did, in plain words; nil when there is nothing to say.
+    @Published var status: String?
+    /// The router's drop count when the banner was last dismissed; it shows drops after that.
+    @Published var droppedSeen = 0
+    @Published var unverifiableSeen = 0
+}
+
+/// What the Bluetooth glue last did (queued, not sent and why, an ack arrived) and how many payment
+/// texts it dropped, shown only when there is something to say; and the contact picker.
+private struct LokaPayMeshBanner: View {
+    @ObservedObject var notes: LokaPayMeshNotes
+    let store: LokaPayStore
+    let contacts: ContactStore
+    let chat: ChatStore
+
+    var body: some View {
+        let dropped = max(0, store.mesh.dropped - notes.droppedSeen)
+        let unverifiable = max(0, store.mesh.unverifiable - notes.unverifiableSeen)
+        Group {
+            if notes.status != nil || dropped > 0 || unverifiable > 0 {
+                banner(dropped: dropped, unverifiable: unverifiable)
+            } else {
+                Color.clear.frame(height: 0)
+            }
+        }
+        // Pay's "Send both over Bluetooth": pick the one contact that gets this payment's texts.
+        .sheet(item: $notes.picker, onDismiss: { store.cancelMeshSend() }) { _ in
+            LokaPayMeshPicker(mesh: store.mesh, contacts: contacts, chat: chat,
+                              send: { store.sendQueuedMesh(to: $0) }, cancel: { store.cancelMeshSend() })
+        }
+    }
+
+    private func banner(dropped: Int, unverifiable: Int) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .foregroundStyle(LokaColor.ink)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                if let status = notes.status { Text(status) }
+                if dropped > 0 {
+                    Text("Payment texts dropped (failed their checks, another version, or not from a contact): "
+                         + String(dropped) + ".")
+                }
+                if unverifiable > 0 {
+                    Text("Payment texts this phone cannot check yet (no server key pinned): " + String(unverifiable) + ".")
+                }
+            }
+            .font(LokaPay.LokaStyle.caption)
+            .foregroundStyle(LokaColor.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button("OK") {
+                notes.status = nil
+                notes.droppedSeen = store.mesh.dropped
+                notes.unverifiableSeen = store.mesh.unverifiable
+            }
+            .font(LokaPay.LokaStyle.label)
+            .foregroundStyle(LokaColor.ink)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityLabel("Dismiss the Bluetooth note")
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(LokaColor.card))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(LokaColor.ink, lineWidth: 1.5))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+}
+
+/// Pay's "Send both over Bluetooth": the payer picks the one LOKA contact (the merchant's phone)
+/// for THIS payment. The pick never carries to the next payment (`MeshPaymentRouter.pick`). With no
+/// contacts it says so and the two codes stay on screen.
+struct LokaPayMeshPicker: View {
+    let mesh: MeshPaymentRouter
+    @ObservedObject var contacts: ContactStore
+    @ObservedObject var chat: ChatStore
+    let send: (String) -> Void
+    let cancel: () -> Void
+
+    /// The contact already picked for the payment that is waiting (a resend), if any.
+    private var pickedForThisPayment: String? {
+        guard let pick = mesh.pick, pick.noteId == mesh.outgoingNoteId else { return nil }
+        return pick.peer
+    }
+
+    /// Contacts nearby now first, then by name.
+    private var rows: [LokaContact] {
+        let nearby = Set(chat.nearbyPeople.map(\.id))
+        return contacts.contacts.sorted { a, b in
+            let an = nearby.contains(a.id), bn = nearby.contains(b.id)
+            if an != bn { return an }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if contacts.contacts.isEmpty {
+                    Text("No LOKA contacts on this phone yet. Add the merchant's phone as a contact in Chats, or show the two codes instead.")
+                        .font(LokaPay.LokaStyle.body)
+                } else {
+                    Section {
+                        ForEach(rows) { contact in
+                            Button { send(contact.id) } label: { row(contact) }
+                        }
+                    } footer: {
+                        Text("Only this contact can read the allowance and the note. Other nearby LOKA phones may carry the sealed packets toward them. Sandbox: no real money moves.")
+                    }
+                }
+            }
+            .navigationTitle("Send to which contact?")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { cancel() } }
+            }
+        }
+    }
+
+    private func row(_ contact: LokaContact) -> some View {
+        let notes = [chat.nearbyPeople.contains(where: { $0.id == contact.id }) ? "Nearby now" : nil,
+                     contact.id == pickedForThisPayment ? "Picked for this payment" : nil].compactMap { $0 }
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(contact.name).font(LokaPay.LokaStyle.label).foregroundStyle(LokaColor.ink)
+            if !notes.isEmpty {
+                Text(notes.joined(separator: ", ")).font(LokaPay.LokaStyle.caption).foregroundStyle(LokaColor.muted)
+            }
+        }
+        .frame(minHeight: 44, alignment: .leading)
     }
 }
