@@ -3,8 +3,49 @@ import type { AddressInfo } from "node:net";
 import { expect, test } from "@playwright/test";
 import { PINS } from "../lib/pins";
 import { isRateLimited } from "../lib/read-state";
-import { SETTLEMENT_HEALTH_URL, SettlementError, readServerHealthUncached, settlementApiBase, summarizeHealth } from "../lib/settlement";
+import { SETTLEMENT_HEALTH_URL, SettlementError, readServerHealthUncached, remittanceRoute, settlementApiBase, summarizeHealth } from "../lib/settlement";
 import { UpstreamConfigError } from "../lib/test-upstream";
+
+// The /v1/remittances entry of phase3Routes, as server/src/app/phase3.ts on feat/phase3-measure
+// reports it: { registered, reason } with reason null when registered.
+test.describe("remittanceRoute: the health answer's phase3Routes entry for POST /v1/remittances", () => {
+  const routes = (entry: unknown) => ({ phase3Routes: { "/api/volume": { registered: true, reason: null }, "/v1/remittances": entry } });
+
+  test("registered: on", () => {
+    expect(remittanceRoute(routes({ registered: true, reason: null }))).toEqual({ registered: true });
+  });
+
+  test("not registered: off, with the server's reason", () => {
+    for (const reason of ["missing_config", "invalid_config", "initialization_failed"]) {
+      expect(remittanceRoute(routes({ registered: false, reason }))).toEqual({ registered: false, reason });
+    }
+    expect(remittanceRoute(routes({ registered: false, reason: null }))).toEqual({ registered: false, reason: "no reason given" });
+  });
+
+  test("no readable entry (today's server on main has no phase3Routes): null, which /send treats as off", () => {
+    for (const body of [
+      { ok: true, slot: 1 },
+      null,
+      "x",
+      { phase3Routes: null },
+      { phase3Routes: [] },
+      { phase3Routes: { "/api/volume": { registered: true, reason: null } } },
+      routes(null),
+      routes({ registered: "true" }),
+      routes({}),
+    ]) {
+      expect(remittanceRoute(body), JSON.stringify(body)).toBeNull();
+    }
+  });
+
+  test("summarizeHealth carries it on both 200 and 503 answers", () => {
+    expect(summarizeHealth(200, { ...OK, ...routes({ registered: true, reason: null }) }, HOST).remittances).toEqual({ registered: true });
+    expect(summarizeHealth(503, { ...DOWN, ...routes({ registered: false, reason: "missing_config" }) }, HOST).remittances).toEqual({
+      registered: false,
+      reason: "missing_config",
+    });
+  });
+});
 
 // The settlement API's health read (lib/settlement.ts). The local servers below are TEST
 // FIXTURES on 127.0.0.1 answering in the shapes server/src/app/app.ts sends (API-V1 section 6).
@@ -21,11 +62,11 @@ test("the evidence link is always the real health check", () => {
 
 test.describe("summarizeHealth", () => {
   test("200 with ok true and a slot: the answer as the server gave it", () => {
-    expect(summarizeHealth(200, OK, HOST)).toEqual({ ok: true, commit: SHA, cluster: "devnet", programId: PINS.programId, slot: 600_000_123 });
+    expect(summarizeHealth(200, OK, HOST)).toEqual({ ok: true, commit: SHA, cluster: "devnet", programId: PINS.programId, slot: 600_000_123, remittances: null });
   });
 
   test("503 with ok false: a read that says the server cannot reach devnet, with no slot", () => {
-    expect(summarizeHealth(503, DOWN, HOST)).toEqual({ ok: false, commit: SHA, cluster: "devnet", programId: PINS.programId, slot: null });
+    expect(summarizeHealth(503, DOWN, HOST)).toEqual({ ok: false, commit: SHA, cluster: "devnet", programId: PINS.programId, slot: null, remittances: null });
   });
 
   test("any other status fails the read, naming the host and status; 429 is a rate limit", () => {
@@ -87,7 +128,7 @@ test.describe("readServerHealthUncached against a local stand-in", () => {
     await withServer(
       () => ({ status: 200, body: JSON.stringify(OK) }),
       async (base, paths) => {
-        expect(await readServerHealthUncached(`${base}/api/health`, 5000)).toEqual(OK);
+        expect(await readServerHealthUncached(`${base}/api/health`, 5000)).toEqual({ ...OK, remittances: null });
         expect(paths).toEqual(["/api/health"]);
       },
     );

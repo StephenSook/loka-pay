@@ -1,5 +1,6 @@
 // The settlement API's health check (protocol/API-V1.md section 6, server/src/app/app.ts),
-// read on our server and cached (lib/cached-read.ts) for the /proof server claim. Server only.
+// read on our server and cached (lib/cached-read.ts) for the /proof server claim and for
+// /send, which is on only while the answer reports POST /v1/remittances. Server only.
 //
 // The server answers 200 with ok true, its commit, the cluster, the program id and a slot it
 // read from devnet for that request, or 503 with ok false when it cannot reach devnet. Any
@@ -58,6 +59,25 @@ export interface ServerHealth {
   programId: string;
   /** The slot the server read from devnet for this request; null when ok is false. */
   slot: number | null;
+  /**
+   * POST /v1/remittances (API-V1 section 9) as the health answer's `phase3Routes` reports it:
+   * registered, or not with the server's reason (missing_config, invalid_config,
+   * initialization_failed). Null when the answer has no readable entry for it, as from a server
+   * built before that route existed. /send takes only `registered: true` as on.
+   */
+  remittances: RouteState | null;
+}
+
+export type RouteState = { registered: true } | { registered: false; reason: string };
+
+/** The remittance route's entry in a health body's `phase3Routes`, or null when there is none to read. */
+export function remittanceRoute(body: unknown): RouteState | null {
+  const routes = (body as { phase3Routes?: unknown } | null)?.phase3Routes;
+  if (typeof routes !== "object" || routes === null || Array.isArray(routes)) return null;
+  const entry = (routes as Record<string, unknown>)["/v1/remittances"] as { registered?: unknown; reason?: unknown } | undefined;
+  if (typeof entry !== "object" || entry === null || typeof entry.registered !== "boolean") return null;
+  if (entry.registered) return { registered: true };
+  return { registered: false, reason: typeof entry.reason === "string" && entry.reason ? entry.reason : "no reason given" };
 }
 
 export class SettlementError extends Error {
@@ -83,10 +103,10 @@ export function summarizeHealth(status: number, body: unknown, host: string): Se
   const named = !!b && typeof b === "object" && typeof b.commit === "string" && typeof b.cluster === "string" && typeof b.programId === "string";
   if (status === 200) {
     if (!named || b!.ok !== true || !isSlot(b!.slot)) throw new SettlementError(`${host}'s health answer had an unexpected shape`);
-    return { ok: true, commit: b!.commit as string, cluster: b!.cluster as string, programId: b!.programId as string, slot: b!.slot as number };
+    return { ok: true, commit: b!.commit as string, cluster: b!.cluster as string, programId: b!.programId as string, slot: b!.slot as number, remittances: remittanceRoute(b) };
   }
   if (!named || b!.ok !== false) throw new SettlementError(`${host} answered HTTP 503 without its health answer`);
-  return { ok: false, commit: b!.commit as string, cluster: b!.cluster as string, programId: b!.programId as string, slot: null };
+  return { ok: false, commit: b!.commit as string, cluster: b!.cluster as string, programId: b!.programId as string, slot: null, remittances: remittanceRoute(b) };
 }
 
 /** The health read. The URL and limit are parameters only so tests can point it at a local server. */
