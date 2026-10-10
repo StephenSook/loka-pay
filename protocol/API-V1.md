@@ -28,6 +28,7 @@ Every error is `{ "error": "<name>", "message": "<plain English>" }`.
 | 400 | `name_length` | Merchant name is not 1 to 64 bytes of UTF-8 after NFC |
 | 404 | `unknown_note` | `GET /v1/notes/{noteId}` for a note this server never saw |
 | 409 | `registration_failed` | Confirmed failure, with signature, explorer link and bounded retryOf repost instructions; no certificate |
+| 409 | `onboarding_already_claimed` | The public key already received its completed onboarding allowance and cannot renew |
 | 422 | a PAYMENT-V1 section 6 name, `bad_ack`, `unknown_allowance`, `unknown_merchant` or `payer_mismatch` | The note or ack failed a stateless check or an identity check (section 4) |
 | 429 | `rate_limited` | The in-memory burst guard tripped; retry after `Retry-After` seconds |
 | 429 | `budget_exhausted` | That wallet's daily budget is spent (team and public pools are separate) |
@@ -53,7 +54,7 @@ Saved-attempt recovery: after the separate 30 second broadcast lease, a request 
 
 Confirmed registration failures are recoverable through one explicit repost per job. HTTP 409 registration_failed includes the saved signature, retryable and retryOf. After restoring funding or waiting for budget reset, repost the original publicKey (and name for a merchant) plus retryOf equal to that signature. The server atomically admits the retry, retains the first key, pool, policy, merchant name and all signature history, extending an expired failed payer plan by the same policy lifetime, and fences the old worker. No uncertain signature is eligible. A confirmed collision whose next budget reservation is denied returns this same actionable 409, never indefinite 202. Once the explicit retry is consumed, retryable is false. Unsigned work can still recover through its claim lease. Known unsigned admission failure restores the prior failed response and retry slot. Old reservations are not refunded.
 
-Expiry controls renewal: only a completed allowance whose recorded expiry has passed may open a new allowance on a later call. Pending registrations never renew. No cap, serial or redeemed-balance lookup triggers renewal. Daily budgets use UTC days and atomically reserve token deposits, funding-wallet rent and fee-payer lamports before signing. Every collision retry has a separate conservative reservation; reservations are never automatically refunded. Team membership, limits and certificate terms are server configuration.
+Expiry controls team renewal: only a completed team allowance whose recorded expiry has passed may open a new allowance on a later call. Public onboarding is one completed allowance per key: active repeats return the original certificate without funding again; after expiry a new claim returns unsigned HTTP 409 onboarding_already_claimed. No separate /v1/allowances endpoint is defined. Pending registrations never renew. No cap, serial or redeemed-balance lookup triggers renewal. Daily budgets use UTC days and atomically reserve token deposits, funding-wallet rent and fee-payer lamports before signing. Every collision retry has a separate conservative reservation; reservations are never automatically refunded. Team membership, limits and certificate terms are server configuration.
 
 Response:
 
