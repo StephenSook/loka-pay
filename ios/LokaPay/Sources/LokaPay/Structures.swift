@@ -90,8 +90,9 @@ public struct Confirmation: Equatable, Sendable {
 /// Earmark list: u16 count || sorted unique 32-byte merchant key hashes (section 4.4).
 public enum Earmarks {
     public static func encode(_ keyHashes: [Data]) throws -> Data {
+        // Check count and lengths BEFORE sorting: compare() requires equal lengths.
+        guard keyHashes.count <= 16, keyHashes.allSatisfy({ $0.count == 32 }) else { throw PaymentError.earmarkList }
         let sorted = keyHashes.sorted { P256Rules.compare($0, $1) < 0 }
-        guard sorted.count <= 16, sorted.allSatisfy({ $0.count == 32 }) else { throw PaymentError.earmarkList }
         for i in sorted.indices.dropFirst() where sorted[i] == sorted[i - 1] { throw PaymentError.earmarkList }
         var w = ByteWriter()
         w.u16(UInt16(sorted.count))
