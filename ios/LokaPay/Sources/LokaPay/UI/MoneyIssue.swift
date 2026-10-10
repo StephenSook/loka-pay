@@ -128,6 +128,23 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         }
     }
 
+    /// The layer that refused before Solana saw anything, for the refusals that have one (task
+    /// 2.13: a refusal before the chain names its layer). Nil for everything else: setup gaps, codes
+    /// of the wrong kind, steps, and outcomes the phone cannot know.
+    public var refusedBy: RefusalLayer? {
+        switch self {
+        case .payment(.storage): return nil
+        case .payment, .overCap, .damagedRecord: return .thisPhone
+        case .settlement(let e):
+            switch e {
+            case .refused, .badJSON, .badBase64url, .badPubkey, .nameLength, .rateLimited, .budgetExhausted:
+                return .settlementServer
+            default: return nil
+            }
+        default: return nil
+        }
+    }
+
     /// "an" before a vowel sound, "a" otherwise, for the code names in `kindName`.
     static func article(_ phrase: String) -> String {
         guard let first = phrase.lowercased().first else { return "a" }
@@ -246,6 +263,21 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .cannotFindHost, .dnsLookupFailed: return "server name not found"
         case .cannotConnectToHost: return "server not answering"
         default: return "network error \(code.rawValue)"
+        }
+    }
+}
+
+/// Which layer refused a payment before Solana saw it.
+public enum RefusalLayer: Equatable, Sendable {
+    /// This phone's own checks (PAYMENT-V1 section 6, the merchant checks, the payer's checks).
+    case thisPhone
+    /// The settlement server (an API-V1 refusal); nothing was sent to the chain.
+    case settlementServer
+
+    public var text: String {
+        switch self {
+        case .thisPhone: return "Refused by this phone's own checks, before anything reached Solana."
+        case .settlementServer: return "Refused by the settlement server, before anything reached Solana."
         }
     }
 }

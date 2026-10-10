@@ -126,6 +126,38 @@ struct TryToCheatMerchantTests {
         #expect(facts.chainLine?.contains("no explorer link") == true)
         #expect(facts.chainLine?.contains("opens on the explorer") == false)
     }
+
+    @Test("a refusal before the chain names its layer: merchant B's own checks, or the settlement server")
+    func refusalLayers() async throws {
+        let (original, cheat) = try pair()
+        // Merchant B's offline checks: the original note pays merchant A.
+        let (offline, offlineLedger) = await merchantBModel([])
+        await offline.accept(text: PaymentTransport.encode(.note, original.wire))
+        let refused = try #require(offline.issue)
+        #expect(refused.kind == .payment(.payeeMismatch))
+        #expect(refused.kind.refusedBy == .thisPhone)
+        #expect(refused.kind.refusedBy?.text == "Refused by this phone's own checks, before anything reached Solana.")
+        #expect(try offlineLedger.entries().isEmpty)
+
+        // The settlement server: the merchant record is not on chain.
+        let body = APIFixtures.json(["error": "unknown_merchant", "message": "no merchant record"])
+        let (server, serverLedger) = await merchantBModel([StubReply(status: 422, body: body)])
+        await server.accept(text: PaymentTransport.encode(.note, cheat.wire))
+        await server.settle()
+        let issue = try #require(server.issue)
+        #expect(issue.kind == .settlement(.refused(check: "unknown_merchant", message: "no merchant record")))
+        #expect(issue.kind.refusedBy == .settlementServer)
+        #expect(issue.kind.refusedBy?.text == "Refused by the settlement server, before anything reached Solana.")
+        #expect(server.phase == .received)
+        #expect(try serverLedger.entries().first?.state == .pending)
+
+        // No layer is named where nothing refused, or where the outcome is unknown.
+        let unnamed: [MoneyIssueKind] = [
+            .settlement(.network(.timedOut)), .settlement(.chainUnavailable(message: "")), .serverNotConnected,
+            .payment(.storage), .allowanceNeeded, .notPaymentCode,
+        ]
+        for kind in unnamed { #expect(kind.refusedBy == nil, "\(kind.name)") }
+    }
 }
 
 @Suite("program error names match programs/idl/loka_vault.json (2.13)")

@@ -344,6 +344,11 @@ public struct IssueBanner: View {
             Text(issue.message)
                 .font(LokaStyle.body)
                 .fixedSize(horizontal: false, vertical: true)
+            if let layer = issue.kind.refusedBy {
+                Text(layer.text)
+                    .font(LokaStyle.label)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("At \(issue.at.formatted(date: .omitted, time: .standard)) (this phone's clock)")
                 .font(LokaStyle.caption)
         }
