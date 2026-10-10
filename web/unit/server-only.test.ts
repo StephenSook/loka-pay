@@ -7,7 +7,7 @@ import { E2E_GITHUB_TOKEN } from "../e2e/fixtures/ports";
 import { readProgramFactsUncached } from "../lib/chain";
 import { GitHubError, githubApiBase, githubHeaders, readMainChecksUncached } from "../lib/github";
 import { serverReadOptions, serverRpcUrl } from "../lib/server-rpc";
-import { E2E_TEST_TOKEN, UpstreamConfigError } from "../lib/test-upstream";
+import { E2E_TEST_TOKEN, UpstreamConfigError, isLoopback } from "../lib/test-upstream";
 
 // Server-only configuration (GITHUB_TOKEN, SOLANA_RPC_URL, GITHUB_API_URL) must never reach a
 // browser: no client module may import the modules that read it. A real token goes only to
@@ -189,6 +189,91 @@ test.describe("SOLANA_RPC_URL: any real provider, a local endpoint only in test 
     await env({ SOLANA_RPC_URL: "http://127.0.0.1:3190/rpc" }, async () => {
       await expect(readProgramFactsUncached()).rejects.toThrow(UpstreamConfigError);
     });
+  });
+});
+
+// Every way a URL can name this machine, after the URL parser normalizes it, is a local test
+// endpoint: refused without the test mode, and always in a deployed production build.
+test.describe("loopback endpoints in every form", () => {
+  const LOCAL = [
+    "http://127.0.0.1:3190/rpc",
+    "http://127.1",
+    "http://2130706433",
+    "http://0x7f000001",
+    "http://0177.0.0.1",
+    "http://127.0.0.2:8899",
+    "http://127.255.255.254",
+    "http://127.0.0.1.",
+    "https://127.0.0.1",
+    "http://[::1]:8899",
+    "http://[0:0:0:0:0:0:0:1]",
+    "http://[::ffff:127.0.0.1]",
+    "http://[::ffff:7f00:1]",
+    "http://[::ffff:7f00:2]",
+    "http://[::ffff:0:0]",
+    "http://[::7f00:1]",
+    "http://[::127.0.0.1]",
+    "http://[::]",
+    "http://0.0.0.0:8899",
+    "http://0",
+    "http://localhost:8899",
+    "http://LOCALHOST.",
+    "http://localhost%2e",
+    "http://api.localhost",
+    "http://rpc.devnet.localhost.",
+  ];
+  const REMOTE = [
+    "https://api.devnet.solana.com",
+    "https://devnet.helius-rpc.com/?api-key=SECRET-KEY-VALUE",
+    "https://solana-devnet.g.alchemy.com/v2/SECRET-KEY-VALUE",
+    "https://example.com:8899",
+    "http://128.0.0.1",
+    "http://10.0.0.1",
+    "http://[::2]",
+    "http://[::a00:1]",
+    "http://[::ffff:8.8.8.8]",
+    "http://[::1:0:0:1]",
+    "http://[2001:db8::1]",
+    "http://localhost.example.com",
+    "http://notlocalhost",
+  ];
+
+  test("each local form is recognized; remote hosts are not", () => {
+    for (const url of LOCAL) expect(isLoopback(url), url).toBe(true);
+    for (const url of REMOTE) expect(isLoopback(url), url).toBe(false);
+    expect(isLoopback("not a url")).toBe(false);
+  });
+
+  test("SOLANA_RPC_URL naming any local form is refused without the test mode, and in deployed production even with it", async () => {
+    for (const url of LOCAL) {
+      await env({ SOLANA_RPC_URL: url }, async () => {
+        expect(() => serverRpcUrl(), url).toThrow("accepted only in the e2e test mode");
+      });
+      await env({ ...DEPLOYED, LOKA_E2E_UPSTREAM: "1", SOLANA_RPC_URL: url }, async () => {
+        expect(() => serverRpcUrl(), url).toThrow("a deployed production build refuses");
+      });
+      await env({ LOKA_E2E_UPSTREAM: "1", SOLANA_RPC_URL: url }, async () => {
+        expect(serverRpcUrl(), url).toBe(url);
+      });
+    }
+  });
+
+  test("GITHUB_API_URL naming any local form is refused the same way", async () => {
+    for (const url of LOCAL) {
+      await env({ GITHUB_API_URL: url }, async () => expect(() => githubApiBase(), url).toThrow("accepted only in the e2e test mode"));
+      await env({ ...DEPLOYED, LOKA_E2E_UPSTREAM: "1", GITHUB_API_URL: url }, async () =>
+        expect(() => githubApiBase(), url).toThrow("a deployed production build refuses"),
+      );
+    }
+  });
+
+  test("real HTTPS providers, keyed in the query or the path, are accepted in deployed production", async () => {
+    for (const url of REMOTE.filter((u) => u.startsWith("https://"))) {
+      await env({ ...DEPLOYED, SOLANA_RPC_URL: url }, async () => {
+        expect(serverRpcUrl(), url).toBe(url);
+        expect(serverReadOptions().url, url).toBe(url);
+      });
+    }
   });
 });
 
