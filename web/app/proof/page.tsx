@@ -7,7 +7,7 @@ import { ArrowUpRightIcon } from "@/components/icons";
 import { CARD, ClaimChip, PAGE, type ClaimStatus } from "@/components/judge-ui";
 import { ReservesPanel } from "@/components/reserves-panel";
 import { readProgramFacts, readReserves, type ProgramFacts, type Read, type ReservesRead } from "@/lib/chain";
-import { INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
+import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readBuiltThisWeekend } from "@/lib/github";
 import { PINS } from "@/lib/pins";
 import { REPO_URL } from "@/lib/site";
@@ -36,6 +36,8 @@ interface Claim {
   text: string;
   status: ClaimStatus;
   evidence?: Evidence;
+  /** A second place to look, shown under the evidence of a Live claim. */
+  more?: Evidence;
   /** Why it is not Live: the failed read, or what is missing. */
   note?: string;
 }
@@ -93,7 +95,10 @@ function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRe
             id: "redeemed",
             text: "A payment note has been redeemed on devnet.",
             status: "live",
-            evidence: { href: "/live", label: "The transactions on /live", internal: true },
+            // The first settled redeem itself (lib/facts.ts), which cannot scroll away; /live
+            // lists only the newest transactions.
+            evidence: { href: explorerTx(FIRST_REDEEM_TX_SIGNATURE), label: "The first settled redeem on Solana Explorer" },
+            more: { href: "/live", label: "Newer transactions on /live", internal: true },
           }
         : { id: "redeemed", text: "A payment note has been redeemed on devnet.", status: "building", note: "No allowance on chain has a redeemed amount yet." };
 
@@ -148,14 +153,14 @@ function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRe
   ];
 }
 
-function EvidenceLink({ evidence }: { evidence: Evidence }) {
+function EvidenceLink({ evidence, testId = "claim-evidence" }: { evidence: Evidence; testId?: string }) {
   const className = "w-fit font-bold underline";
   return evidence.internal ? (
-    <Link href={evidence.href} className={className} data-testid="claim-evidence">
+    <Link href={evidence.href} className={className} data-testid={testId}>
       {evidence.label}
     </Link>
   ) : (
-    <a href={evidence.href} target="_blank" rel="noopener noreferrer" className={className} data-testid="claim-evidence">
+    <a href={evidence.href} target="_blank" rel="noopener noreferrer" className={className} data-testid={testId}>
       {evidence.label}
       <ArrowUpRightIcon className="ml-1 inline-block h-4 w-4 align-[-0.15em]" />
       <span className="sr-only">(opens in a new tab)</span>
@@ -192,6 +197,7 @@ export default async function ProofPage() {
                 <ClaimChip status={c.status} />
               </div>
               {c.status === "live" && c.evidence ? <EvidenceLink evidence={c.evidence} /> : null}
+              {c.status === "live" && c.evidence && c.more ? <EvidenceLink evidence={c.more} testId="claim-evidence-more" /> : null}
               {c.status !== "live" && c.note ? <p className="break-words text-sm text-muted">{c.note}</p> : null}
             </li>
           ))}

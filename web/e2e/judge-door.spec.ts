@@ -15,6 +15,8 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const pins = JSON.parse(readFileSync(path.join(repoRoot, "config", "pins.json"), "utf8"));
 const recorded = JSON.parse(readFileSync(path.join(__dirname, "..", "unit", "fixtures", "devnet-transactions.json"), "utf8"));
 const INIT_TX = "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R";
+// The first real settled redeem_note on devnet (the README's "settled payment" link).
+const FIRST_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
 const DEVNET = /^https:\/\/api\.devnet\.solana\.com\/?$/;
 const DEVNET_WS = /^wss:\/\/api\.devnet\.solana\.com\/?$/;
 
@@ -199,8 +201,18 @@ test("/proof: Live claims link their evidence, Building claims link nothing; res
       await expect(claim.getByTestId("claim-status")).toHaveText("Live");
     } else {
       await expect(evidence).toHaveCount(0);
+      await expect(claim.getByTestId("claim-evidence-more")).toHaveCount(0);
       await expect(claim.getByTestId("claim-status")).toHaveText(status === "building" ? "Building" : "Not checked");
     }
+  }
+  // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
+  // /live's newest rows; /live is the second link.
+  const redeemed = page.getByTestId("claim-redeemed");
+  if ((await redeemed.getAttribute("data-status")) === "live") {
+    await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${FIRST_REDEEM_TX}?cluster=devnet`);
+    await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
+  } else {
+    test.info().annotations.push({ type: "devnet", description: `redeemed claim: ${await redeemed.innerText()}` });
   }
   await expect(page.getByTestId("claim-server")).toHaveAttribute("data-status", "building");
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");

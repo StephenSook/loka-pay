@@ -10,6 +10,17 @@
 export const INIT_TX_SIGNATURE =
   "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R";
 
+/**
+ * The first real settled redeem_note on devnet, Sat Oct 10 2:01 AM ET: the "settled payment"
+ * link in the repository README ("First real payment and refused cheat on devnet", commit
+ * b8a79b0, PLAN.md 1.4). Checked against devnet with getTransaction: loka_vault logged
+ * "Instruction: RedeemNote" and the transaction succeeded. /proof links it as the evidence
+ * that a note has been redeemed, because a single transaction cannot scroll away the way
+ * /live's newest rows do.
+ */
+export const FIRST_REDEEM_TX_SIGNATURE =
+  "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
+
 /** iOS status (PLAN.md 1.11): App Store Connect read betaReviewState WAITING_FOR_REVIEW, submitted 12:05:42 AM ET. */
 export const TESTFLIGHT_STATUS =
   "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves";
