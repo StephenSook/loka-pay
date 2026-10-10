@@ -1,5 +1,5 @@
 // TEST FIXTURE for /send (PLAN.md 3.3): allowance certificates and POST /v1/remittances
-// answers in the shapes of server/src/remit/remittance.ts on feat/phase3-measure (API-V1
+// answers in the shapes of server/src/remit/remittance.ts (API-V1
 // section 9). Certificates are signed with the published test vector server key
 // (e2e/fixtures/ports.ts), never with a real key, under the pinned devnet deployment.
 

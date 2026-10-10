@@ -1,5 +1,5 @@
 // /send (PLAN.md 3.3, web half): the form's input rules, the request, every answer of
-// POST /v1/remittances (protocol/API-V1.md section 9, the server half on feat/phase3-measure),
+// POST /v1/remittances (protocol/API-V1.md section 9, server/src/remit/remittance.ts),
 // the pending repost loop, and the check of the allowance certificate the server returns.
 //
 // Pure: no framework. The network, the clock and sleeping are passed in, so
@@ -31,7 +31,7 @@ const MAX_UNITS = BigInt(MAX_SEND_UNITS);
 const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
 
 /**
- * The payer phone's allowance id code, docs/ALLOWANCE-ID-QR.md (iOS PR #61, `AllowanceIdCode`):
+ * The payer phone's allowance id code, docs/ALLOWANCE-ID-QR.md (`AllowanceIdCode` in the iOS package):
  * `LOKA-ALLOWANCE:<id>`, the prefix exact and case-sensitive.
  */
 export const ALLOWANCE_CODE_PREFIX = "LOKA-ALLOWANCE:";

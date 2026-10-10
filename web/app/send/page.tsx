@@ -106,8 +106,8 @@ export default async function SendPage() {
               : `Off on the server right now. ${availability.reason}`}
           </li>
           <li>
-            Not in a released iPhone build yet: the Pay screen showing the phone&apos;s allowance id, and importing a
-            scanned certificate. Both are in review.
+            The iPhone app shows its allowance id on the Pay screen and imports a scanned certificate in builds that
+            include the allowance import change (merged Oct 10); an older build does neither.
           </li>
         </ul>
       </Card>

@@ -151,9 +151,10 @@ function rpcAnswer(state: { slot: number; accounts: Map<string, Account> }, meth
 
 /**
  * TEST FIXTURE: the settlement API's health answer (API-V1 section 6), as the stand-in sends it,
- * with the phase3Routes object of feat/phase3-measure (server/src/app/phase3.ts) reporting
+ * with the phase3Routes object of server/src/app/phase3.ts reporting
  * POST /v1/remittances as registered, so /send's form is on for the healthy e2e server. (The
- * server on main sends no phase3Routes; unit/send-server.test.ts covers that off state.)
+ * server deployed before the Phase 3 routes sends no phase3Routes; unit/send-server.test.ts covers
+ * that off state.)
  */
 export const HEALTH = {
   ok: true,

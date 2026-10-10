@@ -23,8 +23,8 @@ export type SendAvailability = { on: true; reason: null } | { on: false; reason:
 
 /**
  * Off unless the latest health read succeeded, the server reaches devnet, and its answer lists
- * POST /v1/remittances as registered. A health answer with no phase3Routes entry (the server on
- * main before the Phase 3 routes deploy) is off, never assumed on.
+ * POST /v1/remittances as registered. A health answer with no phase3Routes entry (a server
+ * deployed before the Phase 3 routes) is off, never assumed on.
  */
 export function sendAvailability(health: Read<ServerHealth>, api: { ok: true; base: string } | { ok: false; reason: string }): SendAvailability {
   if (!api.ok) return { on: false, reason: api.reason };

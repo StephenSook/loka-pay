@@ -127,8 +127,8 @@ function Certificate({ verification, code, keySource }: { verification: Verifica
         <figcaption className="flex flex-col gap-1">
           <span className="font-bold">Scan this with the payer phone to spend it with no signal.</span>
           <span className="text-sm text-muted">
-            The code is the signed certificate as LOKA payment content (L1|P|1|A). Importing a scanned certificate is in
-            review for the iPhone app and not in a released build yet.
+            The code is the signed certificate as LOKA payment content (L1|P|1|A). The phone needs an iPhone app build
+            that includes the allowance import change (merged Oct 10) to read it.
           </span>
         </figcaption>
       </figure>

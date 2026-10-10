@@ -6,7 +6,7 @@ import { isRateLimited } from "../lib/read-state";
 import { SETTLEMENT_HEALTH_URL, SettlementError, readServerHealthUncached, remittanceRoute, settlementApiBase, summarizeHealth } from "../lib/settlement";
 import { UpstreamConfigError } from "../lib/test-upstream";
 
-// The /v1/remittances entry of phase3Routes, as server/src/app/phase3.ts on feat/phase3-measure
+// The /v1/remittances entry of phase3Routes, as server/src/app/phase3.ts
 // reports it: { registered, reason } with reason null when registered.
 test.describe("remittanceRoute: the health answer's phase3Routes entry for POST /v1/remittances", () => {
   const routes = (entry: unknown) => ({ phase3Routes: { "/api/volume": { registered: true, reason: null }, "/v1/remittances": entry } });
@@ -22,7 +22,7 @@ test.describe("remittanceRoute: the health answer's phase3Routes entry for POST 
     expect(remittanceRoute(routes({ registered: false, reason: null }))).toEqual({ registered: false, reason: "no reason given" });
   });
 
-  test("no readable entry (today's server on main has no phase3Routes): null, which /send treats as off", () => {
+  test("no readable entry (a server deployed before the Phase 3 routes sends no phase3Routes): null, which /send treats as off", () => {
     for (const body of [
       { ok: true, slot: 1 },
       null,

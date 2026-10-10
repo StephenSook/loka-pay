@@ -24,7 +24,7 @@ import {
 import type { SerializedDeployment } from "../lib/receipt";
 
 // /send's rules (lib/remittance.ts) against the contract of POST /v1/remittances
-// (protocol/API-V1.md section 9 on feat/phase3-measure). Certificates are TEST FIXTURES signed
+// (protocol/API-V1.md section 9, server/src/remit/remittance.ts). Certificates are TEST FIXTURES signed
 // with the published test vector server key (e2e/fixtures/remittance.ts).
 
 const REQUEST: RemittanceRequest = { recipientAllowanceId: "1234567890123", amountUnits: "1000000" };
@@ -38,7 +38,7 @@ const PINNED_HEX: SerializedDeployment = {
 };
 const answer = (status: number, body: unknown, retryAfterSeconds: number | null = null) => ({ status, body, retryAfterSeconds });
 
-// docs/ALLOWANCE-ID-QR.md (iOS PR #61): "LOKA-ALLOWANCE:<id>", prefix exact and case-sensitive,
+// docs/ALLOWANCE-ID-QR.md: "LOKA-ALLOWANCE:<id>", prefix exact and case-sensitive,
 // <id> a canonical decimal u64, whitespace ignored only around the whole text; or the bare id.
 test.describe("parseRecipient: the phone's LOKA-ALLOWANCE:<id> code or the bare id, exactly as docs/ALLOWANCE-ID-QR.md defines it", () => {
   test("both forms round-trip to the same canonical id", () => {
