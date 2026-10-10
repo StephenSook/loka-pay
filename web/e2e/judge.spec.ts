@@ -80,6 +80,12 @@ test("privacy: loads with no login and says what is true today", async ({
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
   await expect(main).toContainText("The settlement server at api.zerobars.us is running on Solana devnet.");
   await expect(main).not.toContainText("not live");
+  // The server is merged: the table follows its code, and nothing says it is still under review.
+  await expect(main).not.toContainText(/in\s+review/i);
+  await expect(main).toContainText("The table below lists what it stores, read from its code (server/ in the repository).");
+  await expect(main).toContainText("The /proof page reads its public health check (api.zerobars.us/api/health) from our web server");
+  const addressRow = main.getByRole("row", { name: /A keyed hash of your network address/ });
+  await expect(addressRow).toContainText("never written to its database or logs");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();
   await expect(main.getByRole("table")).toContainText("A merchant's display name, typed by the merchant");
   await expect(page.getByRole("link", { name: "team@zerobars.us" })).toHaveAttribute(

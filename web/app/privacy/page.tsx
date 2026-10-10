@@ -4,8 +4,9 @@ import { CONTACT_EMAIL } from "@/lib/site";
 import { DEFAULT_RPC_URL, RPC_URL, WS_URL, hostsOf, wsUrlFor } from "@/lib/solana";
 
 // Also the App Store Connect privacy policy URL for the TestFlight build
-// (https://zerobars.us/privacy). Every sentence here must be true today. The "What we store"
-// table follows protocol/API-V1.md; re-check it against the server code when that merges.
+// (https://zerobars.us/privacy). Every sentence here must be true today. The settlement server
+// rows of the "What we store" table follow the server's code (server/src/settle, server/src/remit,
+// server/src/app); each row names, in a comment, the tables and columns it covers.
 
 export const metadata: Metadata = {
   title: "Privacy | LOKA Pay",
@@ -23,18 +24,49 @@ const browserRpc =
     : `the Solana devnet RPC server at ${BROWSER_HOSTS.join(" and ")}`;
 const serverHosts = hostsOf(SERVER_RPC_URL).join(" and ");
 
-// What reaches the settlement server, per protocol/API-V1.md sections 2 to 4.
+// What the settlement server stores, read from its code on Oct 10.
 const STORED = [
+  // registration_jobs.key_hash and .plan (publicKey, keyHash, kind, pool, allowanceId, expiry,
+  // policy), .result (the signed certificate), registration_attempts (server/src/remit/store.ts).
+  // On chain the Allowance account holds payer_key and the Merchant account key_hash
+  // (programs/loka_vault/src/state.rs).
   {
-    field: "A phone's public key and its sandbox allowance",
-    where: "The settlement server, and Solana devnet, where it is public",
+    field: "A phone's public key and its hash, its sandbox allowance (cap, offline limit, expiry) and the certificate the server signs for it",
+    where: "The settlement server; on Solana devnet a payer's key and allowance, and a merchant's key hash, are public",
     why: "To open the allowance and let the program check that each payment was signed by that phone",
   },
+  // registration_jobs.plan.name and the MERCH certificate in registration_jobs.result
+  // (server/src/remit/service.ts displayName). Not stored on chain.
   {
     field: "A merchant's display name, typed by the merchant",
-    where: "The settlement server, inside the merchant's signed certificate",
+    where: "The settlement server, in the merchant's registration and inside its signed certificate",
     why: "So the certificate shows the same name every time",
   },
+  // registration_budgets (pool, day, units, funder, fee), settlement_fee_budgets (fee_payer, day,
+  // spent), settlement_rate_limits (allowance_key = program, cluster, mint and allowance id;
+  // window_start, used): server/src/remit/store.ts, server/src/settle/fee-budget.ts and rate-limit.ts.
+  {
+    field: "Counters: how many notes each allowance sent in the current window, and how much each sandbox pool and fee payer spent each day",
+    where: "The settlement server",
+    why: "To limit how fast one allowance can settle and how much the sandbox wallets spend in a day",
+  },
+  // The burst guard in server/src/app/app.ts: an HMAC of the client address with a random
+  // per-boot key, in a Map in memory. The logger (privateLogger) writes method, route and status only.
+  {
+    field: "A keyed hash of your network address (not the address), with a count of your recent requests",
+    where: "The settlement server's memory only: never written to its database or logs, and made with a random key that changes whenever the server restarts",
+    why: "To answer \"too many requests\" when one network sends a burst",
+  },
+  // settlement_attempts.uploaded_at, .attempt and .replacement (the signed transaction),
+  // .decision (status, slot, block time, error, the signed confirmation), saved_broadcasts
+  // (signature, sends): server/src/settle/store.ts and broadcast.ts.
+  {
+    field: "When the server received each payment, the devnet transactions it signs and sends, and their results",
+    where: "The settlement server; every transaction is also public on Solana devnet",
+    why: "To send each transaction once, recover after a restart, and sign the confirmation a phone shows",
+  },
+  // settlement_attempts.note and .ack (server/src/settle/store.ts): the note and ack wires of
+  // protocol/PAYMENT-V1.md 4.1 and 4.2.
   {
     field: "Payment notes and acks: amount, key hashes, signatures and when the merchant received it",
     where: "The settlement server; each settled payment is also public on Solana devnet",
@@ -113,12 +145,15 @@ export default function PrivacyPage() {
       <Section title="The settlement server">
         <p>
           The settlement server at api.zerobars.us is running on Solana devnet. It has no accounts
-          and never asks for a name, phone number or email.
+          and never asks for a person&apos;s name, phone number or email; the only name it takes is
+          the shop name a merchant types.
         </p>
         <p>
-          The table below lists what reaches it under our published API contract
-          (protocol/API-V1.md in the repository). The server&apos;s code is still in review and not
-          yet in the repository; we will check this table against that code when it merges.
+          The table below lists what it stores, read from its code (server/ in the repository). Its
+          log has one line per response, with the method, the route and the status code, and no
+          address, header or body. The /proof page reads its public health check
+          (api.zerobars.us/api/health) from our web server, not from your browser, and that read
+          carries nothing about you.
         </p>
       </Section>
 
