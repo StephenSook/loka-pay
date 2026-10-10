@@ -28,22 +28,22 @@ public final class OfflineLedger: @unchecked Sendable {
     }
 
     private let url: URL
-    private let lock: NSLock
 
     /// Every instance on the same file shares one lock (FileLocks), so two ledger objects can
-    /// never both approve capacity or overwrite each other's accepted notes.
+    /// never both approve capacity or overwrite each other's accepted notes. Each operation
+    /// resolves the canonical path and fails closed (`storage`) if it cannot.
     public init(url: URL) {
-        self.url = FileLocks.canonical(url)
-        self.lock = FileLocks.lock(for: url)
+        self.url = url
     }
 
     /// Records `note` as accepted offline, or throws `serialSeen` / `offlineLimit` and
     /// changes nothing. Call after `SignedNote.validate` and `Acceptance.check`.
     @discardableResult
     public func accept(note: SignedNote, certificate: AllowanceCertificate, now: Int64) throws -> Entry {
+        let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
-        var entries = try load()
+        var entries = try load(file)
         let allowance = note.note.allowanceId
         guard certificate.allowanceId == allowance else { throw PaymentError.allowanceMismatch }
         guard !entries.contains(where: { $0.allowanceId == allowance && $0.serial == note.note.serial }) else {
@@ -55,7 +55,7 @@ public final class OfflineLedger: @unchecked Sendable {
         let entry = Entry(noteIdHex: note.noteId.hex, allowanceId: allowance, serial: note.note.serial,
                           amount: note.note.amount, acceptedAt: now, state: .pending, wireHex: note.wire.hex)
         entries.append(entry)
-        try save(entries)
+        try save(entries, to: file)
         return entry
     }
 
@@ -63,32 +63,36 @@ public final class OfflineLedger: @unchecked Sendable {
     /// offline limit; its serial stays seen.
     public func resolve(noteId: Data, as state: State) throws {
         precondition(state != .pending, "resolve moves a note out of pending")
+        let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
-        var entries = try load()
+        var entries = try load(file)
         guard let i = entries.firstIndex(where: { $0.noteIdHex == noteId.hex }) else { throw PaymentError.storage }
         entries[i].state = state
-        try save(entries)
+        try save(entries, to: file)
     }
 
     /// Value accepted offline and not yet resolved, for one allowance.
     public func unsettledTotal(allowanceId: UInt64) throws -> UInt64 {
+        let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
-        return try Self.pendingTotal(try load(), allowanceId: allowanceId)
+        return try Self.pendingTotal(try load(file), allowanceId: allowanceId)
     }
 
     /// Notes still waiting for settlement, oldest first (to upload or re-inject).
     public func pending() throws -> [Entry] {
+        let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
-        return try load().filter { $0.state == .pending }.sorted { $0.acceptedAt < $1.acceptedAt }
+        return try load(file).filter { $0.state == .pending }.sorted { $0.acceptedAt < $1.acceptedAt }
     }
 
     public func entries() throws -> [Entry] {
+        let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
-        return try load()
+        return try load(file)
     }
 
     private static func pendingTotal(_ entries: [Entry], allowanceId: UInt64) throws -> UInt64 {
@@ -101,7 +105,7 @@ public final class OfflineLedger: @unchecked Sendable {
         return total
     }
 
-    private func load() throws -> [Entry] {
+    private func load(_ url: URL) throws -> [Entry] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         do {
             let entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
@@ -121,7 +125,7 @@ public final class OfflineLedger: @unchecked Sendable {
         }
     }
 
-    private func save(_ entries: [Entry]) throws {
+    private func save(_ entries: [Entry], to url: URL) throws {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(entries).write(to: url, options: [.atomic])
