@@ -121,6 +121,13 @@ export default async function JudgePage() {
             </Link>
             .
           </p>
+          <p className="text-sm">
+            Or fund a payer phone with sandbox money, when the server runs it:{" "}
+            <Link prefetch={false} href="/send" className="font-bold underline" data-testid="judge-send-link">
+              /send
+            </Link>
+            .
+          </p>
         </Step>
 
         <Step n={4} title="Proof" minutes="About 30 seconds">
