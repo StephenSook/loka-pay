@@ -341,7 +341,8 @@ test("every variable /call reads (its keys and secret among them) is read in lib
   const distinct = [...new Set(names)];
   // Floor: the five required variables, the off switch, the voice, the origin and two test seams.
   expect(distinct.length).toBeGreaterThanOrEqual(10);
-  for (const name of distinct) {
+  // The platform's own variables (VERCEL, VERCEL_ENV) are read elsewhere too.
+  for (const name of distinct.filter((n) => !PLATFORM_VARIABLES.has(n))) {
     expect(name, name).not.toMatch(/^NEXT_PUBLIC_/);
     const readers = ALL.filter((f) => readFileSync(f, "utf8").includes(`process.env.${name}`)).map((f) => path.relative(WEB, f));
     expect(readers, name).toEqual(["lib/call-server.ts"]);

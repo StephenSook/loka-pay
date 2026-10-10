@@ -51,11 +51,20 @@ export const UPSTREAM_TIMEOUT_MS = 10_000;
 const TTS_TIMEOUT_MS = 20_000;
 const MAX_BODY_CHARS = 2048;
 /**
- * On a deployed site the desk code is required: at least 8 letters and digits, with at least
- * one of each. Its entropy and the per-client failure limit together bound guessing; there is
- * no site-wide failure cap, because one attacker could then lock every judge out.
+ * The desk code every call needs: at least 8 letters and digits, with at least one of each. Its
+ * entropy and the per-client failure limit together bound guessing; there is no site-wide
+ * failure cap, because one attacker could then lock every judge out.
  */
-export const DEPLOYED_DESK_CODE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,64}$/;
+export const DESK_CODE_RULE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,64}$/;
+
+/**
+ * LOKA_CALL_TEST_MODE=1: an explicit local test run (the e2e and unit tests), which may go
+ * without a valid desk code and may key the failure limiter on one constant address. Refused
+ * wherever VERCEL or VERCEL_ENV is set, so a deployment can never turn it on.
+ */
+export function localTestMode(): boolean {
+  return process.env.LOKA_CALL_TEST_MODE === "1" && !process.env.VERCEL && !process.env.VERCEL_ENV;
+}
 
 export interface CallConfig {
   applicationId: string;
@@ -145,13 +154,13 @@ export function callConfig(): CallConfigResult {
     .filter(([, v]) => v === "")
     .map(([name]) => name);
   if (missing.length > 0) return off(`not set: ${missing.join(", ")}`);
-  // The desk code fails closed on Vercel (production and preview): without a code that matches
-  // DEPLOYED_DESK_CODE, calls are off there. Only a local run (no VERCEL_ENV) may go without one.
-  // NODE_ENV alone cannot tell them apart: the local e2e build runs next start with
-  // NODE_ENV=production.
+  // The desk code fails closed everywhere: calls are off without a code that matches
+  // DESK_CODE_RULE, whatever the host says about itself (a host can hide its own variables, so
+  // nothing here relies on VERCEL_ENV to know it is deployed, and NODE_ENV cannot tell either:
+  // the local e2e build runs next start with NODE_ENV=production). The one exception is an
+  // explicit local test run (localTestMode).
   const deskCode = process.env.LOKA_CALL_CODE?.trim() || null;
-  const deployed = process.env.VERCEL_ENV === "production" || process.env.VERCEL_ENV === "preview";
-  if (deployed && (deskCode === null || !DEPLOYED_DESK_CODE.test(deskCode))) return off("not set: LOKA_CALL_CODE");
+  if (!localTestMode() && (deskCode === null || !DESK_CODE_RULE.test(deskCode))) return off("not set: LOKA_CALL_CODE");
   if (!/^[A-Za-z0-9-]{8,64}$/.test(applicationId)) return off("LOKA_VONAGE_APPLICATION_ID is not a Vonage application id");
   if (!/^[1-9]\d{6,14}$/.test(fromNumber)) return off("LOKA_VONAGE_FROM_NUMBER must be the number's digits in E.164 form, without the plus");
   if (Buffer.byteLength(secret, "utf8") < 32) return off("LOKA_CALL_SECRET must be at least 32 bytes");
@@ -276,14 +285,13 @@ export function clientAddress(request: Request): string | null {
 
 /**
  * The desk-code failure limiter's key for this request: HMAC-SHA256(per-process secret, the
- * client's address). With no address, a local run (no VERCEL_ENV) uses one constant key, and a
- * deployment gets null, so the request is refused rather than put in a bucket everyone shares
- * (one attacker would then lock everyone out). The address itself is never kept, logged or
- * returned.
+ * client's address). With no address, an explicit local test run uses one constant key, and
+ * anything else gets null, so the request is refused rather than put in a bucket everyone
+ * shares. The address itself is never kept, logged or returned.
  */
 export function clientKey(request: Request, clientSecret: string): string | null {
   const address = clientAddress(request);
-  if (address === null && process.env.VERCEL_ENV) return null;
+  if (address === null && !localTestMode()) return null;
   return createHmac("sha256", clientSecret).update(address ?? "local run", "utf8").digest("hex");
 }
 

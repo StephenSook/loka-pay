@@ -803,13 +803,18 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
       });
     });
     const secret = randomBytes(32).toString("hex");
-    // Only a local run (no VERCEL_ENV) may use the one constant key.
-    withEnvSync({ VERCEL_ENV: undefined }, () => {
+    // Only an explicit local test run may use the one constant key.
+    withEnvSync({ VERCEL: undefined, VERCEL_ENV: undefined, LOKA_CALL_TEST_MODE: "1" }, () => {
       expect(clientKey(callRequest({}), secret)).toMatch(/^[0-9a-f]{64}$/);
       expect(clientKey(callRequest({}), secret)).toBe(clientKey(callRequest({ other: 1 }), secret));
     });
-    for (const vercelEnv of ["production", "preview", "development"]) {
-      withEnvSync({ VERCEL_ENV: vercelEnv }, () => expect(clientKey(callRequest({}), secret), vercelEnv).toBeNull());
+    withEnvSync({ VERCEL: undefined, VERCEL_ENV: undefined, LOKA_CALL_TEST_MODE: undefined }, () =>
+      expect(clientKey(callRequest({}), secret)).toBeNull(),
+    );
+    for (const platform of [{ VERCEL_ENV: "production" }, { VERCEL_ENV: "preview" }, { VERCEL_ENV: "development" }, { VERCEL: "1" }]) {
+      withEnvSync({ VERCEL: undefined, VERCEL_ENV: undefined, LOKA_CALL_TEST_MODE: "1", ...platform }, () =>
+        expect(clientKey(callRequest({}), secret), JSON.stringify(platform)).toBeNull(),
+      );
     }
   });
 });
@@ -817,7 +822,7 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
 // ---------- the limits' end state, one row per rule ----------
 
 test.describe("limits end state (table)", () => {
-  const CODE = "desk-code-for-the-test";
+  const CODE = "Table2026Code";
   const A = "203.0.113.5";
   const B = "198.51.100.7";
   const UNKNOWN = encodeBase58(new Uint8Array(64).fill(9));
@@ -856,6 +861,7 @@ test.describe("limits end state (table)", () => {
     { rule: "2 calls off (LOKA_CALLS_OFF=1)", env: { LOKA_CALLS_OFF: "1" }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "2 not configured (no ElevenLabs key)", env: { ELEVENLABS_API_KEY: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "2 deployed without a desk code", env: { VERCEL_ENV: "production", LOKA_CALL_CODE: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "2 no desk code and no test flag, with no platform variables", env: { LOKA_CALL_TEST_MODE: undefined, LOKA_CALL_CODE: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "3 missing desk code", send: { body: { to: NUMBER, lang: "en" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "3 wrong desk code", send: { body: { ...ok, code: "nope" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     {
@@ -1061,12 +1067,37 @@ test.describe("the desk code fails closed on Vercel", () => {
     });
   }
 
-  test("a local run (no VERCEL_ENV, even with NODE_ENV=production) may go without a code; VERCEL_ENV=development too", async () => {
+  test("provider settings without a desk code and without the test flag: calls off, whatever the platform variables say", async () => {
     await withStandIn({}, async (s) => {
-      for (const extra of [{ NODE_ENV: "production" }, { VERCEL_ENV: "development" }]) {
-        const config = await withEnv(callEnv(s.base, { ...extra, LOKA_CALL_CODE: undefined }), () => callConfig());
-        expect(config.ok, JSON.stringify(extra)).toBe(true);
+      // No VERCEL, no VERCEL_ENV (a host may hide them), no LOKA_CALL_TEST_MODE.
+      for (const code of [undefined, "abc", "desk-code-1234"]) {
+        const r = await withEnv(callEnv(s.base, { LOKA_CALL_TEST_MODE: undefined, LOKA_CALL_CODE: code }), () =>
+          handleCall(callRequest({ to: NUMBER, lang: "en", code: code ?? "x" }), deps()),
+        );
+        expect(r.status, String(code)).toBe(503);
+        expect(await r.json(), String(code)).toEqual({ error: "calls_off", reason: "not set: LOKA_CALL_CODE" });
       }
+      expect(s.seen.rpc).toHaveLength(0);
+      // A valid code turns them on.
+      const config = await withEnv(callEnv(s.base, { LOKA_CALL_TEST_MODE: undefined, LOKA_CALL_CODE: "abcd1234" }), () => callConfig());
+      expect(config.ok).toBe(true);
+    });
+  });
+
+  test("the test flag skips the code only on a local run: with VERCEL or VERCEL_ENV set it still needs one", async () => {
+    await withStandIn({}, async (s) => {
+      // Local, even with NODE_ENV=production (the e2e build): no code needed.
+      const local = await withEnv(callEnv(s.base, { NODE_ENV: "production", LOKA_CALL_TEST_MODE: "1", LOKA_CALL_CODE: undefined }), () => callConfig());
+      expect(local.ok).toBe(true);
+      for (const platform of [{ VERCEL: "1" }, { VERCEL_ENV: "development" }, { VERCEL_ENV: "preview" }]) {
+        const off = await withEnv(callEnv(s.base, { ...platform, LOKA_CALL_TEST_MODE: "1", LOKA_CALL_CODE: undefined }), () => callConfig());
+        expect(off, JSON.stringify(platform)).toEqual({ ok: false, reason: "not set: LOKA_CALL_CODE" });
+        const on = await withEnv(callEnv(s.base, { ...platform, LOKA_CALL_TEST_MODE: "1", LOKA_CALL_CODE: "abcd1234" }), () => callConfig());
+        expect(on.ok, JSON.stringify(platform)).toBe(true);
+      }
+      // Only "1" turns it on.
+      const yes = await withEnv(callEnv(s.base, { LOKA_CALL_TEST_MODE: "true", LOKA_CALL_CODE: undefined }), () => callConfig());
+      expect(yes.ok).toBe(false);
     });
   });
 });
@@ -1125,6 +1156,8 @@ function callEnv(base: string, extra: Record<string, string | undefined> = {}): 
     VERCEL: undefined,
     VERCEL_ENV: undefined,
     LOKA_CALL_CODE: undefined,
+    // An explicit local test run: no desk code needed unless a test sets one.
+    LOKA_CALL_TEST_MODE: "1",
     LOKA_E2E_UPSTREAM: "1",
     SOLANA_RPC_URL: `${base}/rpc`,
     LOKA_VONAGE_APPLICATION_ID: "unit-test-application",

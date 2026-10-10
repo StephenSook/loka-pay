@@ -27,6 +27,7 @@ const CALLS_OFF = {
   LOKA_CALL_SECRET: "",
   LOKA_CALLS_OFF: "",
   LOKA_CALL_CODE: "",
+  LOKA_CALL_TEST_MODE: "",
   LOKA_ELEVENLABS_VOICE_ID: "",
   LOKA_PUBLIC_ORIGIN: "",
   LOKA_VONAGE_API_URL: "",
@@ -76,6 +77,8 @@ export default defineConfig({
         ELEVENLABS_API_KEY: E2E_ELEVENLABS_KEY,
         LOKA_CALL_SECRET: callKeys.secret,
         LOKA_CALL_CODE: E2E_CALL_CODE,
+        // An explicit local test run: Playwright's requests carry no Vercel address header.
+        LOKA_CALL_TEST_MODE: "1",
         LOKA_PUBLIC_ORIGIN: baseURL,
         LOKA_VONAGE_API_URL: `${UPSTREAM}/vonage`,
         LOKA_ELEVENLABS_API_URL: `${UPSTREAM}/elevenlabs`,
