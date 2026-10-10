@@ -71,7 +71,8 @@ export default async function SendPage() {
           <li>You enter the payer phone&apos;s allowance id and an amount, at most {cap} sandbox USDC.</li>
           <li>
             Your browser sends those two values, and nothing else, to the settlement server at api.zerobars.us. While the
-            server answers &quot;pending&quot;, the page sends the same request again, for up to 30 seconds.
+            server answers &quot;pending&quot;, the page sends the same request again, starting no new request more
+            than 30 seconds after the first.
           </li>
           <li>
             The server reads that allowance on devnet to find the phone&apos;s public key, opens a new allowance for the

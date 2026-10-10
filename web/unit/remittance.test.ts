@@ -253,6 +253,22 @@ test.describe("sendRemittance: the pending repost loop, with a fake clock", () =
     expect(f.sleeps).toEqual([10_000]);
   });
 
+  test("stopped (the visitor left): no repost after the wait", async () => {
+    const id = REQUEST.recipientAllowanceId;
+    const f = fake([http(202, pendingBody(id)), http(201, successBody(id, { allowanceId: BigInt(6), cap: BigInt(1_000_000) }))]);
+    let left = false;
+    const out = await sendRemittance(REQUEST, {
+      ...f.deps,
+      sleep: async (ms: number) => {
+        await f.deps.sleep(ms);
+        left = true;
+      },
+      stopped: () => left,
+    });
+    expect(out).toEqual({ kind: "stopped" });
+    expect(f.bodies.length).toBe(1);
+  });
+
   test("no answer (network or timeout) and every refusal end the loop at once, with no repost", async () => {
     for (const result of [
       { kind: "network", reason: "could not reach api.zerobars.us" } as PostResult,
@@ -285,10 +301,13 @@ test.describe("verifyCertificate: the returned ALLOW against the server key, bef
     earmarks,
     signature: TEST_TX,
   });
+  // A fixed clock for these checks, and an expiry an hour after it.
+  const NOW_S = 1_791_000_000;
+  const EXPIRY = BigInt(NOW_S + 3600);
 
   test("a certificate the key signed for this deployment verifies, with its fields", () => {
-    const wire = testAllowanceWire({ allowanceId: BigInt(9), cap: BigInt(750_000), earmarks: TEST_EARMARKS });
-    const v = verifyCertificate(success(wire, "9", TEST_EARMARKS), PINNED_HEX);
+    const wire = testAllowanceWire({ allowanceId: BigInt(9), cap: BigInt(750_000), earmarks: TEST_EARMARKS, expiry: EXPIRY });
+    const v = verifyCertificate(success(wire, "9", TEST_EARMARKS), PINNED_HEX, NOW_S);
     expect(v).toEqual({
       verified: true,
       certificate: {
@@ -296,7 +315,7 @@ test.describe("verifyCertificate: the returned ALLOW against the server key, bef
         payerKeyHashHex: toHex(TEST_PAYER_KEY_HASH),
         capUnits: "750000",
         offlineLimitUnits: "750000",
-        expiry: "1792000000",
+        expiry: EXPIRY.toString(),
         earmarks: TEST_EARMARKS,
         bondUnits: "0",
       },
@@ -304,25 +323,32 @@ test.describe("verifyCertificate: the returned ALLOW against the server key, bef
   });
 
   test("one changed byte, another key, another deployment, another allowance or other earmarks: Not verified", () => {
-    const wire = testAllowanceWire({ allowanceId: BigInt(9), cap: BigInt(750_000) });
+    const wire = testAllowanceWire({ allowanceId: BigInt(9), cap: BigInt(750_000), expiry: EXPIRY });
     const flipped = Uint8Array.from(wire);
     flipped[130] ^= 0x01; // a byte of the offline limit (ALLOW_V1 offsets 129 to 136)
-    expect(verifyCertificate(success(flipped, "9"), PINNED_HEX)).toEqual({ verified: false, reason: "its signature does not match the server key" });
+    expect(verifyCertificate(success(flipped, "9"), PINNED_HEX, NOW_S)).toEqual({ verified: false, reason: "its signature does not match the server key" });
 
     const otherKey = { ...PINNED_HEX, serverPublicKeyHex: "11".repeat(32) };
-    expect(verifyCertificate(success(wire, "9"), otherKey).verified).toBe(false);
+    expect(verifyCertificate(success(wire, "9"), otherKey, NOW_S).verified).toBe(false);
 
     // The published vector allowance is signed by the same test key for the vector deployment.
     const vectors = JSON.parse(readFileSync(path.join(__dirname, "..", "..", "protocol", "vectors", "payment-v1.json"), "utf8"));
     const vectorWire = fromHex(vectors.allowances[0].wireHex);
-    expect(verifyCertificate(success(vectorWire, "9"), PINNED_HEX)).toEqual({ verified: false, reason: "it names a different program" });
+    expect(verifyCertificate(success(vectorWire, "9"), PINNED_HEX, NOW_S)).toEqual({ verified: false, reason: "it names a different program" });
 
-    expect(verifyCertificate(success(wire, "10"), PINNED_HEX)).toEqual({ verified: false, reason: "the certificate is for allowance 9, not 10" });
-    expect(verifyCertificate(success(wire, "9", TEST_EARMARKS), PINNED_HEX)).toEqual({
+    expect(verifyCertificate(success(wire, "10"), PINNED_HEX, NOW_S)).toEqual({ verified: false, reason: "the certificate is for allowance 9, not 10" });
+    expect(verifyCertificate(success(wire, "9", TEST_EARMARKS), PINNED_HEX, NOW_S)).toEqual({
       verified: false,
       reason: "the certificate's earmarks differ from the ones the answer lists",
     });
-    expect(verifyCertificate(success(wire.subarray(0, 200), "9"), PINNED_HEX)).toEqual({ verified: false, reason: "the certificate is too short" });
+    expect(verifyCertificate(success(wire.subarray(0, 200), "9"), PINNED_HEX, NOW_S)).toEqual({ verified: false, reason: "the certificate is too short" });
+  });
+
+  test("an expired certificate is Not verified, as the phone would refuse it (import_expired)", () => {
+    const wire = testAllowanceWire({ allowanceId: BigInt(9), cap: BigInt(750_000), expiry: EXPIRY });
+    expect(verifyCertificate(success(wire, "9"), PINNED_HEX, NOW_S + 3599).verified).toBe(true);
+    expect(verifyCertificate(success(wire, "9"), PINNED_HEX, NOW_S + 3600)).toEqual({ verified: false, reason: "it has already expired" });
+    expect(verifyCertificate(success(wire, "9"), PINNED_HEX, NOW_S + 86_400)).toEqual({ verified: false, reason: "it has already expired" });
   });
 
   test("the code is PAYMENT-V1 section 5 content of kind A that decodes back to the same bytes", () => {

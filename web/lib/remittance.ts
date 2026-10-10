@@ -123,7 +123,10 @@ export interface RemittanceSuccess {
 
 /** The refusals the server names, each with what the page says and whether resending the same request can help. */
 export const REFUSALS = {
-  amount_cap: { message: "The server refused the amount: a send is at most 1.00 sandbox USDC.", retryable: false },
+  amount_cap: {
+    message: "The server refused the amount as over its limit for one send, which is never more than 1.00 sandbox USDC and can be lower.",
+    retryable: false,
+  },
   unknown_allowance: {
     message: "No allowance with that id exists on devnet. Check the id on the payer phone and try again.",
     retryable: false,
@@ -155,7 +158,9 @@ export type Outcome =
   | { kind: "server_off" }
   | { kind: "unexpected"; status: number; detail: string }
   | { kind: "network"; reason: string }
-  | { kind: "timeout"; seconds: number };
+  | { kind: "timeout"; seconds: number }
+  /** The page asked the loop to stop (the visitor left): no further request was sent. */
+  | { kind: "stopped" };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -234,7 +239,10 @@ export function classifyAnswer(
 
 // ---------- the pending loop ----------
 
-/** How long the page keeps reposting a pending send before it stops and offers to check again. */
+/**
+ * No repost STARTS later than this after the first request; then the page stops and offers to
+ * check again. Each request may still wait up to POST_TIMEOUT_MS for its answer.
+ */
 export const PENDING_BOUND_MS = 30_000;
 
 /** The wait before reposting, in whole seconds: the server's retryAfter, held to 1 to 10 (API-V1 section 5). */
@@ -249,14 +257,17 @@ export interface LoopDeps {
   boundMs?: number;
   /** Called with each pending answer before the wait, so the page can say so. */
   onPending?: (pending: Extract<Outcome, { kind: "pending" }>, waitSeconds: number) => void;
+  /** Checked after each wait, before a repost: true ends the loop with no further request. */
+  stopped?: () => boolean;
 }
 
 export type FinalOutcome = Exclude<Outcome, { kind: "pending" }>;
 
 /**
  * Sends the request, and while the server answers 202 pending, waits its retryAfter and sends the
- * SAME request again (there is no GET for a send). Stops with still_pending when the next wait
- * would pass the bound, so the page never waits forever.
+ * SAME request again (there is no GET for a send). Stops with still_pending when the next repost
+ * would start past the bound, so the page never waits forever, and with stopped when the page
+ * says so (the visitor left), so no request is sent for a page nobody is looking at.
  */
 export async function sendRemittance(request: RemittanceRequest, deps: LoopDeps): Promise<FinalOutcome> {
   const body = requestBody(request);
@@ -272,6 +283,7 @@ export async function sendRemittance(request: RemittanceRequest, deps: LoopDeps)
     if (deps.now() + wait * 1000 - start > bound) return { kind: "still_pending", signature: outcome.signature };
     deps.onPending?.(outcome, wait);
     await deps.sleep(wait * 1000);
+    if (deps.stopped?.()) return { kind: "stopped" };
   }
 }
 
@@ -352,15 +364,20 @@ export function toDeployment(d: SerializedDeployment): Deployment {
 /**
  * Checks the returned certificate with the protocol library (signature with the server key,
  * program, cluster, mint, earmark hash), then that it is the allowance the answer names, with
- * the earmarks the answer lists. Only a verified certificate is drawn as a code.
+ * the earmarks the answer lists, and that it has not expired at `nowSeconds` (the phone refuses an
+ * expired one with import_expired, docs/ALLOWANCE-ID-QR.md). Only a verified certificate is drawn
+ * as a code. The payer key hash is shown, not checked: only the phone knows its own key.
  */
-export function verifyCertificate(success: RemittanceSuccess, deployment: SerializedDeployment): Verification {
+export function verifyCertificate(success: RemittanceSuccess, deployment: SerializedDeployment, nowSeconds: number): Verification {
   let fields;
   try {
     fields = verifyAllowWire(success.allowBytes, toDeployment(deployment), fromHex(deployment.serverPublicKeyHex));
   } catch (e) {
     const code = e instanceof PaymentError ? e.code : null;
     return { verified: false, reason: (code && CERT_ERROR_WORDS[code]) ?? `the protocol check failed (${code ?? String(e)})` };
+  }
+  if (fields.expiry <= BigInt(Math.floor(nowSeconds))) {
+    return { verified: false, reason: "it has already expired" };
   }
   if (fields.allowanceId.toString() !== success.allowanceId) {
     return { verified: false, reason: `the certificate is for allowance ${fields.allowanceId}, not ${success.allowanceId}` };

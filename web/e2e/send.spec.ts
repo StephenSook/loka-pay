@@ -170,8 +170,8 @@ test("pending, pending, then success: the same request is sent again after retry
   await open(page, "/send");
   const cert = { allowanceId: BigInt(100), cap: BigInt(1_000_000) };
   const posts = await mockApi(page, [
-    { status: 202, body: pendingBody(RECIPIENT, null, 1) },
-    { status: 202, body: pendingBody(RECIPIENT, TEST_TX, 1) },
+    { status: 202, body: pendingBody(RECIPIENT, null, 2) },
+    { status: 202, body: pendingBody(RECIPIENT, TEST_TX, 2) },
     { status: 201, body: successBody(RECIPIENT, cert) },
   ]);
   await fill(page, RECIPIENT, "1");
@@ -181,18 +181,31 @@ test("pending, pending, then success: the same request is sent again after retry
   await expect(page.getByTestId("cert-earmarks")).toHaveText("Any merchant");
 });
 
-test("a repeat (200) says the recipient already had a send and shows its first terms", async ({ page }) => {
+test("a repeat (200) says the server returned the recipient's existing send, with its first terms", async ({ page }) => {
   await open(page, "/send");
   await mockApi(page, [{ status: 200, body: successBody(RECIPIENT, { allowanceId: BigInt(101), cap: BigInt(250_000) }) }]);
   await fill(page, RECIPIENT, "1.00");
   await expect(page.getByTestId("send-repeat")).toHaveText(
-    "This recipient already had a live send. The server returned that send's first terms; nothing new was funded.",
+    "The server returned this recipient's existing send (one live send per recipient allowance), with its first terms: a cap of 0.25, not the 1.00 entered here. Nothing more was funded by this request.",
   );
   await expect(page.getByTestId("cert-cap")).toHaveText("0.25 sandbox USDC");
 });
 
+test("a 201 whose cap differs from the amount entered is flagged too (another request for this recipient got there first)", async ({ page }) => {
+  await open(page, "/send");
+  await mockApi(page, [{ status: 201, body: successBody(RECIPIENT, { allowanceId: BigInt(104), cap: BigInt(500_000) }) }]);
+  await fill(page, RECIPIENT, "1");
+  await expect(page.getByTestId("send-status")).toHaveText("Allowance opened on devnet");
+  await expect(page.getByTestId("send-repeat")).toContainText("a cap of 0.50, not the 1.00 entered here");
+});
+
 const ERRORS: Array<{ name: string; status: number; text: string; retry: boolean; headers?: Record<string, string> }> = [
-  { name: "amount_cap", status: 422, text: "The server refused the amount: a send is at most 1.00 sandbox USDC.", retry: false },
+  {
+    name: "amount_cap",
+    status: 422,
+    text: "The server refused the amount as over its limit for one send, which is never more than 1.00 sandbox USDC and can be lower.",
+    retry: false,
+  },
   { name: "unknown_allowance", status: 422, text: "No allowance with that id exists on devnet. Check the id on the payer phone and try again.", retry: false },
   {
     name: "budget_exhausted",
@@ -255,7 +268,7 @@ test("a certificate the key did not sign: Not verified, and no code is drawn", a
   expect(Buffer.from(otherSeed).equals(Buffer.from(TEST_SERVER_SEED))).toBe(false);
   await mockApi(page, [{ status: 201, body: successBody(RECIPIENT, { allowanceId: BigInt(103), cap: BigInt(1_000_000), seed: otherSeed }) }]);
   await fill(page, RECIPIENT, "1");
-  await expect(page.getByTestId("send-status")).toHaveText("Allowance opened on devnet");
+  await expect(page.getByTestId("send-status")).toHaveText("Server says opened; certificate not verified");
   await expect(page.getByTestId("allowance-verdict")).toHaveText("Not verified");
   await expect(page.getByTestId("allowance-verdict-reason")).toContainText("its signature does not match the server key");
   await expect(page.getByTestId("allowance-qr")).toHaveCount(0);

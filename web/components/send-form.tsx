@@ -72,8 +72,8 @@ function ServerOff({ reason }: { reason: string }) {
     <Notice title="Sending is off on the server right now." testId="send-off">
       <p className="text-sm">{reason}</p>
       <p className="text-sm">
-        Nothing can be sent from this page until the settlement server runs POST /v1/remittances. The form comes back
-        when its health check reports that route.
+        Nothing can be sent from this page until the settlement server runs POST /v1/remittances. An open page does
+        not check again: reload it after the server&apos;s health check lists that route.
       </p>
     </Notice>
   );
@@ -142,15 +142,23 @@ function Certificate({ verification, code, keySource }: { verification: Verifica
   );
 }
 
-function Result({
-  outcome,
-  verifier,
-  onRetry,
-}: {
+/** A finished send and, for a success, the certificate check made when the answer arrived. */
+interface Shown {
   outcome: FinalOutcome;
-  verifier: Verifier;
-  onRetry: () => void;
-}) {
+  verification: Verification | null;
+  /** The amount in base units this page asked for, to flag an answer with other terms. */
+  requestedUnits: string;
+}
+
+/** The certificate check, made once when the answer arrives (the clock is read here, not while drawing). */
+function checkSuccess(outcome: FinalOutcome, verifier: Verifier): Verification | null {
+  if (outcome.kind !== "success") return null;
+  if (!verifier.ok) return { verified: false, reason: verifier.reason };
+  return verifyCertificate(outcome.success, verifier.deployment, Math.floor(Date.now() / 1000));
+}
+
+function Result({ shown, verifier, onRetry }: { shown: Shown; verifier: Verifier; onRetry: () => void }) {
+  const { outcome, requestedUnits } = shown;
   const retry = (
     <button type="button" onClick={onRetry} className={`${BUTTON_SECONDARY} w-fit`} data-testid="send-retry">
       Send the same request again
@@ -159,16 +167,21 @@ function Result({
   switch (outcome.kind) {
     case "success": {
       const s = outcome.success;
-      const verification: Verification = verifier.ok
-        ? verifyCertificate(s, verifier.deployment)
-        : { verified: false, reason: verifier.reason };
+      const verification: Verification = shown.verification ?? { verified: false, reason: "it was not checked" };
+      const otherTerms = verification.verified && verification.certificate.capUnits !== requestedUnits;
       return (
         <div className="flex flex-col gap-4" data-testid="send-result" data-kind="success">
-          <StateChip state="paid" label="Allowance opened on devnet" testId="send-status" />
-          {outcome.created ? null : (
+          {verification.verified ? (
+            <StateChip state="paid" label="Allowance opened on devnet" testId="send-status" />
+          ) : (
+            <StateChip state="warning" label="Server says opened; certificate not verified" testId="send-status" />
+          )}
+          {outcome.created && !otherTerms ? null : (
             <p data-testid="send-repeat">
-              This recipient already had a live send. The server returned that send&apos;s first terms; nothing new was
-              funded.
+              The server returned this recipient&apos;s existing send (one live send per recipient allowance), with its
+              first terms
+              {otherTerms ? `: a cap of ${usd(verification.certificate.capUnits)}, not the ${usd(requestedUnits)} entered here` : ""}
+              . Nothing more was funded by this request.
             </p>
           )}
           <p>
@@ -184,8 +197,9 @@ function Result({
         <div className="flex flex-col gap-3" data-testid="send-result" data-kind="still_pending">
           <StateChip state="pending" label="Still pending" testId="send-status" />
           <p>
-            The server had not seen devnet confirm the funding after 30 seconds. The send is not lost: the server keeps
-            it, and sending the same request again only checks on it, since one recipient gets one live send.
+            The server still said pending when this page stopped sending again, 30 seconds after the first request.
+            The send is not lost: the server keeps it, and sending the same request again only checks on it, since one
+            recipient gets one live send.
           </p>
           {outcome.signature ? <TxLink signature={outcome.signature} testId="send-explorer" /> : null}
           {retry}
@@ -195,7 +209,10 @@ function Result({
       return (
         <div className="flex flex-col gap-3" data-testid="send-result" data-kind="failed_on_chain">
           <StateChip state="failed" label="Failed on devnet" testId="send-status" />
-          <p>The funding transaction failed on devnet, so the server issued no certificate.</p>
+          <p>
+            The funding transaction failed on devnet, so the server issued no certificate. Sending to this recipient
+            allowance again returns the same failure: the server keeps it.
+          </p>
           {outcome.signature ? <TxLink signature={outcome.signature} testId="send-explorer" /> : null}
         </div>
       );
@@ -213,6 +230,7 @@ function Result({
       );
     }
     case "server_off":
+    case "stopped":
       return null;
     case "network":
       return (
@@ -255,7 +273,7 @@ export function SendForm({ apiBase, availability, verifier }: { apiBase: string;
   const [problems, setProblems] = useState<{ recipient: string | null; amount: string | null }>({ recipient: null, amount: null });
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<{ signature: string | null; waitSeconds: number } | null>(null);
-  const [outcome, setOutcome] = useState<FinalOutcome | null>(null);
+  const [shown, setShown] = useState<Shown | null>(null);
   const [offReason, setOffReason] = useState<string | null>(availability.on ? null : (availability.reason ?? "The server does not report the send route."));
   const lastRequest = useRef<RemittanceRequest | null>(null);
   const alive = useRef(true);
@@ -275,13 +293,13 @@ export function SendForm({ apiBase, availability, verifier }: { apiBase: string;
   }, []);
 
   useEffect(() => {
-    if (outcome) resultRef.current?.focus();
-  }, [outcome]);
+    if (shown) resultRef.current?.focus();
+  }, [shown]);
 
   async function run(request: RemittanceRequest) {
     lastRequest.current = request;
     setSending(true);
-    setOutcome(null);
+    setShown(null);
     setPending(null);
     const result = await sendRemittance(request, {
       post: browserPost(`${apiBase}${REMITTANCE_PATH}`),
@@ -290,15 +308,17 @@ export function SendForm({ apiBase, availability, verifier }: { apiBase: string;
       onPending: (p, waitSeconds) => {
         if (alive.current) setPending({ signature: p.signature, waitSeconds });
       },
+      // The visitor left: send nothing more for a page nobody is looking at.
+      stopped: () => !alive.current,
     });
-    if (!alive.current) return;
+    if (!alive.current || result.kind === "stopped") return;
     setSending(false);
     setPending(null);
     if (result.kind === "server_off") {
       setOffReason("The server answered that it has no POST /v1/remittances route (404 unknown_route).");
       return;
     }
-    setOutcome(result);
+    setShown({ outcome: result, verification: checkSuccess(result, verifier), requestedUnits: request.amountUnits });
   }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -396,7 +416,7 @@ export function SendForm({ apiBase, availability, verifier }: { apiBase: string;
             <ClockIcon className="mt-1 h-4 w-4 shrink-0" />
             <p className="min-w-0 break-words">
               {pending
-                ? `Pending: the server has not seen devnet confirm the funding yet. Sending the same request again in ${pending.waitSeconds} s (for up to 30 s in all).`
+                ? `Pending: the server has not seen devnet confirm the funding yet. Sending the same request again in ${pending.waitSeconds} s; this page starts no new request more than 30 s after the first.`
                 : "Waiting for the server: it opens the allowance on devnet and waits for confirmation."}
             </p>
           </div>
@@ -404,9 +424,9 @@ export function SendForm({ apiBase, availability, verifier }: { apiBase: string;
         {sending && pending?.signature ? <TxLink signature={pending.signature} testId="send-pending-explorer" /> : null}
       </div>
 
-      {outcome ? (
+      {shown ? (
         <div ref={resultRef} tabIndex={-1} className="flex flex-col gap-4 outline-none">
-          <Result outcome={outcome} verifier={verifier} onRetry={onRetry} />
+          <Result shown={shown} verifier={verifier} onRetry={onRetry} />
         </div>
       ) : null}
     </section>

@@ -50,7 +50,8 @@ export function testAllowanceWire(o: CertificateOptions): Uint8Array {
       payerKeyHash: TEST_PAYER_KEY_HASH,
       cap: o.cap,
       offlineLimit: o.cap,
-      expiry: o.expiry ?? BigInt(1_792_000_000),
+      // A week from now unless a test names its own: a fixed date would expire under the tests.
+      expiry: o.expiry ?? BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 3600),
       earmarkList: encodeEarmarks((o.earmarks ?? []).map(fromHex)),
       bond: BigInt(0),
     },
