@@ -119,6 +119,15 @@ export class CallLimits {
     return { ok: true };
   }
 
+  /** Whether this number was already called about this payment. Records nothing. */
+  checkPayment(key: string, signature: string): LimitCheck {
+    const nowMs = this.now();
+    this.prune(nowMs);
+    const at = this.byPayment.get(`${key}:${signature}`);
+    if (at !== undefined) return { ok: false, limit: "payment", retryAfterSeconds: seconds(at + PAYMENT_MEMORY_MS - nowMs) };
+    return { ok: true };
+  }
+
   /** One call per number and payment: records the pair, or says when it may be called about again. */
   claimPayment(key: string, signature: string): LimitCheck {
     const nowMs = this.now();

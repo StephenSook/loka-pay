@@ -649,6 +649,28 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
     expect(safeTitle(`Bad number ${PLUS}1 (404) 555-0123 here`)).toBe("Bad number [number] here");
   });
 
+  test("the same number and signature again, after the chain cache expires: 429 with zero devnet reads and no reservation", async () => {
+    await withStandIn({}, async (s) => {
+      await withEnv(callEnv(s.base), async () => {
+        let now = (REDEEM.blockTime + 60) * 1000;
+        const d: CallDeps = { ...deps(), now: () => now, limits: new CallLimits(() => now) };
+        const body = { to: NUMBER, lang: "en", signature: REDEEM_SIG };
+        expect((await handleCall(callRequest(body), d)).status).toBe(200);
+        const reads = s.seen.rpc.length;
+        expect(reads).toBeGreaterThan(0);
+        const sizes = d.limits.sizes();
+        // Past the 10 s chain cache, so only the early check can keep devnet out of it.
+        now += 11_000;
+        const again = await handleCall(callRequest(body), d);
+        expect(again.status).toBe(429);
+        expect((await again.json()).limit).toBe("payment");
+        expect(s.seen.rpc).toHaveLength(reads);
+        expect(d.limits.sizes()).toEqual(sizes);
+        expect(s.seen.vonage).toHaveLength(1);
+      });
+    });
+  });
+
   test("a flood beyond the caps makes zero devnet, ElevenLabs or Vonage requests", async () => {
     // A well-formed signature devnet does not know: every counted request reads devnet once.
     const unknown = encodeBase58(new Uint8Array(64).fill(7));
@@ -978,6 +1000,19 @@ test.describe("limits end state (table)", () => {
       send: { body: ok },
       status: 429,
       limit: "site",
+      failures: 0,
+      numbers: 0,
+      site: 0,
+      payments: 0,
+      rpc: 0,
+      vonage: 0,
+    },
+    {
+      rule: "5 the same number and signature again: refused before any reservation or read",
+      before: [{ body: { ...ok, signature: REDEEM_SIG } }],
+      send: { body: { ...ok, signature: REDEEM_SIG } },
+      status: 429,
+      limit: "payment",
       failures: 0,
       numbers: 0,
       site: 0,

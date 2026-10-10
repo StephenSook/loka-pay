@@ -426,8 +426,9 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
  * 2. The desk code. A correct code goes straight on. A wrong or missing code counts only
  *    against its address's failure limit (lib/call-limits.ts DeskCodeFailures), never against
  *    a number or the site, and past that limit that address's wrong codes get 429.
- * 3. One slot in the per-number cap and one in the site cap are reserved together. They stay
- *    reserved whatever happens next, so failing requests run into the caps.
+ * 3. A signature this number was already called about is refused (no reservation, no read).
+ *    Otherwise one slot in the per-number cap and one in the site cap are reserved together.
+ *    They stay reserved whatever happens next, so failing requests run into the caps.
  * 4. Only then is devnet read; then one call per number and payment; then Vonage is asked.
  */
 async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
@@ -456,6 +457,12 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   }
 
   const key = numberKey(secret, to);
+  // A named payment this number was already called about is refused here, before any
+  // reservation or devnet read; the atomic claim after the lookup still decides.
+  if (signature !== null) {
+    const repeat = deps.limits.checkPayment(key, signature);
+    if (!repeat.ok) return limited(repeat);
+  }
   const reserved = deps.limits.reserve(key);
   if (!reserved.ok) return limited(reserved);
 
