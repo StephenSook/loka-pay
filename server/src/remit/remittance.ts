@@ -82,10 +82,11 @@ export class RemittanceStore {
     await this.db.query(`DELETE FROM remittance_jobs WHERE namespace=$1 AND recipient=$2 AND claim_token=$3 AND attempt IS NULL
       AND lease_expires_at>COALESCE($4::double precision,EXTRACT(EPOCH FROM clock_timestamp()))`, [this.namespace, recipient, token, this.clock?.() ?? null]);
   }
-  async finish(row: FundingRow, result: Result): Promise<Result> {
-    await this.db.query(`UPDATE remittance_jobs SET result=$4::jsonb WHERE namespace=$1 AND recipient=$2
-      AND attempt->>'signature'=$3 AND result IS NULL`, [this.namespace, row.recipient, row.attempt!.signature, JSON.stringify(result)]);
-    return (await this.get(row.recipient)).result!;
+  async finish(row: FundingRow, result: Result): Promise<Result | null> {
+    const { rows } = await this.db.query(`UPDATE remittance_jobs SET result=$4::jsonb WHERE namespace=$1 AND recipient=$2
+      AND attempt->>'signature'=$3 AND result IS NULL RETURNING result`,
+    [this.namespace, row.recipient, row.attempt!.signature, JSON.stringify(result)]);
+    return (rows[0]?.result as Result | undefined) ?? null;
   }
 }
 export class RemittanceService {
@@ -106,13 +107,13 @@ export class RemittanceService {
     try {
       const outcome = await this.options.chain.observe(row.attempt, row.plan);
       if (outcome === null) return this.pending(row);
-      if (outcome !== 'ok') return this.options.store.finish(row, { statusCode: 409, body: { error: 'remittance_failed', signature: row.attempt.signature } });
+      if (outcome !== 'ok') return await this.options.store.finish(row, { statusCode: 409, body: { error: 'remittance_failed', signature: row.attempt.signature } }) ?? this.pending(row);
       const allow = await this.options.signer.allow({ allowanceId: BigInt(row.plan.allowanceId!), payerKeyHash: P.fromHex(row.plan.keyHash),
         cap: BigInt(row.plan.policy.capUnits), offlineLimit: BigInt(row.plan.policy.offlineLimitUnits), expiry: BigInt(row.plan.expiry),
         earmarkList: P.encodeEarmarks(row.plan.policy.earmarks.map(P.fromHex)), bond: 0n });
-      return this.options.store.finish(row, { statusCode: 201, body: { recipientAllowanceId: row.recipient, allowanceId: row.plan.allowanceId,
+      return await this.options.store.finish(row, { statusCode: 201, body: { recipientAllowanceId: row.recipient, allowanceId: row.plan.allowanceId,
         allow, earmarks: row.plan.policy.earmarks, signature: row.attempt.signature,
-        explorer: `https://explorer.solana.com/tx/${row.attempt.signature}?cluster=devnet`, sandbox: true } });
+        explorer: `https://explorer.solana.com/tx/${row.attempt.signature}?cluster=devnet`, sandbox: true } }) ?? this.pending(row);
     } catch { return this.pending(row); }
   }
   async submit(input: unknown, memoryOnlyNetworkIdentifier: string): Promise<Result> {

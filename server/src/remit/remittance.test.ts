@@ -113,3 +113,35 @@ test('unsigned recovery refreshes an expired plan durably and fences the old wor
   expect(f.chain.send).toHaveBeenCalledTimes(1);
   expect(await f.store.claim('1', plan)).toBeNull();
 });
+
+test('finish returns its own update result even if renewal wins before the query returns', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy };
+  const token = (await f.store.claim('1', plan))!, row = await f.store.get('1');
+  row.attempt = await f.chain.sign(); expect(await f.store.save(row, token, row.attempt)).toBe(true);
+  const result = { statusCode: 201 as const, body: { allowanceId: '123', signature: row.attempt.signature } };
+  const query = f.db.query.bind(f.db);
+  vi.spyOn(f.db, 'query').mockImplementation(async (sql, params) => {
+    const written = await query(sql, params);
+    if (sql.startsWith('UPDATE remittance_jobs SET result=') && written.rows.length) {
+      expect(await f.store.claim('1', { ...plan, allowanceId: '456', expiry: 1800003600 })).not.toBeNull();
+    }
+    return written;
+  });
+  expect(await f.store.finish(row, result)).toEqual(result);
+  expect((await f.store.get('1')).plan.allowanceId).toBe('456');
+  expect((await f.store.get('1')).result).toBeNull();
+  expect(await f.store.finish(row, result)).toBeNull();
+});
+
+test('a completion that loses its signature guard returns pending for its own attempt', async () => {
+  const f = await fixture();
+  f.chain.observe.mockImplementation(async () => {
+    await f.db.query(`UPDATE remittance_jobs SET attempt=jsonb_set(attempt,'{signature}','"next-signature"'::jsonb),
+      result='{"statusCode":201,"body":{"allowanceId":"next"}}'::jsonb`);
+    return 'ok';
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '1' }, 'venue');
+  expect(result).toEqual({ statusCode: 202, body: { status: 'pending', recipientAllowanceId: '1', signature: 'fixture-signature', retryAfter: 2 } });
+});
