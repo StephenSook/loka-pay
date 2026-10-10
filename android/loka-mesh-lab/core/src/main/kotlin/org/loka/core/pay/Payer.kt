@@ -90,3 +90,22 @@ object PayerChecks {
         if (amount > allowance.offlineLimit) fail(PaymentError.OFFLINE_LIMIT)
     }
 }
+
+/**
+ * A signed note together with the verified merchant certificate it pays, captured when it was
+ * signed. A screen renders only this snapshot, so editing an input afterwards cannot relabel a
+ * payment. Refuses (`payee_mismatch`) when the certificate is not the note's payee.
+ */
+class SignedPayment(val note: SignedNote, merchant: MerchantCertificate) {
+    val merchantName: String = merchant.displayName
+    private val merchantHash = merchant.merchantKeyHash
+
+    init {
+        if (!merchantHash.contentEquals(note.note.payeeKeyHash)) fail(PaymentError.PAYEE_MISMATCH)
+    }
+
+    val merchantKeyHash: ByteArray get() = merchantHash.copyOf()
+
+    /** The `L1|P|1|N|...` text of exactly this note (what the QR code and the copy button carry). */
+    val transport: String = PaymentTransport.encode(PaymentTransport.Kind.NOTE, note.wire)
+}

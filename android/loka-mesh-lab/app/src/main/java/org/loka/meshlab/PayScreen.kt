@@ -57,7 +57,7 @@ import org.loka.core.pay.PayerChecks
 import org.loka.core.pay.PaymentException
 import org.loka.core.pay.PaymentTransport
 import org.loka.core.pay.SerialReservations
-import org.loka.core.pay.SignedNote
+import org.loka.core.pay.SignedPayment
 import org.loka.core.pay.toHex
 import java.io.File
 import java.time.Instant
@@ -85,7 +85,8 @@ internal fun PayScreen() {
     var amountText by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    var signed by remember { mutableStateOf<SignedNote?>(null) }
+    // The signed note with the merchant certificate captured when it was signed (never the live fields).
+    var signed by remember { mutableStateOf<SignedPayment?>(null) }
     var serialsLeft by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(keyAttempt) {
@@ -102,6 +103,10 @@ internal fun PayScreen() {
                 "A screen lock is required, and on Android 8 to 10 an enrolled fingerprint."
         }
     }
+
+    // Inputs are locked while a signature is in progress; editing any input afterwards clears the
+    // signed card, so it never sits next to fields it was not signed from.
+    LaunchedEffect(allowanceText, merchantText, amountText) { signed = null }
 
     val ready = config as? PayConfig.Status.Ready
     val allowance = remember(allowanceText, ready) {
@@ -194,7 +199,10 @@ internal fun PayScreen() {
                     }
                     scope.launch {
                         try {
-                            signed = withContext(Dispatchers.Default) { s.finishNote(authorized, noteBytes, r.pins.deployment) }
+                            signed = withContext(Dispatchers.Default) {
+                                // SignedPayment refuses (payee_mismatch) unless `shop` is the note's payee.
+                                SignedPayment(s.finishNote(authorized, noteBytes, r.pins.deployment), shop)
+                            }
                         } catch (e: PaymentException) {
                             message = "The signature did not verify (${e.error.code}), so no note is shown. Serial $reserved will not be reused."
                         } catch (e: Exception) {
@@ -261,7 +269,7 @@ internal fun PayScreen() {
 
         Section("Allowance certificate") {
             OutlinedTextField(allowanceText, { allowanceText = it.trim() }, Modifier.fillMaxWidth(),
-                label = { Text("Paste L1|P|1|A|...") }, maxLines = 4, enabled = ready != null)
+                label = { Text("Paste L1|P|1|A|...") }, maxLines = 4, enabled = ready != null && !busy)
             when {
                 allowance == null || allowanceText.isEmpty() -> {}
                 allowance.value != null -> {
@@ -281,7 +289,7 @@ internal fun PayScreen() {
 
         Section("Merchant certificate") {
             OutlinedTextField(merchantText, { merchantText = it.trim() }, Modifier.fillMaxWidth(),
-                label = { Text("Paste L1|P|1|C|...") }, maxLines = 4, enabled = ready != null)
+                label = { Text("Paste L1|P|1|C|...") }, maxLines = 4, enabled = ready != null && !busy)
             when {
                 merchant == null || merchantText.isEmpty() -> {}
                 merchant.value != null -> {
@@ -295,7 +303,7 @@ internal fun PayScreen() {
 
         Section("Amount") {
             OutlinedTextField(amountText, { amountText = it }, Modifier.fillMaxWidth(), singleLine = true,
-                label = { Text("Sandbox USDC, for example 1.00") }, enabled = ready != null,
+                label = { Text("Sandbox USDC, for example 1.00") }, enabled = ready != null && !busy,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             when {
                 amountText.isBlank() -> {}
@@ -310,7 +318,7 @@ internal fun PayScreen() {
             message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
 
-        signed?.let { note -> SignedNoteCard(context, note, merchantCert?.displayName) }
+        signed?.let { payment -> SignedNoteCard(context, payment) }
     }
 
     if (confirmReplace) AlertDialog(
@@ -330,13 +338,17 @@ internal fun PayScreen() {
 }
 
 @Composable
-private fun SignedNoteCard(context: Context, note: SignedNote, merchantName: String?) {
-    val transport = remember(note) { PaymentTransport.encode(PaymentTransport.Kind.NOTE, note.wire) }
+private fun SignedNoteCard(context: Context, payment: SignedPayment) {
+    // Everything on this card comes from the snapshot: the note's bytes and the merchant
+    // certificate that was verified and bound to the note's payee key hash when it was signed.
+    val note = payment.note
+    val transport = payment.transport
     val qr = remember(transport) { ContactQr.bitmap(transport).asImageBitmap() }
     Section("Signed note (sandbox)") {
         Text("Signed on this phone and checked against PAYMENT-V1 section 6. Not sent and not settled: show the QR or send the text to the merchant.")
-        Text("${Money.display(note.note.amount)} sandbox USDC to ${merchantName ?: "the merchant"} · serial ${note.note.serial} · allowance ${note.note.allowanceId}")
+        Text("${Money.display(note.note.amount)} sandbox USDC to ${payment.merchantName} · serial ${note.note.serial} · allowance ${note.note.allowanceId}")
         Text("Expires ${Instant.ofEpochSecond(note.note.expiry)}")
+        Label("Merchant key hash (the note's payee)"); Mono(payment.merchantKeyHash.toHex())
         Label("Note id"); Mono(note.noteId.toHex())
         Image(qr, contentDescription = "QR code of the signed note", modifier = Modifier.size(280.dp))
         Label("Transport text")

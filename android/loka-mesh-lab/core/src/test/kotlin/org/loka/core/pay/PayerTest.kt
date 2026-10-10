@@ -178,6 +178,15 @@ class PayerTest {
         }
     }
 
+    @Test fun `a signed payment snapshot carries its own merchant and refuses a different one`() {
+        val n0 = SignedNote.validate(Vectors.list("notes")[0].bytes("wireHex"), deployment) // pays merchant A
+        val payment = SignedPayment(n0, merchant(0))
+        assertEquals("Campus Coffee Cart", payment.merchantName)
+        assertArrayEquals(n0.note.payeeKeyHash, payment.merchantKeyHash)
+        assertEquals(Vectors.list("notes")[0].getString("transport"), payment.transport)
+        expect("payee_mismatch") { SignedPayment(n0, merchant(1)) } // merchant B's certificate cannot label it
+    }
+
     @Test fun `concurrent reservations on one file never hand out a serial twice`() {
         val file = File(temp.root, "serials.txt")
         SerialReservations(file, JvmDirectorySync).initialize()
