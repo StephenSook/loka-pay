@@ -123,7 +123,7 @@ test("/live: refused rows are named from the error code before their details loa
   await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
 });
 
-test("/live: with details, the iPhone pair is labelled from FACTS and still no row shows raw error JSON", async ({ page }) => {
+test("/live: with details, both iPhone runs are labelled from FACTS and still no row shows raw error JSON", async ({ page }) => {
   // Reading all 20 rows' details takes three batches at 8 per 11 s.
   test.setTimeout(60_000);
   await routeDevnet(page, LIST);
@@ -141,9 +141,13 @@ test("/live: with details, the iPhone pair is labelled from FACTS and still no r
     "Same allowance and serial signed again on that iPhone, refused by Solana: SerialUsed (6011), Sat Oct 10 4:31 PM ET",
   );
   await expect(refused.getByTestId("tx-error")).toHaveText(SERIAL_USED);
-  // The 5:05 PM pair has no FACTS entry, so it carries no label.
-  await expect(row(page, REFUSED_RUN2).getByTestId("tx-label")).toHaveCount(0);
-  await expect(page.getByTestId("tx-label")).toHaveCount(2);
+  // The second iPhone run (5:05 and 5:09 PM) has its own FACTS entries.
+  await expect(row(page, SETTLED_RUN2).getByTestId("tx-label")).toHaveText("iPhone payment");
+  await expect(row(page, SETTLED_RUN2).getByTestId("tx-label-detail")).toHaveText(facts.proof_pair_iphone_run2_settled_tx.caveat);
+  await expect(row(page, REFUSED_RUN2).getByTestId("tx-label")).toHaveText("iPhone cheat");
+  await expect(row(page, REFUSED_RUN2).getByTestId("tx-label-detail")).toHaveText(facts.proof_pair_iphone_run2_refused_tx.caveat);
+  // Every other recorded row (opens, registrations, the 3:44 PM refusal) has no FACTS entry and no label.
+  await expect(page.getByTestId("tx-label")).toHaveCount(4);
   await expect.poll(() => page.locator('[data-testid="tx-row"][data-details="reading"]').count(), { timeout: 30_000 }).toBe(0);
   await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
 });
@@ -194,6 +198,7 @@ test("/live?kiosk=1: no site header, footer or intro; a large Last payment line 
   await expect(last).toHaveAttribute("data-state", "paid");
   await expect(last.getByTestId("last-payment-headline")).toHaveText("Paid 0.25 sandbox USDC");
   await expect(last.getByTestId("last-payment-new")).toHaveText("New");
+  await expect(last.getByTestId("last-payment-label")).toHaveText("iPhone payment");
   // Its block time comes with its details, queued behind the first batch under the same pacing.
   await expect(last.getByTestId("last-payment-when").locator("time")).toHaveAttribute("datetime", isoOf(SETTLED_RUN2), { timeout: 20_000 });
   await expect(last.getByTestId("last-payment-when")).toContainText("5:05:58 PM ET");
@@ -202,7 +207,7 @@ test("/live?kiosk=1: no site header, footer or intro; a large Last payment line 
   socket.notify(REFUSED_RUN2);
   await expect(last).toHaveAttribute("data-signature", REFUSED_RUN2);
   await expect(last.getByTestId("last-payment-headline")).toHaveText("Refused: SerialUsed (6011)");
-  await expect(last.getByTestId("last-payment-label")).toHaveCount(0);
+  await expect(last.getByTestId("last-payment-label")).toHaveText("iPhone cheat");
 });
 
 test("/live first paint, before devnet answers: the list and the kiosk say what they are waiting for", async ({ page }) => {

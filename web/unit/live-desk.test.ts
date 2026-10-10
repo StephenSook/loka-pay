@@ -104,27 +104,32 @@ test.describe("the kiosk's last payment", () => {
 });
 
 test.describe("labels for the rows FACTS records", () => {
-  test("the iPhone pair and the test-key pair, by the signatures in docs/FACTS.json", () => {
+  const KEYS = {
+    proof_pair_iphone_settled_tx: "iPhone payment",
+    proof_pair_iphone_refused_tx: "iPhone cheat",
+    proof_pair_iphone_run2_settled_tx: "iPhone payment",
+    proof_pair_iphone_run2_refused_tx: "iPhone cheat",
+    proof_pair_settled_tx: "Test key",
+    proof_pair_refused_tx: "Test key",
+  } as const;
+
+  test("both iPhone runs and the test-key pair, by the signatures in docs/FACTS.json, each with its FACTS caveat", () => {
     const labels = rowLabels();
-    expect(Object.keys(labels).sort()).toEqual(
-      [facts.proof_pair_iphone_settled_tx, facts.proof_pair_iphone_refused_tx, facts.proof_pair_settled_tx, facts.proof_pair_refused_tx]
-        .map((f) => f.value)
-        .sort(),
-    );
-    expect(labels[facts.proof_pair_iphone_settled_tx.value].chip).toBe("iPhone payment");
-    expect(labels[facts.proof_pair_iphone_refused_tx.value].chip).toBe("iPhone cheat");
-    expect(labels[facts.proof_pair_settled_tx.value].chip).toBe("Test key");
-    expect(labels[facts.proof_pair_refused_tx.value].chip).toBe("Test key");
-    for (const key of ["proof_pair_iphone_settled_tx", "proof_pair_iphone_refused_tx", "proof_pair_settled_tx", "proof_pair_refused_tx"]) {
-      expect(facts[key].caveat, key).toContain(labels[facts[key].value].detail.replace(/\.$/, ""));
+    expect(Object.keys(labels).sort()).toEqual(Object.keys(KEYS).map((k) => facts[k].value).sort());
+    for (const [key, chip] of Object.entries(KEYS)) {
+      const label = labels[facts[key].value];
+      expect(label.chip, key).toBe(chip);
+      expect(facts[key].caveat, key).toContain(label.detail.replace(/\.$/, ""));
     }
   });
 
-  test("the iPhone pair is in the recorded latest 20; the 5:05 PM pair carries no label (no FACTS entry)", () => {
+  test("both iPhone runs are in the recorded latest 20, and only rows FACTS records are labelled", () => {
     const labels = rowLabels();
     const signatures = listed().map((r) => r.signature);
-    expect(signatures).toContain(SETTLED_IPHONE);
-    expect(signatures).toContain(REFUSED_IPHONE);
-    expect(labels[REFUSED_RUN2]).toBeUndefined();
+    for (const signature of [SETTLED_IPHONE, REFUSED_IPHONE, REFUSED_RUN2]) expect(signatures).toContain(signature);
+    expect(labels[REFUSED_RUN2]).toEqual({ chip: "iPhone cheat", detail: facts.proof_pair_iphone_run2_refused_tx.caveat });
+    // The other 16 recorded rows (opens, registrations, the 3:44 PM refusal 4E4yWq7Q) have no FACTS entry.
+    const unlabelled = signatures.filter((s) => !(s in labels));
+    expect(unlabelled.length).toBe(signatures.length - 4);
   });
 });
