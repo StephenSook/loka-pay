@@ -109,3 +109,14 @@ class SignedPayment(val note: SignedNote, merchant: MerchantCertificate) {
     /** The `L1|P|1|N|...` text of exactly this note (what the QR code and the copy button carry). */
     val transport: String = PaymentTransport.encode(PaymentTransport.Kind.NOTE, note.wire)
 }
+
+/** Unix seconds for display. Any i64 is accepted; a value outside java.time's range is shown raw, never thrown. */
+object UnixTime {
+    fun display(seconds: Long): String = try {
+        java.time.Instant.ofEpochSecond(seconds).toString()
+    } catch (e: java.time.DateTimeException) {
+        "$seconds unix seconds (outside the displayable date range)"
+    } catch (e: ArithmeticException) {
+        "$seconds unix seconds (outside the displayable date range)"
+    }
+}

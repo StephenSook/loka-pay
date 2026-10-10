@@ -206,6 +206,13 @@ class PayerTest {
         assertEquals(PaymentTransport.maxPayloadBytes(PaymentTransport.Kind.ALLOWANCE), AllowanceCertificate.SIZE + 64 + maxList.size)
     }
 
+    @Test fun `expiry display never throws, out-of-range seconds are shown raw`() {
+        assertEquals("2030-01-01T00:00:00Z", UnixTime.display(1_893_456_000))
+        assertEquals("1970-01-01T00:00:00Z", UnixTime.display(0))
+        assertEquals("${Long.MAX_VALUE} unix seconds (outside the displayable date range)", UnixTime.display(Long.MAX_VALUE))
+        assertEquals("${Long.MIN_VALUE} unix seconds (outside the displayable date range)", UnixTime.display(Long.MIN_VALUE))
+    }
+
     @Test fun `concurrent reservations on one file never hand out a serial twice`() {
         val file = File(temp.root, "serials.txt")
         SerialReservations(file, JvmDirectorySync).initialize()

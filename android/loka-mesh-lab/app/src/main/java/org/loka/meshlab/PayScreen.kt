@@ -58,6 +58,7 @@ import org.loka.core.pay.PaymentException
 import org.loka.core.pay.PaymentTransport
 import org.loka.core.pay.SerialReservations
 import org.loka.core.pay.SignedPayment
+import org.loka.core.pay.UnixTime
 import org.loka.core.pay.toHex
 import java.io.File
 import java.time.Instant
@@ -287,7 +288,7 @@ internal fun PayScreen() {
                     val c = allowance.value
                     Text("Verified with the pinned server key.", fontWeight = FontWeight.SemiBold)
                     Text("Allowance ${c.allowanceId} · cap ${Money.display(c.cap)} · offline limit ${Money.display(c.offlineLimit)} (sandbox USDC)")
-                    Text("Expires ${Instant.ofEpochSecond(c.expiry)} · ${if (c.earmarks.isEmpty()) "any merchant" else "${c.earmarks.size} earmarked merchant(s)"}")
+                    Text("Expires ${UnixTime.display(c.expiry)} · ${if (c.earmarks.isEmpty()) "any merchant" else "${c.earmarks.size} earmarked merchant(s)"}")
                     signer?.let { s ->
                         Text(if (c.payerKeyHash.contentEquals(s.keyHash)) "Issued for this phone's key." else "Issued for a different key: this phone cannot pay from it.",
                             color = if (c.payerKeyHash.contentEquals(s.keyHash)) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
@@ -364,7 +365,7 @@ private fun SignedNoteCard(context: Context, payment: SignedPayment) {
     Section("Signed note (sandbox)") {
         Text("Signed on this phone and checked against PAYMENT-V1 section 6. Not sent and not settled: show the QR or send the text to the merchant.")
         Text("${Money.display(note.note.amount)} sandbox USDC to ${payment.merchantName} · serial ${note.note.serial} · allowance ${note.note.allowanceId}")
-        Text("Expires ${Instant.ofEpochSecond(note.note.expiry)}")
+        Text("Expires ${UnixTime.display(note.note.expiry)}")
         Label("Merchant key hash (the note's payee)"); Mono(payment.merchantKeyHash.toHex())
         Label("Note id"); Mono(note.noteId.toHex())
         Image(qr, contentDescription = "QR code of the signed note", modifier = Modifier.size(280.dp))
