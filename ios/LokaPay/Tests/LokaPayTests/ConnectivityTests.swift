@@ -17,12 +17,31 @@ struct ConnectivityTests {
         #expect(InternetState.from(satisfied: true, usesCellular: false) == .wifiOrOther)
     }
 
-    @Test("the monitor starts and stops without crashing")
+    @MainActor
+    @Test("start and stop are idempotent")
     func monitorLifecycle() {
         let m = ConnectivityMonitor()
         m.start()
         m.start()
+        #expect(m.isRunning)
         m.stop()
+        m.stop()
+        #expect(!m.isRunning)
+    }
+
+    @MainActor
+    @Test("an update from a stopped or earlier run is dropped (Greptile)")
+    func staleUpdatesDropped() {
+        let m = ConnectivityMonitor()
+        m.start()          // run 1
+        m.stop()
+        m.apply(.cellular, run: 1)
+        #expect(m.state == .none, "stopped monitor published an old update")
+        m.start()          // run 3 (stop advanced the generation)
+        m.apply(.cellular, run: 1)
+        #expect(m.state == .none, "restarted monitor published an update from an earlier run")
+        m.apply(.cellular, run: 3)
+        #expect(m.state == .cellular)
         m.stop()
     }
 }

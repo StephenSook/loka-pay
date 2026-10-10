@@ -38,38 +38,56 @@ public enum InternetState: Equatable, Sendable {
     }
 }
 
-/// Publishes `InternetState` on the main queue. Start it when a money screen appears and stop
-/// it when the screen goes away.
-public final class ConnectivityMonitor: ObservableObject, @unchecked Sendable {
+/// Publishes `InternetState` on the main actor. Start it when a money screen appears and stop
+/// it when the screen goes away. Main-actor isolation makes start and stop safe to call from
+/// SwiftUI, and a per-run generation number drops any path update that was already queued
+/// when `stop()` ran, so a stopped or restarted monitor never publishes a stale state.
+@MainActor
+public final class ConnectivityMonitor: ObservableObject {
     @Published public private(set) var state: InternetState = .none
     /// When the state last changed (phone clock), for "Holding offline 0:42" style timers.
     @Published public private(set) var changedAt = Date()
 
-    private var monitor: NWPathMonitor?
+    private var box: MonitorBox?
+    private var generation = 0
     private let queue = DispatchQueue(label: "us.zerobars.lokapay.connectivity")
 
     public init() {}
 
+    public var isRunning: Bool { box != nil }
+
     public func start() {
-        guard monitor == nil else { return }
-        let m = NWPathMonitor()
-        m.pathUpdateHandler = { [weak self] path in
+        guard box == nil else { return }
+        generation += 1
+        let run = generation
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
             let next = InternetState.from(satisfied: path.status == .satisfied,
                                           usesCellular: path.usesInterfaceType(.cellular))
-            DispatchQueue.main.async {
-                guard let self, self.state != next else { return }
-                self.state = next
-                self.changedAt = Date()
+            Task { @MainActor [weak self] in
+                self?.apply(next, run: run)
             }
         }
-        m.start(queue: queue)
-        monitor = m
+        monitor.start(queue: queue)
+        box = MonitorBox(monitor)
     }
 
     public func stop() {
-        monitor?.cancel()
-        monitor = nil
+        generation += 1
+        box = nil
     }
 
-    deinit { monitor?.cancel() }
+    func apply(_ next: InternetState, run: Int) {
+        guard run == generation, box != nil, state != next else { return }
+        state = next
+        changedAt = Date()
+    }
+}
+
+/// Owns the NWPathMonitor and cancels it when released, so dropping the ConnectivityMonitor
+/// (or calling stop) always ends monitoring.
+private final class MonitorBox: @unchecked Sendable {
+    let monitor: NWPathMonitor
+    init(_ monitor: NWPathMonitor) { self.monitor = monitor }
+    deinit { monitor.cancel() }
 }
