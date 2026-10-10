@@ -20,7 +20,15 @@ const policy: Policy = { capUnits: '100', offlineLimitUnits: '50', bondUnits: '5
   daily: { units: '210', funderLamports: '20', feeLamports: '30' } };
 class Chain implements RegistrationChain {
   blockHeight = vi.fn(async () => 0);
-  lookup = vi.fn(async (_attempt: PreparedAttempt, _plan: RegistrationPlan) => ({ found: this.outcome !== null, outcome: this.outcome }));
+  lookup = vi.fn(async (attempt: PreparedAttempt, _plan: RegistrationPlan) => {
+    // A later transaction's outcome cannot change a previously confirmed signature.
+    for (let i = this.observe.mock.calls.length - 1; i >= 0; i--) {
+      if (this.observe.mock.calls[i][0].signature !== attempt.signature || this.observe.mock.results[i].type !== 'return') continue;
+      const outcome = await this.observe.mock.results[i].value;
+      if (outcome !== null) return { found: true, outcome };
+    }
+    return { found: this.outcome !== null, outcome: this.outcome };
+  });
   taken = vi.fn(async (_id: string) => false);
   existingMerchant = vi.fn(async (_publicKey: string): Promise<string | null> => null);
   quote = vi.fn(async (_plan: RegistrationPlan): Promise<Quote> => ({ message: 'unsigned', blockhash: 'test',
@@ -30,7 +38,7 @@ class Chain implements RegistrationChain {
     rawTransaction: 'test-only', blockhash: 'test', lastValidBlockHeight: 100 }));
   send = vi.fn(async (_attempt: PreparedAttempt) => {});
   outcome: 'ok' | 'collision' | 'failed' | null = 'ok';
-  observe = vi.fn(async () => this.outcome);
+  observe = vi.fn(async (_attempt: PreparedAttempt, _plan: RegistrationPlan) => this.outcome);
 }
 async function fixture(teamKeys: string[] = []) {
   const db = await testDatabase(); closers.push(() => db.close());
@@ -475,4 +483,43 @@ test('a saved legacy failure gains a repost signal only after confirming its cha
   expect(f.chain.sign).toHaveBeenCalledTimes(1);
   f.chain.outcome = 'ok';
   expect((await f.service.submit('payer', { publicKey, retryOf: upgraded.body.retryOf })).statusCode).toBe(201);
+});
+
+async function savedReplacement(f: Awaited<ReturnType<typeof fixture>>, publicKey: string) {
+  f.chain.outcome = null;
+  const first = await f.service.submit('payer', { publicKey });
+  const original = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  f.setNow(1800000030); const token = (await f.store.claimRecovery(original))!;
+  const replacement = { ...original.attempt!, signature: 'replacement-collision', blockhash: 'fresh', lastValidBlockHeight: 200 };
+  expect(await f.store.saveRecovery(original, replacement, token)).toBe(true);
+  return { first, original, replacement };
+}
+
+test.each(['collision', 'failed'] as const)('original registration success wins over replacement %s without another attempt', async terminal => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = terminal;
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true, outcome: attempt.signature === original.attempt!.signature ? 'ok' : terminal }));
+  const result = await f.service.submit('payer', { publicKey });
+  expect(result).toMatchObject({ statusCode: 200, body: { openSignature: original.attempt!.signature, allowanceId: original.plan.allowanceId } });
+  const fields = P.verifyAllowWire(P.base64urlDecode(result.body.allowance as string), deployment, ed25519.getPublicKey(f.seed));
+  expect(fields.allowanceId.toString()).toBe(original.plan.allowanceId);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a found original without final metadata keeps a replacement collision pending', async () => {
+  const f = await fixture(); const publicKey = key(); await savedReplacement(f, publicKey);
+  f.chain.outcome = 'collision'; f.chain.lookup.mockResolvedValue({ found: true, outcome: null });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
+  expect(f.allow).not.toHaveBeenCalled(); expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])('late original success overrides a cached replacement failure before repost (retryOf=%s)', async repost => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  const failed = await f.service.submit('payer', { publicKey }); expect(failed.statusCode).toBe(409);
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true, outcome: attempt.signature === original.attempt!.signature ? 'ok' : 'failed' }));
+  const input = { publicKey, ...(repost ? { retryOf: failed.body.retryOf } : {}) };
+  expect(await f.service.submit('payer', input)).toMatchObject({ statusCode: 200, body: { openSignature: original.attempt!.signature } });
+  expect((await f.store.get('payer', original.plan.keyHash)).explicitRetries).toBe(0);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
 });

@@ -44,6 +44,10 @@ export class RegistrationService {
       let previous: Job;
       try { previous = await this.options.store.get(kind, request.keyHash); }
       catch { throw new HttpError(409, 'retry_not_available'); }
+      try {
+        const prior = await this.priorResult(previous);
+        if (prior) return prior;
+      } catch { return this.pending(previous); }
       token = await this.options.store.claimFailedRetry(previous, retryOf);
     } else token = await this.options.store.claim(job, now);
     if (!token) {
@@ -116,14 +120,17 @@ export class RegistrationService {
       throw new HttpError(503, 'chain_unavailable');
     }
   }
-  private async recover(job: Job): Promise<Result> {
-    // A prior transaction can supply the result even after a saved replacement was prepared.
+  private async priorResult(job: Job): Promise<Result | null> {
+    if (!job.attempt) return null;
     for (const saved of await this.options.store.history(job)) {
       if (saved.attempt.signature === job.attempt!.signature) continue;
       const prior = await this.options.chain.lookup(saved.attempt, saved.plan);
-      if (prior.outcome === 'ok') return this.complete({ ...job, plan: saved.plan }, saved.attempt.signature, false);
+      if (prior.outcome === 'ok') return this.complete({ ...job, plan: saved.plan }, saved.attempt.signature, false, true);
       if (prior.found && prior.outcome === null) return this.pending(job);
     }
+    return null;
+  }
+  private async recover(job: Job): Promise<Result> {
     const height = await this.options.chain.blockHeight();
     if (!Number.isSafeInteger(height) || height < 0) return this.pending(job);
     // Search history after observing height so an absent cached lookup cannot authorize a replacement.
@@ -163,7 +170,7 @@ export class RegistrationService {
       signature, explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
     } });
   }
-  private async complete(job: Job, signature: string, created: boolean): Promise<Result> {
+  private async complete(job: Job, signature: string, created: boolean, priorSuccess = false): Promise<Result> {
     const p = job.plan;
     const explorer = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
     const body = p.kind === 'payer' ? {
@@ -176,10 +183,15 @@ export class RegistrationService {
       openSignature: signature, explorer,
     } : { merchantKeyHash: p.keyHash, merchant: await this.options.signer.merchant({ merchantKeyHash: P.fromHex(p.keyHash),
       displayName: p.name! }), registerSignature: signature, explorer };
-    const result = await this.options.store.finish(job, { statusCode: 200, body });
+    const result = await this.options.store.finish(job, { statusCode: 200, body }, priorSuccess);
     return { ...result, statusCode: created ? 201 : 200 };
   }
   private async resolve(job: Job, created: boolean, known?: 'ok' | 'collision' | 'failed' | null): Promise<Result> {
+    if (job.result?.statusCode === 200 || job.result?.statusCode === 201) return job.result;
+    try {
+      const prior = await this.priorResult(job);
+      if (prior) return prior;
+    } catch { return this.pending(job); }
     if (job.result) {
       if (job.result.statusCode === 409 && !('retryable' in job.result.body) && job.attempt) {
         try {
