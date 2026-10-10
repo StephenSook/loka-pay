@@ -1,12 +1,22 @@
-// The phone call's caps (PLAN.md 3.9), kept in this server process's memory only. On a host
-// that runs several instances, each instance counts on its own, so the site-wide cap is per
-// instance, and a restart forgets every count. Nothing here is written to disk or logged.
+// The phone call's caps (PLAN.md 3.9), kept in this server process's memory only.
 //
-// - per number: at most NUMBER_LIMIT calls in NUMBER_WINDOW_MS, keyed by the number's HMAC
-//   (lib/call-crypto.ts numberKey), never the number itself;
-// - per number and payment: one call, remembered for PAYMENT_MEMORY_MS;
-// - site: at most SITE_LIMIT calls in SITE_WINDOW_MS.
-// The clock is injected, so unit/call.test.ts drives it.
+// These are WEAK limits on a serverless host, and nothing should rely on them alone: every
+// instance keeps its own counts, a new instance starts at zero, and a restart forgets them.
+// The real bounds on calls are the Vonage account's balance and destination settings and the
+// LOKA_CALLS_OFF kill switch (lib/call-server.ts). These caps only stop one instance from
+// being used as a fast dialer. No database, on purpose.
+//
+// - per number: at most NUMBER_LIMIT accepted requests in NUMBER_WINDOW_MS, keyed by the
+//   number's HMAC (lib/call-crypto.ts numberKey), never the number itself;
+// - site (per instance): at most SITE_LIMIT accepted requests in SITE_WINDOW_MS;
+// - per number and payment: one call, remembered for PAYMENT_MEMORY_MS.
+// A request counts when it is taken, before any devnet read or upstream call, and it stays
+// counted whatever happens next (a bad signature, no payment, a refused call), so a flood of
+// failing requests runs into the caps like any other.
+//
+// Every map is bounded: entries expire with their window, and a map at its maximum size drops
+// its oldest entry. With the site cap far below those maximums, nothing is dropped in
+// practice; the bound only keeps memory finite. The clock is injected for unit/call.test.ts.
 
 import type { RateLimitReason } from "./call-shared";
 
@@ -15,24 +25,43 @@ export const NUMBER_WINDOW_MS = 30 * 60_000;
 export const PAYMENT_MEMORY_MS = 24 * 60 * 60_000;
 export const SITE_LIMIT = 30;
 export const SITE_WINDOW_MS = 60 * 60_000;
+export const MAX_NUMBER_KEYS = 1000;
+export const MAX_PAYMENT_PAIRS = 2000;
+
+export interface LimitSettings {
+  numberLimit: number;
+  siteLimit: number;
+  maxNumberKeys: number;
+  maxPaymentPairs: number;
+}
 
 export type LimitCheck = { ok: true } | { ok: false; limit: RateLimitReason; retryAfterSeconds: number };
 
-/** One reserved call, so a call the phone company refused can give its places back. */
-export interface Reservation {
-  key: string;
-  signature: string;
-  atMs: number;
-}
-
 const seconds = (ms: number) => Math.max(1, Math.ceil(ms / 1000));
+
+/** Drops a map's oldest entries (insertion order) until it has room for one more. */
+function makeRoom<V>(map: Map<string, V>, max: number): void {
+  while (map.size >= max) map.delete(map.keys().next().value as string);
+}
 
 export class CallLimits {
   private readonly byNumber = new Map<string, number[]>();
   private readonly byPayment = new Map<string, number>();
   private site: number[] = [];
+  private readonly settings: LimitSettings;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    settings: Partial<LimitSettings> = {},
+  ) {
+    this.settings = {
+      numberLimit: NUMBER_LIMIT,
+      siteLimit: SITE_LIMIT,
+      maxNumberKeys: MAX_NUMBER_KEYS,
+      maxPaymentPairs: MAX_PAYMENT_PAIRS,
+      ...settings,
+    };
+  }
 
   private prune(nowMs: number): void {
     this.site = this.site.filter((t) => nowMs - t < SITE_WINDOW_MS);
@@ -46,44 +75,54 @@ export class CallLimits {
     }
   }
 
-  private checkAt(key: string, signature: string | null, nowMs: number): LimitCheck {
+  private checkAt(key: string, nowMs: number): LimitCheck {
     this.prune(nowMs);
-    if (signature !== null) {
-      const at = this.byPayment.get(`${key}:${signature}`);
-      if (at !== undefined) return { ok: false, limit: "payment", retryAfterSeconds: seconds(at + PAYMENT_MEMORY_MS - nowMs) };
-    }
     const times = this.byNumber.get(key) ?? [];
-    if (times.length >= NUMBER_LIMIT) return { ok: false, limit: "number", retryAfterSeconds: seconds(times[0] + NUMBER_WINDOW_MS - nowMs) };
-    if (this.site.length >= SITE_LIMIT) return { ok: false, limit: "site", retryAfterSeconds: seconds(this.site[0] + SITE_WINDOW_MS - nowMs) };
+    if (times.length >= this.settings.numberLimit) {
+      return { ok: false, limit: "number", retryAfterSeconds: seconds(times[0] + NUMBER_WINDOW_MS - nowMs) };
+    }
+    if (this.site.length >= this.settings.siteLimit) {
+      return { ok: false, limit: "site", retryAfterSeconds: seconds(this.site[0] + SITE_WINDOW_MS - nowMs) };
+    }
     return { ok: true };
   }
 
-  /** The per-number and site caps, before the payment is known. Records nothing. */
+  /** The per-number and site caps, without counting anything. */
   check(key: string): LimitCheck {
-    return this.checkAt(key, null, this.now());
+    return this.checkAt(key, this.now());
   }
 
-  /** Every cap for this number and payment; when all allow it, the call is counted now. */
-  reserve(key: string, signature: string): { ok: true; reservation: Reservation } | Extract<LimitCheck, { ok: false }> {
+  /** Counts one request for this number and for the site when both caps allow it. */
+  take(key: string): LimitCheck {
     const nowMs = this.now();
-    const result = this.checkAt(key, signature, nowMs);
+    const result = this.checkAt(key, nowMs);
     if (!result.ok) return result;
-    this.byNumber.set(key, [...(this.byNumber.get(key) ?? []), nowMs]);
-    this.byPayment.set(`${key}:${signature}`, nowMs);
-    this.site.push(nowMs);
-    return { ok: true, reservation: { key, signature, atMs: nowMs } };
-  }
-
-  /** Gives a reservation's places back: only when the phone company answered that it placed no call. */
-  release({ key, signature, atMs }: Reservation): void {
     const times = this.byNumber.get(key);
     if (times) {
-      const i = times.indexOf(atMs);
-      if (i >= 0) times.splice(i, 1);
-      if (times.length === 0) this.byNumber.delete(key);
+      times.push(nowMs);
+    } else {
+      makeRoom(this.byNumber, this.settings.maxNumberKeys);
+      this.byNumber.set(key, [nowMs]);
     }
-    if (this.byPayment.get(`${key}:${signature}`) === atMs) this.byPayment.delete(`${key}:${signature}`);
-    const i = this.site.indexOf(atMs);
-    if (i >= 0) this.site.splice(i, 1);
+    this.site.push(nowMs);
+    return { ok: true };
+  }
+
+  /** One call per number and payment: records the pair, or says when it may be called about again. */
+  claimPayment(key: string, signature: string): LimitCheck {
+    const nowMs = this.now();
+    this.prune(nowMs);
+    // A number key is 64 hex characters and a signature is base58, so ":" cannot be ambiguous.
+    const pair = `${key}:${signature}`;
+    const at = this.byPayment.get(pair);
+    if (at !== undefined) return { ok: false, limit: "payment", retryAfterSeconds: seconds(at + PAYMENT_MEMORY_MS - nowMs) };
+    makeRoom(this.byPayment, this.settings.maxPaymentPairs);
+    this.byPayment.set(pair, nowMs);
+    return { ok: true };
+  }
+
+  /** How many entries each map holds, for the tests that check the bounds. */
+  sizes(): { numbers: number; payments: number; site: number } {
+    return { numbers: this.byNumber.size, payments: this.byPayment.size, site: this.site.length };
   }
 }

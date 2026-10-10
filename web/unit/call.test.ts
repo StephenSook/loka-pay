@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { encodeBase58 } from "../lib/base58";
 import { numberKey, signAudioParams, verifyAudioParams, vonageJwt, type AudioParams } from "../lib/call-crypto";
 import { CallLimits, NUMBER_WINDOW_MS, PAYMENT_MEMORY_MS, SITE_LIMIT, SITE_WINDOW_MS } from "../lib/call-limits";
 import { latestSettlement, settlementBySignature, settlementOf } from "../lib/call-payment";
@@ -274,41 +275,42 @@ function callKeyObject() {
 // ---------- the caps ----------
 
 test.describe("call caps, with an injected clock", () => {
-  test("two calls per number per 30 minutes, then rate limited until the oldest leaves the window", () => {
+  test("two requests per number per 30 minutes, then rate limited until the oldest leaves the window", () => {
     let now = 1_000_000;
     const limits = new CallLimits(() => now);
     const key = numberKey(SECRET, NUMBER);
-    expect(limits.reserve(key, "sig-a").ok).toBe(true);
+    expect(limits.take(key)).toEqual({ ok: true });
     now += 60_000;
-    expect(limits.reserve(key, "sig-b").ok).toBe(true);
+    expect(limits.take(key)).toEqual({ ok: true });
     now += 60_000;
     expect(limits.check(key)).toEqual({ ok: false, limit: "number", retryAfterSeconds: (NUMBER_WINDOW_MS - 120_000) / 1000 });
-    expect(limits.reserve(key, "sig-c")).toEqual({ ok: false, limit: "number", retryAfterSeconds: (NUMBER_WINDOW_MS - 120_000) / 1000 });
-    // Another number is not affected.
+    expect(limits.take(key)).toEqual({ ok: false, limit: "number", retryAfterSeconds: (NUMBER_WINDOW_MS - 120_000) / 1000 });
+    // A refused take counts nothing, and another number is not affected.
+    expect(limits.sizes().site).toBe(2);
     expect(limits.check(numberKey(SECRET, OTHER_NUMBER))).toEqual({ ok: true });
     now = 1_000_000 + NUMBER_WINDOW_MS;
-    expect(limits.reserve(key, "sig-c").ok).toBe(true);
+    expect(limits.take(key)).toEqual({ ok: true });
   });
 
   test("one call per number and payment, remembered for 24 hours", () => {
     let now = 5_000_000;
     const limits = new CallLimits(() => now);
     const key = numberKey(SECRET, NUMBER);
-    expect(limits.reserve(key, REDEEM_SIG).ok).toBe(true);
+    expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: true });
     now += NUMBER_WINDOW_MS;
-    expect(limits.reserve(key, REDEEM_SIG)).toEqual({ ok: false, limit: "payment", retryAfterSeconds: (PAYMENT_MEMORY_MS - NUMBER_WINDOW_MS) / 1000 });
+    expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: false, limit: "payment", retryAfterSeconds: (PAYMENT_MEMORY_MS - NUMBER_WINDOW_MS) / 1000 });
     // The same payment for another number, and another payment for this number, are fine.
-    expect(limits.reserve(numberKey(SECRET, OTHER_NUMBER), REDEEM_SIG).ok).toBe(true);
-    expect(limits.reserve(key, REFUSED_SIG).ok).toBe(true);
+    expect(limits.claimPayment(numberKey(SECRET, OTHER_NUMBER), REDEEM_SIG)).toEqual({ ok: true });
+    expect(limits.claimPayment(key, REFUSED_SIG)).toEqual({ ok: true });
     now = 5_000_000 + PAYMENT_MEMORY_MS;
-    expect(limits.reserve(key, REDEEM_SIG).ok).toBe(true);
+    expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: true });
   });
 
-  test("at most 30 calls an hour for the site", () => {
+  test("at most 30 requests an hour for the site (this instance)", () => {
     let now = 9_000_000;
     const limits = new CallLimits(() => now);
     for (let i = 0; i < SITE_LIMIT; i += 1) {
-      expect(limits.reserve(numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`), "sig").ok).toBe(true);
+      expect(limits.take(numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`))).toEqual({ ok: true });
       now += 1000;
     }
     const fresh = numberKey(SECRET, OTHER_NUMBER);
@@ -317,16 +319,33 @@ test.describe("call caps, with an injected clock", () => {
     expect(limits.check(fresh)).toEqual({ ok: true });
   });
 
-  test("release gives a refused call's places back", () => {
+  test("every map and cache stays at its maximum size", async () => {
     const now = 1_000;
-    const limits = new CallLimits(() => now);
-    const key = numberKey(SECRET, NUMBER);
-    const first = limits.reserve(key, "sig-a");
-    expect(first.ok).toBe(true);
-    if (first.ok) limits.release(first.reservation);
-    expect(limits.reserve(key, "sig-a").ok).toBe(true);
-    expect(limits.reserve(key, "sig-b").ok).toBe(true);
-    expect(limits.reserve(key, "sig-c").ok).toBe(false);
+    // A site cap high enough to reach the map bounds, so the bound itself is what is tested.
+    const limits = new CallLimits(() => now, { siteLimit: 10_000, maxNumberKeys: 5, maxPaymentPairs: 7 });
+    for (let i = 0; i < 40; i += 1) {
+      const key = numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`);
+      expect(limits.take(key)).toEqual({ ok: true });
+      expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: true });
+    }
+    expect(limits.sizes()).toEqual({ numbers: 5, payments: 7, site: 40 });
+    // The defaults: the site cap stops takes long before the map bounds are reached.
+    const real = new CallLimits(() => now);
+    for (let i = 0; i < 200; i += 1) real.take(numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`));
+    expect(real.sizes()).toEqual({ numbers: SITE_LIMIT, payments: 0, site: SITE_LIMIT });
+
+    const memo = new ChainMemo(10_000, 4);
+    for (let i = 0; i < 20; i += 1) memo.set(`sig-${i}`, now, null);
+    expect(memo.size).toBe(4);
+    // Expired entries leave on the next write.
+    memo.set("fresh", now + 10_000, null);
+    expect(memo.size).toBe(1);
+
+    const audio = new AudioCache(3);
+    for (let i = 0; i < 12; i += 1) await audio.get(`p-${i}`, now, now + 600_000, async () => new Uint8Array([i]));
+    expect(audio.size).toBe(3);
+    await audio.get("late", now + 600_000, now + 1_200_000, async () => new Uint8Array([1]));
+    expect(audio.size).toBe(1);
   });
 });
 
@@ -583,7 +602,7 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
     });
   });
 
-  test("Vonage refusing: 502 call_failed with its title only, the number scrubbed, and the places given back", async () => {
+  test("Vonage refusing: 502 call_failed with its title only, the number scrubbed, and the request stays counted", async () => {
     await withStandIn({ vonageStatus: 401, vonageTitle: `Unauthorized for 1${NATIONAL}` }, async (s) => {
       await withEnv(callEnv(s.base), async () => {
         const d = deps();
@@ -593,12 +612,43 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
         expect(JSON.parse(text)).toEqual({ error: "call_failed", reason: "Unauthorized for [number]" });
         expect(text).not.toContain(NATIONAL);
         expect(text).not.toContain("detail for the test");
-        // Released: the same number and payment may try again.
-        expect((await handleCall(callRequest({ to: NUMBER, lang: "en" }), d)).status).toBe(502);
+        // Failures count like calls: the same number and payment is not tried again.
+        const again = await handleCall(callRequest({ to: NUMBER, lang: "en" }), d);
+        expect(again.status).toBe(429);
+        expect((await again.json()).limit).toBe("payment");
       });
-      expect(s.seen.vonage).toHaveLength(2);
+      expect(s.seen.vonage).toHaveLength(1);
     });
     expect(safeTitle(`Bad number ${PLUS}1 (404) 555-0123 here`)).toBe("Bad number [number] here");
+  });
+
+  test("a flood beyond the caps makes zero devnet, ElevenLabs or Vonage requests", async () => {
+    // A well-formed signature devnet does not know: every counted request reads devnet once.
+    const unknown = encodeBase58(new Uint8Array(64).fill(7));
+    await withStandIn({}, async (s) => {
+      await withEnv(callEnv(s.base), async () => {
+        const d = deps();
+        const ask = (to: string) => handleCall(callRequest({ to, lang: "en", signature: unknown }), d);
+        // The number's two counted requests each read devnet, and find nothing.
+        expect((await ask(NUMBER)).status).toBe(404);
+        expect((await ask(NUMBER)).status).toBe(404);
+        expect(s.seen.rpc).toHaveLength(2);
+        // Fifty more from that number: refused before any read.
+        for (let i = 0; i < 50; i += 1) expect((await ask(NUMBER)).status).toBe(429);
+        expect(s.seen.rpc).toHaveLength(2);
+        // Other numbers until the site cap: each counted request reads once, then nothing.
+        for (let i = 0; i < SITE_LIMIT - 2; i += 1) expect((await ask(`${PLUS}1678555${String(i).padStart(4, "0")}`)).status).toBe(404);
+        expect(s.seen.rpc).toHaveLength(SITE_LIMIT);
+        for (let i = 0; i < 100; i += 1) {
+          const r = await ask(`${PLUS}1213555${String(i).padStart(4, "0")}`);
+          expect(r.status).toBe(429);
+          expect((await r.json()).limit).toBe("site");
+        }
+        expect(s.seen.rpc).toHaveLength(SITE_LIMIT);
+      });
+      expect(s.seen.vonage).toHaveLength(0);
+      expect(s.seen.speech).toHaveLength(0);
+    });
   });
 });
 

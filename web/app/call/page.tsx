@@ -61,9 +61,10 @@ export default async function CallPage() {
           settled within the last {SIGNATURE_MAX_AGE_MS / 60_000} minutes before calling.
         </p>
         <p className="text-sm text-muted">
-          A refused or failed transaction is never read out as paid. Limits, counted in each server instance&apos;s
-          memory: {NUMBER_LIMIT} calls per number every {NUMBER_WINDOW_MS / 60_000} minutes, one call per number for each
-          payment, and {SITE_LIMIT} calls an hour. US numbers only. More in the{" "}
+          A refused or failed transaction is never read out as paid. US numbers only. Each request counts against these
+          limits, failed ones too: {NUMBER_LIMIT} per number every {NUMBER_WINDOW_MS / 60_000} minutes, one call per
+          number for each payment, and {SITE_LIMIT} an hour. They are weak limits: each server instance keeps its own
+          count in memory. The real bounds are the phone company account&apos;s balance and an off switch. More in the{" "}
           <Link prefetch={false} href="/privacy" className="font-bold underline">
             privacy policy
           </Link>

@@ -2,10 +2,15 @@
 // variable read here has no NEXT_PUBLIC prefix, and unit/server-only.test.ts fails if a client
 // module can reach this file.
 //
-// POST /api/call {to, lang, signature?}: finds a settled payment on devnet (lib/call-payment.ts),
-// checks the caps (lib/call-limits.ts), then asks the Vonage Voice API to call `to` and play a
-// signed audio link. GET /api/call/audio?p&m: checks the link (lib/call-crypto.ts), has
-// ElevenLabs read the payment (lib/call-speech.ts) and returns the MP3.
+// POST /api/call {to, lang, signature?}: checks the body, the configuration and the caps
+// (lib/call-limits.ts) first, then finds a settled payment on devnet (lib/call-payment.ts),
+// then asks the Vonage Voice API to call `to` and play a signed audio link. GET
+// /api/call/audio?p&m: checks the link (lib/call-crypto.ts), has ElevenLabs read the payment
+// (lib/call-speech.ts) and returns the MP3.
+//
+// The in-memory caps are per server instance and weak on a serverless host; the real bounds
+// are the Vonage account's balance and destination settings and the LOKA_CALLS_OFF kill
+// switch. Every in-memory map here and in lib/call-limits.ts has a maximum size and expiry.
 //
 // Privacy: the number is used for one Vonage request and one HMAC (the caps' key). It is never
 // written to disk, never put in a response, and nothing here logs anything: no console call
@@ -164,30 +169,52 @@ export function callsEnabled(): boolean {
   return callConfig().ok;
 }
 
-/** Holds devnet answers for a few seconds, so many presses do not each read the chain. */
+/** Drops a map's oldest entries (insertion order) until it has room for one more. */
+function makeRoom<V>(map: Map<string, V>, max: number): void {
+  while (map.size >= max) map.delete(map.keys().next().value as string);
+}
+
+/**
+ * Holds devnet answers for a few seconds, so many presses do not each read the chain. Bounded:
+ * entries expire after `ttlMs`, and at `max` entries the oldest is dropped.
+ */
 export class ChainMemo {
   private readonly entries = new Map<string, { atMs: number; value: SettledPayment | null }>();
-  constructor(private readonly ttlMs = 10_000) {}
+  constructor(
+    private readonly ttlMs = 10_000,
+    private readonly max = 64,
+  ) {}
   get(key: string, nowMs: number): { value: SettledPayment | null } | null {
     const e = this.entries.get(key);
     if (!e || nowMs - e.atMs >= this.ttlMs) return null;
     return { value: e.value };
   }
   set(key: string, nowMs: number, value: SettledPayment | null): void {
-    if (this.entries.size >= 64) this.entries.delete(this.entries.keys().next().value as string);
+    for (const [k, e] of this.entries) if (nowMs - e.atMs >= this.ttlMs) this.entries.delete(k);
+    this.entries.delete(key);
+    makeRoom(this.entries, this.max);
     this.entries.set(key, { atMs: nowMs, value });
+  }
+  get size(): number {
+    return this.entries.size;
   }
 }
 
-/** The MP3 for each audio link, kept until the link expires: Vonage may fetch it more than once. */
+/**
+ * The MP3 for each audio link, kept until the link expires: Vonage may fetch it more than once.
+ * Bounded: an entry leaves when its link expires, and at `max` entries the oldest is dropped.
+ */
 export class AudioCache {
   private readonly entries = new Map<string, { expiresAtMs: number; bytes: Promise<Uint8Array> }>();
   constructor(private readonly max = 64) {}
+  get size(): number {
+    return this.entries.size;
+  }
   get(p: string, nowMs: number, expiresAtMs: number, make: () => Promise<Uint8Array>): Promise<Uint8Array> {
     for (const [key, e] of this.entries) if (e.expiresAtMs <= nowMs) this.entries.delete(key);
     const hit = this.entries.get(p);
     if (hit) return hit.bytes;
-    if (this.entries.size >= this.max) this.entries.delete(this.entries.keys().next().value as string);
+    makeRoom(this.entries, this.max);
     const bytes = make();
     const entry = { expiresAtMs, bytes };
     this.entries.set(p, entry);
@@ -235,7 +262,7 @@ export function safeTitle(title: string): string {
   return title.replace(/\+?\d[\d\s().-]{5,}\d/g, "[number]").slice(0, 120);
 }
 
-type CallOutcome = { ok: true } | { ok: false; placedNoCall: boolean; reason: string };
+type CallOutcome = { ok: true } | { ok: false; reason: string };
 
 async function placeVonageCall(config: CallConfig, to: string, audioUrl: string, nowSeconds: number): Promise<CallOutcome> {
   const body = {
@@ -257,8 +284,7 @@ async function placeVonageCall(config: CallConfig, to: string, audioUrl: string,
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch {
-    // No answer: the call may or may not have been placed, so its places stay counted.
-    return { ok: false, placedNoCall: false, reason: `no answer from the phone company within ${UPSTREAM_TIMEOUT_MS / 1000} s` };
+    return { ok: false, reason: `no answer from the phone company within ${UPSTREAM_TIMEOUT_MS / 1000} s` };
   }
   if (response.ok) {
     await response.body?.cancel();
@@ -271,7 +297,7 @@ async function placeVonageCall(config: CallConfig, to: string, audioUrl: string,
   } catch {
     // Not JSON: the status is the reason.
   }
-  return { ok: false, placedNoCall: true, reason: safeTitle(title) };
+  return { ok: false, reason: safeTitle(title) };
 }
 
 interface CallRequest {
@@ -316,18 +342,24 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
   return payment;
 }
 
+/**
+ * The order is the point: every cheap check comes before any work that costs something. The
+ * body is read and checked, then the kill switch and the configuration, then the caps, which
+ * count this request (lib/call-limits.ts); only a counted request reads devnet, and only then
+ * is Vonage asked. A counted request stays counted whatever happens next.
+ */
 async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
-  const config = callConfig();
-  if (!config.ok) return refuse(503, "calls_off", config.reason);
-  const { secret, origin } = config.config;
-
   const read = await readCallRequest(request);
   if (read instanceof Response) return read;
   const { to, lang, signature } = read;
 
+  const config = callConfig();
+  if (!config.ok) return refuse(503, "calls_off", config.reason);
+  const { secret, origin } = config.config;
+
   const key = numberKey(secret, to);
-  const early = deps.limits.check(key);
-  if (!early.ok) return limited(early);
+  const taken = deps.limits.take(key);
+  if (!taken.ok) return limited(taken);
 
   let payment: SettledPayment | null;
   try {
@@ -340,9 +372,8 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   if (signature !== null && nowMs - payment.blockTime * 1000 > SIGNATURE_MAX_AGE_MS) {
     return refuse(409, "too_old", `settled more than ${SIGNATURE_MAX_AGE_MS / 60_000} minutes ago`);
   }
-
-  const reserved = deps.limits.reserve(key, payment.signature);
-  if (!reserved.ok) return limited(reserved);
+  const once = deps.limits.claimPayment(key, payment.signature);
+  if (!once.ok) return limited(once);
 
   const nowSeconds = Math.floor(nowMs / 1000);
   const { p, m } = signAudioParams(secret, {
@@ -354,10 +385,7 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   });
   const audioUrl = `${origin}/api/call/audio?p=${p}&m=${m}`;
   const placed = await placeVonageCall(config.config, to, audioUrl, nowSeconds);
-  if (!placed.ok) {
-    if (placed.placedNoCall) deps.limits.release(reserved.reservation);
-    return refuse(502, "call_failed", placed.reason);
-  }
+  if (!placed.ok) return refuse(502, "call_failed", placed.reason);
   return answer(200, {
     status: "calling",
     payment: { signature: payment.signature, amountUnits: payment.amountUnits, settledAtMs: payment.blockTime * 1000, explorer: payment.explorer },
