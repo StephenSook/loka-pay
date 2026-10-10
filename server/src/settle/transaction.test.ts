@@ -189,6 +189,17 @@ test('the refusing instruction must be the redeem_note in the signed bytes, not 
   expect(preflightProgramError(custom(1, 6011), Buffer.from('AA==', 'base64'))).toBeNull();
 });
 
+test('a redeem_note-shaped instruction addressed to another program is never treated as ours', () => {
+  const transaction = buildRedeemTransaction(validated);
+  transaction.feePayer = Keypair.generate().publicKey; transaction.recentBlockhash = base58.encode(new Uint8Array(32).fill(7));
+  const ours = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+  expect(preflightProgramError(custom(1, 6011), ours)).toBe(6011);
+  // Same discriminator and note bytes, different program: the Custom code is that program's, not loka_vault's.
+  transaction.instructions[1].programId = Keypair.generate().publicKey;
+  const foreign = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+  expect(preflightProgramError(custom(1, 6011), foreign)).toBeNull();
+});
+
 test('a phone cheat refused by preflight lands on chain and resolves to a signed failed SerialUsed CONF', async () => {
   const payer = Keypair.generate(); // Ephemeral local signing test only.
   const program = new PublicKey(deployment.programId);

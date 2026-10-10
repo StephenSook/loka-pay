@@ -71,8 +71,13 @@ export function preflightProgramError(error: unknown, rawTransaction: Buffer): n
   let instructions: TransactionInstruction[];
   try { instructions = Transaction.from(rawTransaction).instructions; } catch { return null; }
   const discriminator = Buffer.from(redeem.discriminator);
-  const redeems = instructions.flatMap((ix, index) => ix.data.length === discriminator.length + P.SIZES.NOTE_V1
-    && ix.data.subarray(0, discriminator.length).equals(discriminator) ? [index] : []);
+  // A redeem_note is this program's instruction only if it is addressed to the program its own signed note names,
+  // the same binding the on-chain program checks. Another program's instruction with these bytes is not ours.
+  const isRedeem = (ix: TransactionInstruction) => {
+    if (ix.data.length !== discriminator.length + P.SIZES.NOTE_V1 || !ix.data.subarray(0, discriminator.length).equals(discriminator)) return false;
+    try { return ix.programId.equals(new PublicKey(P.decodeNote(ix.data.subarray(discriminator.length)).programId)); } catch { return false; }
+  };
+  const redeems = instructions.flatMap((ix, index) => isRedeem(ix) ? [index] : []);
   // The precompile and compute-budget instructions report Custom codes too. Only redeem_note's codes are ours.
   if (redeems.length !== 1 || Number(match[1]) !== redeems[0]) return null;
   const code = Number.parseInt(match[2], 16);
