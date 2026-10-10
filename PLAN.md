@@ -459,4 +459,4 @@ One owner per module; cross-module changes go by PR, reviewed by that owner. If 
 10. No em dashes or en dashes in anything we write.
 11. No IP address, phone number, email or name is written to the database, logs or disk. A phone number for the remitter call lives in server memory only until its one call ends (D15, D16).
 
-_Last updated: 2026-10-10 04:40 ET by Claude (API live at api.zerobars.us; 1.0, 1.9, 1.9b, 3.11, 3.13 in progress; #25 architecture diagram drafted). Start with your `<NAME>_TASKS.md`._
+_Last updated: 2026-10-10 04:25 ET by Claude (API live at api.zerobars.us; 1.0, 1.9, 1.9b, 3.11, 3.13 in progress; #25 architecture diagram drafted). Start with your `<NAME>_TASKS.md`._
