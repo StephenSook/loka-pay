@@ -8,7 +8,7 @@ Pages today:
 |---|---|
 | `/` | What LOKA Pay is, the sandbox chip, the build status, the judge door button and links to every page |
 | `/judge` | The judge door: a numbered three-minute itinerary, the program's facts read live from devnet, the TestFlight status and the CI badges |
-| `/live` | The program's transactions, read by the browser straight from devnet (`getSignaturesForAddress`, `getTransaction`, then a `logsSubscribe` WebSocket). `/live?kiosk=1` uses large type |
+| `/live` | The program's transactions, read by the browser straight from devnet (`getSignaturesForAddress`, `getTransaction`, then a `logsSubscribe` WebSocket). It keeps the newest 100 rows, and after a reconnect it reads the history again and retries rows whose details it had given up on. `/live?kiosk=1` uses large type |
 | `/verify` | Checks a payment receipt in the visitor's browser (PAYMENT-V1 section 4.9): from a `#r=<base64url>` link or pasted text, plus a button that loads the published test receipt |
 | `/proof` | Claims marked Live only with an evidence link, proof of reserves from the program's accounts at one slot, and "Built this weekend" from GitHub's compare API |
 | `/trust` | The threat model in plain words: what the program checks, what the protocol does not promise, custody, and the upgrade authority read from chain |

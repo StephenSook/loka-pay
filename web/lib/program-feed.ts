@@ -6,7 +6,11 @@
 // The connection state is the socket's real state: "live" only after the node confirmed
 // the subscription, "reconnecting" with the real attempt number and delay, "failed" after
 // too many closes in a row. After a reconnect the history is read again, so a transaction
-// that landed while the socket was down still appears.
+// that landed while the socket was down still appears, and a row whose details were given
+// up on ("unread") is read again.
+//
+// The feed keeps the newest MAX_ROWS rows, so a kiosk left open all weekend does not grow
+// without limit.
 //
 // Public devnet allows 10 getTransaction calls per 10 seconds per IP, so details are read
 // in batches of DETAIL_BATCH, newest first, waiting between batches; a row whose details
@@ -16,6 +20,7 @@ import { summarizeLogs, summarizeTransaction, type TxSummary } from "./logs";
 import { WS_URL, describeFailure, rpc, rpcBatch } from "./solana";
 
 export const HISTORY_LIMIT = 20;
+export const MAX_ROWS = 100;
 export const MAX_ATTEMPTS = 8;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const DETAIL_BATCH = 8;
@@ -29,6 +34,30 @@ const SUBSCRIBE_ID = 1;
 export type Details = "reading" | "read" | "unread";
 
 export type Row = TxSummary & { arrivedLive: boolean; seenAtMs: number | null; details: Details };
+
+/**
+ * The newest `max` rows, newest first by slot (a row with no slot yet, just arrived, on
+ * top), and the signatures of the rows past the limit.
+ */
+export function keepNewest(rows: Iterable<Row>, max: number): { kept: Row[]; dropped: string[] } {
+  const sorted = [...rows].sort((a, b) => (b.slot ?? Number.MAX_SAFE_INTEGER) - (a.slot ?? Number.MAX_SAFE_INTEGER));
+  return { kept: sorted.slice(0, max), dropped: sorted.slice(max).map((r) => r.signature) };
+}
+
+/**
+ * The rows a history read adds or changes. A row already shown keeps what it has, except
+ * that after a reconnect (`retryUnread`) a row whose details were given up on goes back to
+ * "reading", so its details are tried again.
+ */
+export function mergeHistory(current: ReadonlyMap<string, Row>, loaded: readonly Row[], retryUnread: boolean): Row[] {
+  const changed: Row[] = [];
+  for (const row of loaded) {
+    const shown = current.get(row.signature);
+    if (!shown) changed.push(row);
+    else if (retryUnread && shown.details === "unread") changed.push({ ...shown, details: "reading" });
+  }
+  return changed;
+}
 
 export type Connection =
   | { kind: "connecting" }
@@ -130,6 +159,8 @@ export class ProgramFeed {
   private everLive = false;
   private running = false;
   private enriching = false;
+  /** Rows that just arrived over the socket, whose details enrichLive is reading. */
+  private readonly liveEnriching = new Set<string>();
 
   constructor(
     private readonly programId: string,
@@ -148,7 +179,7 @@ export class ProgramFeed {
   start(): void {
     if (this.running) return;
     this.running = true;
-    void this.refreshHistory();
+    void this.refreshHistory(false);
     this.connect();
   }
 
@@ -171,10 +202,9 @@ export class ProgramFeed {
   }
 
   private update(patch: Partial<FeedState>): void {
-    const rows = [...this.rows.values()].sort(
-      (a, b) => (b.slot ?? Number.MAX_SAFE_INTEGER) - (a.slot ?? Number.MAX_SAFE_INTEGER),
-    );
-    this.state = { ...this.state, ...patch, rows };
+    const { kept, dropped } = keepNewest(this.rows.values(), MAX_ROWS);
+    for (const signature of dropped) this.rows.delete(signature);
+    this.state = { ...this.state, ...patch, rows: kept };
     for (const listener of this.listeners) listener(this.state);
   }
 
@@ -182,14 +212,12 @@ export class ProgramFeed {
     this.rows.set(row.signature, row);
   }
 
-  private async refreshHistory(): Promise<void> {
+  /** `retryUnread` after a reconnect: rows whose details were given up on are read again. */
+  private async refreshHistory(retryUnread: boolean): Promise<void> {
     try {
       const loaded = await loadSignatures(this.programId);
       if (!this.running) return;
-      for (const row of loaded) {
-        // A row already shown (from an earlier read or the socket) keeps what it has.
-        if (!this.rows.has(row.signature)) this.setRow(row);
-      }
+      for (const row of mergeHistory(this.rows, loaded, retryUnread)) this.setRow(row);
       this.update({ history: { kind: "ok", atMs: Date.now(), count: loaded.length } });
       void this.enrich();
     } catch (e) {
@@ -198,13 +226,18 @@ export class ProgramFeed {
     }
   }
 
+  /** A row whose details the history reader (enrich) should read: not one enrichLive is reading. */
+  private waitsForDetails(row: Row): boolean {
+    return row.details === "reading" && !this.liveEnriching.has(row.signature);
+  }
+
   /** Reads details for rows still "reading", newest first, a batch at a time. */
   private async enrich(): Promise<void> {
     if (this.enriching) return;
     this.enriching = true;
     try {
       for (let round = 0; round < DETAIL_ROUNDS && this.running; round += 1) {
-        const pending = this.state.rows.filter((r) => r.details === "reading" && !r.arrivedLive).slice(0, DETAIL_BATCH);
+        const pending = this.state.rows.filter((r) => this.waitsForDetails(r)).slice(0, DETAIL_BATCH);
         if (pending.length === 0) return;
         if (round > 0) await sleep(DETAIL_WAIT_MS);
         if (!this.running) return;
@@ -214,7 +247,9 @@ export class ProgramFeed {
         );
         pending.forEach((row, i) => {
           const outcome = outcomes[i];
-          const current = this.rows.get(row.signature) ?? row;
+          const current = this.rows.get(row.signature);
+          // Dropped past MAX_ROWS while its details were being read: not added back.
+          if (!current) return;
           if (outcome.kind === "read") {
             this.setRow({ ...current, ...outcome.summary, blockTime: outcome.summary.blockTime ?? current.blockTime, details: "read" });
           } else if (outcome.kind === "unread") {
@@ -224,7 +259,7 @@ export class ProgramFeed {
         this.update({});
       }
       // Out of rounds: say so on each row still waiting.
-      for (const row of this.rows.values()) if (row.details === "reading" && !row.arrivedLive) this.setRow({ ...row, details: "unread" });
+      for (const row of this.rows.values()) if (this.waitsForDetails(row)) this.setRow({ ...row, details: "unread" });
       this.update({});
     } finally {
       this.enriching = false;
@@ -249,6 +284,15 @@ export class ProgramFeed {
 
   /** The block time and instruction data of a transaction that just arrived, retried briefly. */
   private async enrichLive(signature: string): Promise<void> {
+    this.liveEnriching.add(signature);
+    try {
+      await this.readLiveDetails(signature);
+    } finally {
+      this.liveEnriching.delete(signature);
+    }
+  }
+
+  private async readLiveDetails(signature: string): Promise<void> {
     for (let attempt = 0; attempt < LIVE_DETAIL_ATTEMPTS && this.running; attempt += 1) {
       if (attempt > 0) await sleep(LIVE_DETAIL_DELAY_MS);
       const [outcome] = await loadDetails([signature], this.programId);
@@ -300,7 +344,7 @@ export class ProgramFeed {
         if (typeof message.result === "number") {
           this.attempts = 0;
           this.update({ connection: { kind: "live", sinceMs: Date.now() } });
-          if (this.everLive) void this.refreshHistory();
+          if (this.everLive) void this.refreshHistory(true);
           this.everLive = true;
         } else {
           // The node refused the subscription; treat it like a closed socket.

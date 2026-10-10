@@ -309,13 +309,17 @@ function transactionFor(signature: string) {
 }
 
 /** Answers devnet JSON-RPC from the recorded fixtures; counts calls by method. */
-async function routeDevnet(page: Page, options: { failHistory?: boolean } = {}) {
+async function routeDevnet(page: Page, options: { failHistory?: boolean; failTransactions?: () => boolean } = {}) {
   const calls: Record<string, number> = {};
   await page.route(DEVNET, async (route: Route) => {
     const body = route.request().postDataJSON();
     const answer = (msg: { id: number; method: string; params: unknown[] }) => {
       calls[msg.method] = (calls[msg.method] ?? 0) + 1;
       if (msg.method === "getSignaturesForAddress") return { jsonrpc: "2.0", id: msg.id, result: recordedSignatures() };
+      if (msg.method === "getTransaction" && options.failTransactions?.()) {
+        // An error other than the rate limit: the page gives up on the row ("Details not read").
+        return { jsonrpc: "2.0", id: msg.id, error: { code: -32005, message: "node is behind (test fixture)" } };
+      }
       if (msg.method === "getTransaction") return { jsonrpc: "2.0", id: msg.id, result: transactionFor(msg.params[0] as string) };
       return { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "not in the test fixture" } };
     };
@@ -394,6 +398,37 @@ test("/live: a closed socket shows Reconnecting, reconnects, and reads the histo
   await expect(page.getByTestId("connection")).toHaveAttribute("data-state", "live", { timeout: 10_000 });
   expect(connections).toBe(2);
   await expect.poll(() => calls.getSignaturesForAddress).toBe(2);
+});
+
+test("/live: rows whose details could not be read are read again after a reconnect", async ({ page }) => {
+  const devnet = { failing: true };
+  const calls = await routeDevnet(page, { failTransactions: () => devnet.failing });
+  let connections = 0;
+  const sockets: { first?: { close: () => void } } = {};
+  await page.routeWebSocket(DEVNET_WS, (ws) => {
+    connections += 1;
+    const n = connections;
+    if (n === 1) sockets.first = ws;
+    ws.onMessage((raw) => {
+      const msg = JSON.parse(String(raw));
+      if (msg.method === "logsSubscribe") ws.send(JSON.stringify({ jsonrpc: "2.0", result: n, id: msg.id }));
+    });
+  });
+  await open(page, "/live");
+  const initRow = page.locator(`[data-testid="tx-row"][data-signature="${INIT_TX}"]`);
+  await expect(initRow).toHaveAttribute("data-details", "unread");
+  await expect(initRow.getByTestId("tx-action")).toHaveText("Details not read");
+  await expect(page.getByTestId("connection")).toHaveAttribute("data-state", "live");
+
+  // Devnet recovers, the socket drops, the page reconnects and reads the history again.
+  devnet.failing = false;
+  sockets.first!.close();
+  await expect.poll(() => calls.getSignaturesForAddress, { timeout: 10_000 }).toBe(2);
+  await expect(initRow).toHaveAttribute("data-details", "read");
+  await expect(initRow.getByTestId("tx-action")).toHaveText("initialize_vault");
+  await expect(
+    page.locator(`[data-testid="tx-row"][data-signature="${recorded.deploy.transaction.signatures[0]}"]`).getByTestId("tx-action"),
+  ).toHaveText("program deployed");
 });
 
 test("/live: a failed history read is said plainly, never filled in", async ({ page }) => {
