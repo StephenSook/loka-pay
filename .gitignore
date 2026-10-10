@@ -110,3 +110,7 @@ Thumbs.db
 .claude/settings.local.json
 .claude/worktrees/
 *.import-logs/
+
+# ---- Generated measurement drafts (task 3.6): inputs to the reviewed fill PR, never committed as is ----
+/experiments/EXP-PAY-001.draft.md
+/experiments/EXP-PAY-001.draft.json
