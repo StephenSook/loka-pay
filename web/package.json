@@ -11,11 +11,13 @@
     "build": "next build",
     "start": "next start",
     "start:e2e": "next start -H 127.0.0.1 -p 3100",
+    "postinstall": "pnpm --dir ../protocol/lib install --frozen-lockfile --prod",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@lokapay/protocol": "link:../protocol/lib",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
