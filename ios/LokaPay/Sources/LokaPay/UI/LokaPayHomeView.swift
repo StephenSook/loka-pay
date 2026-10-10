@@ -33,19 +33,19 @@ public struct LokaPayDependencies {
     public var meshReturns: PaymentInbox?
     /// Bluetooth glue, outbound for the merchant: the ack, then the receipt, for the note on the
     /// Receive screen, with the Bluetooth delivery that note was accepted from
-    /// (`ReceivedPayment.meshDelivery`, nil for camera or paste). The glue sends a text only to the
+    /// (`ReceivedPayment.meshOrigin`: camera, a first delivery, or unknown). The glue sends a text only to the
     /// sender of that one delivery (`MeshPaymentRouter.replyTarget`). It returns true when the reply
     /// is settled (queued, or there is no Bluetooth route for it) and false on a passing failure (a
     /// locked phone, a full queue), so the reply is offered again when the screen next appears.
     /// nil: replies go by camera only.
-    public var meshReply: (@MainActor (_ text: String, _ delivery: UInt64?) -> Bool)?
+    public var meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
 
     public init(deployment: Deployment, serverPublicKey: Data?, signer: (any PaymentSigner)?,
                 allowanceWire: Data?, merchantWire: Data?, serials: SerialReservations, ledger: OfflineLedger,
                 settlementClient: SettlementClient?, connectivity: ConnectivityMonitor,
                 meshSend: (@MainActor (String) -> Void)? = nil, meshInbox: PaymentInbox? = nil,
                 bluetoothOn: Bool? = nil, meshReturns: PaymentInbox? = nil,
-                meshReply: (@MainActor (_ text: String, _ delivery: UInt64?) -> Bool)? = nil) {
+                meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)? = nil) {
         self.deployment = deployment
         self.serverPublicKey = serverPublicKey
         self.signer = signer
@@ -79,7 +79,7 @@ public struct LokaPayHomeView: View {
     @ObservedObject private var connectivity: ConnectivityMonitor
     private let bluetoothOn: Bool?
     private let meshReturns: PaymentInbox?
-    private let meshReply: (@MainActor (_ text: String, _ delivery: UInt64?) -> Bool)?
+    private let meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
     /// Replies `meshReply` settled (newest last, bounded), so each goes once.
     @State private var repliesSent: [String] = []
 
@@ -133,10 +133,10 @@ public struct LokaPayHomeView: View {
     /// note was accepted from. The glue sends it only to that delivery's sender.
     private func sendDueReplies() {
         guard let meshReply else { return }
-        let delivery = receiveModel.payment?.meshDelivery
+        let origin = receiveModel.payment?.meshOrigin ?? .notOverBluetooth
         let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText,
                                          receipt: receiveModel.settlement?.receiptText, sent: repliesSent)
-        let settled = due.filter { meshReply($0, delivery) }
+        let settled = due.filter { meshReply($0, origin) }
         guard !settled.isEmpty else { return }
         repliesSent = Array((repliesSent + settled).suffix(32))
     }

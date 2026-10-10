@@ -134,8 +134,22 @@ public enum MeshReplyTarget: Equatable, Sendable {
     case notOverBluetooth
     /// More than one contact delivered this same note, so who paid is unclear: nothing is sent.
     case ambiguous
-    /// The delivery is not remembered here (for example after a relaunch) or names another note:
-    /// nothing is sent.
+    /// Where the note first came from is not known here (it was accepted before a relaunch or a
+    /// rebuilt screen), or the delivery is forgotten or names another note: nothing is sent.
+    case unknown
+}
+
+/// Where the note on the Receive screen FIRST reached this screen. Its Bluetooth replies are bound
+/// to this, never to a later copy of the same note.
+public enum MeshOrigin: Equatable, Sendable {
+    /// Camera or paste: replies go back by code.
+    case notOverBluetooth
+    /// The Bluetooth inbox delivery (`PaymentInbox.deliver`'s sequence number) it was first
+    /// accepted from.
+    case delivery(UInt64)
+    /// A note accepted earlier, back on screen with no record here of where it first came from
+    /// (after a relaunch or a rebuilt screen): no Bluetooth reply, whoever sent the copy that
+    /// brought it back.
     case unknown
 }
 
@@ -148,7 +162,7 @@ public struct MeshPick: Equatable, Sendable {
 /// Routes payment texts that arrive over the LOKA mesh to the two screens, and keeps what the
 /// replies and the payer's sends are bound to:
 /// - each Receive delivery's sender, by the inbox's delivery id, so the ack and the receipt go only
-///   to the sender of the one delivery the Receive screen accepted (`ReceivedPayment.meshDelivery`),
+///   to the sender of the one delivery the Receive screen first accepted (`ReceivedPayment.meshOrigin`),
 ///   and to nobody when another contact delivered the same note;
 /// - the texts Pay handed over and the contact the payer picked for that payment only;
 /// - the packets that carried this phone's notes, released when the merchant's verified ack comes
@@ -270,22 +284,27 @@ public final class MeshPaymentRouter {
     }
 
     /// Where a reply for the payment on screen may go: the sender of the one Receive delivery its
-    /// note was accepted from (`ReceivedPayment.meshDelivery`). Nothing is looked up by text: a text
-    /// from another contact never redirects a reply, and the same note delivered by two different
-    /// contacts makes the reply `ambiguous`.
-    public func replyTarget(delivery: UInt64?, noteId: Data) -> MeshReplyTarget {
-        guard let delivery else { return .notOverBluetooth }
+    /// note was first accepted from (`ReceivedPayment.meshOrigin`). Nothing is looked up by text: a
+    /// text from another contact never redirects a reply, and the same note delivered by two
+    /// different contacts makes the reply `ambiguous`.
+    public func replyTarget(origin: MeshOrigin, noteId: Data) -> MeshReplyTarget {
+        let delivery: UInt64
+        switch origin {
+        case .notOverBluetooth: return .notOverBluetooth
+        case .unknown: return .unknown
+        case .delivery(let sequence): delivery = sequence
+        }
         guard let accepted = deliveries[delivery], accepted.noteId == noteId else { return .unknown }
         let others = deliveries.values.contains { $0.noteId == noteId && $0.peer != accepted.peer }
         return others ? .ambiguous : .peer(accepted.peer)
     }
 
-    /// `replyTarget(delivery:noteId:)` for an ack or receipt text.
-    public func replyTarget(for text: String, delivery: UInt64?) -> MeshReplyTarget {
+    /// `replyTarget(origin:noteId:)` for an ack or receipt text.
+    public func replyTarget(for text: String, origin: MeshOrigin) -> MeshReplyTarget {
         guard MeshPaymentText.route(text, fromContact: true) == .pay, let id = MeshPaymentText.noteId(of: text) else {
             return .unknown
         }
-        return replyTarget(delivery: delivery, noteId: id)
+        return replyTarget(origin: origin, noteId: id)
     }
 
     // MARK: Outbound (payer)

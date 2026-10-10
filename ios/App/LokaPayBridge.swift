@@ -331,7 +331,7 @@ final class LokaPayStore: ObservableObject {
                                    meshSend: { [weak self] text in self?.queueMeshSend(text) },
                                    meshInbox: mesh.receiveInbox, bluetoothOn: bluetoothOn,
                                    meshReturns: mesh.payInbox,
-                                   meshReply: { [weak self] text, delivery in self?.sendMeshReply(text, delivery: delivery) ?? true })
+                                   meshReply: { [weak self] text, origin in self?.sendMeshReply(text, origin: origin) ?? true })
     }
 
     // MARK: Bluetooth over LOKA's mesh (tasks 2.1, 2.2 glue, 2.7)
@@ -403,14 +403,14 @@ final class LokaPayStore: ObservableObject {
     }
 
     /// Receive's replies (the ack, then the receipt) for the payment on screen go only to the
-    /// sender of the one Bluetooth delivery its note was accepted from (`MeshPaymentRouter.replyTarget`).
+    /// sender of the one Bluetooth delivery its note was first accepted from (`MeshPaymentRouter.replyTarget`).
     /// Camera, an unknown delivery or the same note from two contacts: nothing is sent, and the
     /// status says why so the merchant shows the code. Returns false only for a passing failure
     /// (locked phone, full queue), so the reply is offered again later.
-    func sendMeshReply(_ text: String, delivery: UInt64?) -> Bool {
+    func sendMeshReply(_ text: String, origin: MeshOrigin) -> Bool {
         let what = text.hasPrefix(MeshPaymentText.prefix + "X|") ? "Receipt" : "Ack"
         let peer: String
-        switch mesh.replyTarget(for: text, delivery: delivery) {
+        switch mesh.replyTarget(for: text, origin: origin) {
         case .peer(let id):
             peer = id
         case .notOverBluetooth:
@@ -421,8 +421,8 @@ final class LokaPayStore: ObservableObject {
                 + "so it is not clear who paid. Show the code to the payer."
             return true
         case .unknown:
-            meshNotes.status = what + " not sent over Bluetooth: this phone no longer knows which contact sent the note. "
-                + "Show the code to the payer."
+            meshNotes.status = what + " not sent over Bluetooth: this note was accepted before the app restarted, and this "
+                + "phone does not know which contact first sent it. Show the code to the payer."
             return true
         }
         let name = contactName(peer)

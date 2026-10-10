@@ -231,10 +231,10 @@ struct MeshPaymentTests {
         await receive.inboxDrained()
         #expect(receive.phase == .received)
         let payment = try #require(receive.payment)
-        #expect(payment.meshDelivery != nil)
+        #expect({ if case .delivery = payment.meshOrigin { return true }; return false }())
         let ack = try #require(payment.ackText)
         // Who paid is unclear: the reply is withheld and the code is the way back.
-        #expect(router.replyTarget(for: ack, delivery: payment.meshDelivery) == .ambiguous)
+        #expect(router.replyTarget(for: ack, origin: payment.meshOrigin) == .ambiguous)
     }
 
     @Test("two contacts with two notes: each reply goes to its own sender")
@@ -248,7 +248,7 @@ struct MeshPaymentTests {
         await receive.inboxDrained()
         let paymentA = try #require(receive.payment)
         let ackA = try #require(paymentA.ackText)
-        #expect(router.replyTarget(for: ackA, delivery: paymentA.meshDelivery) == .peer("contact-a"))
+        #expect(router.replyTarget(for: ackA, origin: paymentA.meshOrigin) == .peer("contact-a"))
 
         receive.nextPayment()
         router.receive(noteText(second), from: "contact-b", fromContact: true, packetID: "n-1")
@@ -256,10 +256,10 @@ struct MeshPaymentTests {
         let paymentB = try #require(receive.payment)
         #expect(paymentB.note.noteId == second.noteId)
         let ackB = try #require(paymentB.ackText)
-        #expect(router.replyTarget(for: ackB, delivery: paymentB.meshDelivery) == .peer("contact-b"))
+        #expect(router.replyTarget(for: ackB, origin: paymentB.meshOrigin) == .peer("contact-b"))
         // B's text never moved A's reply, and a delivery never answers for another note.
-        #expect(router.replyTarget(for: ackA, delivery: paymentA.meshDelivery) == .peer("contact-a"))
-        #expect(router.replyTarget(for: ackA, delivery: paymentB.meshDelivery) == .unknown)
+        #expect(router.replyTarget(for: ackA, origin: paymentA.meshOrigin) == .peer("contact-a"))
+        #expect(router.replyTarget(for: ackA, origin: paymentB.meshOrigin) == .unknown)
     }
 
     @Test("a note accepted by camera gets no Bluetooth reply, even after a contact sends a copy")
@@ -270,12 +270,12 @@ struct MeshPaymentTests {
         await receive.accept(text: allowanceText)
         await receive.accept(text: noteText(signed))
         let payment = try #require(receive.payment)
-        #expect(payment.meshDelivery == nil)
+        #expect(payment.meshOrigin == .notOverBluetooth)
         receive.startInbox()
         router.receive(noteText(signed), from: "someone", fromContact: true, packetID: "n-1")
         await receive.inboxDrained()
         let ack = try #require(receive.payment?.ackText)
-        #expect(router.replyTarget(for: ack, delivery: receive.payment?.meshDelivery) == .notOverBluetooth)
+        #expect(router.replyTarget(for: ack, origin: try #require(receive.payment?.meshOrigin)) == .notOverBluetooth)
     }
 
     @Test("a later text from another contact never redirects the reply: other notes leave it, a copy withholds it")
@@ -289,7 +289,7 @@ struct MeshPaymentTests {
         await receive.inboxDrained()
         let payment = try #require(receive.payment)
         let ack = try #require(payment.ackText)
-        #expect(router.replyTarget(for: ack, delivery: payment.meshDelivery) == .peer("contact-a"))
+        #expect(router.replyTarget(for: ack, origin: payment.meshOrigin) == .peer("contact-a"))
 
         // Another note, a reply text and a copy with a broken signature from B change nothing.
         router.receive(noteText(try note(serial: 9)), from: "contact-b", fromContact: true, packetID: "b-1")
@@ -297,11 +297,51 @@ struct MeshPaymentTests {
         var broken = Data(signed.wire)
         broken[150] ^= 0xFF
         router.receive(PaymentTransport.encode(.note, broken), from: "contact-b", fromContact: true, packetID: "b-3")
-        #expect(router.replyTarget(for: ack, delivery: payment.meshDelivery) == .peer("contact-a"))
+        #expect(router.replyTarget(for: ack, origin: payment.meshOrigin) == .peer("contact-a"))
 
         // A valid copy of the same note from B: who paid is now unclear, so nothing goes to anyone.
         router.receive(noteText(signed), from: "contact-b", fromContact: true, packetID: "b-4")
-        #expect(router.replyTarget(for: ack, delivery: payment.meshDelivery) == .ambiguous)
+        #expect(router.replyTarget(for: ack, origin: payment.meshOrigin) == .ambiguous)
+    }
+
+    @Test("a note brought back keeps its first sender; after a relaunch a copy from B never gets the reply")
+    func bringBackKeepsFirstOrigin() async throws {
+        let ledgerURL = F.tempURL("ledger.json")
+        func model(_ router: MeshPaymentRouter) -> ReceiveModel {
+            ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                         ledger: OfflineLedger(url: ledgerURL), settlementClient: nil, deployment: F.deployment,
+                         serverPublicKey: F.serverKey, inbox: router.receiveInbox, now: { F.now })
+        }
+        let signed = try note()
+        let router = MeshPaymentRouter()
+        let first = model(router)
+        first.startInbox()
+        router.receive(allowanceText, from: "contact-a", fromContact: true, packetID: "a-1")
+        router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-1")
+        await first.inboxDrained()
+        let ack = try #require(first.payment?.ackText)
+        #expect(router.replyTarget(for: ack, origin: try #require(first.payment?.meshOrigin)) == .peer("contact-a"))
+
+        // Same session: A resends after Next payment; the note comes back bound to A's first delivery.
+        first.nextPayment()
+        router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-2")
+        await first.inboxDrained()
+        #expect(first.payment?.note.noteId == signed.noteId)
+        #expect(router.replyTarget(for: ack, origin: try #require(first.payment?.meshOrigin)) == .peer("contact-a"))
+        first.stopInbox()
+
+        // Relaunch: a new screen and a new router over the same ledger. B sends the identical note.
+        let relaunched = MeshPaymentRouter()
+        let second = model(relaunched)
+        second.startInbox()
+        relaunched.receive(noteText(signed), from: "contact-b", fromContact: true, packetID: "n-1")
+        await second.inboxDrained()
+        let back = try #require(second.payment)
+        #expect(back.note.noteId == signed.noteId)
+        #expect(back.meshOrigin == .unknown)
+        let backAck = try #require(back.ackText)
+        #expect(relaunched.replyTarget(for: backAck, origin: back.meshOrigin) == .unknown)
+        #expect(relaunched.replyTarget(for: backAck, origin: back.meshOrigin) != .peer("contact-b"))
     }
 
     @Test("note ids are read from N, Y and X texts, and from nothing else")
@@ -434,11 +474,11 @@ struct MeshPaymentTests {
         }
         await receive.inboxDrained()
         #expect(receive.phase == .received)
-        let delivery = try #require(receive.payment?.meshDelivery)
+        let origin = try #require(receive.payment?.meshOrigin)
         let ackText = try #require(receive.payment?.ackText)
 
         // Receive's ack goes back to the contact the accepted note came from, and to nobody else.
-        #expect(merchantRouter.replyTarget(for: ackText, delivery: delivery) == .peer("payer-contact"))
+        #expect(merchantRouter.replyTarget(for: ackText, origin: origin) == .peer("payer-contact"))
         #expect(payerRouter.receive(ackText, from: "merchant-contact", fromContact: true, packetID: "back-1"))
         #expect(payerRouter.answered(by: ackText) == ["a-packet", "n-packet"])
         #expect(pay.phase == .receipt)
@@ -450,7 +490,7 @@ struct MeshPaymentTests {
         let ack = try #require(receive.payment?.ack)
         let receiptText = PaymentTransport.encode(.receipt, Bundles.receipt(
             note: payment.note, ack: ack, confirmationWire: F.confWire(noteId: payment.note.noteId, status: 1)))
-        #expect(merchantRouter.replyTarget(for: receiptText, delivery: delivery) == .peer("payer-contact"))
+        #expect(merchantRouter.replyTarget(for: receiptText, origin: origin) == .peer("payer-contact"))
         payerRouter.receive(receiptText, from: "merchant-contact", fromContact: true, packetID: "back-2")
         #expect(pay.receipt?.status == .settled)
     }
