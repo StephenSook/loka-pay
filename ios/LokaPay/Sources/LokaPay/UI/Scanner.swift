@@ -37,9 +37,10 @@ struct CodeEntryField: View {
 }
 
 #if os(iOS)
-/// Camera QR scanner (task 3.70). Kept thin: it only turns QR codes into strings and reports each
-/// distinct string once; `ScanParser` and the models do every check. Needs a device camera and the
-/// app's NSCameraUsageDescription, so it is not unit-tested; its camera math, in `ScanGeometry`, is.
+/// Camera QR scanner (task 3.70). Kept thin: it only turns QR codes into strings and reports a new
+/// one, a LOKA code first (`ScanChoice`); `ScanParser` and the models do every check. Needs a device
+/// camera and the app's NSCameraUsageDescription, so it is not unit-tested; its camera math, in
+/// `ScanGeometry`, and its choice of code, in `ScanChoice`, are.
 public struct PaymentScannerView: UIViewControllerRepresentable {
     let onScan: (String) -> Void
 
@@ -64,7 +65,7 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     private var preview: AVCaptureVideoPreviewLayer?
     private var scanArea = ScanArea()
     private var formatObserver: NSObjectProtocol?
-    private var lastValue: String?
+    private var choice = ScanChoice()
     private let label = UILabel()
 
     init(onScan: @escaping (String) -> Void) {
@@ -215,11 +216,11 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         queue.async { output.rectOfInterest = rect }
     }
 
+    /// Every code in the frame goes to `ScanChoice`, which picks the one to report (a LOKA code first).
     public func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject],
                                from connection: AVCaptureConnection) {
-        guard let value = objects.compactMap({ $0 as? AVMetadataMachineReadableCodeObject }).first?.stringValue,
-              value != lastValue else { return }
-        lastValue = value
+        let values = objects.compactMap { ($0 as? AVMetadataMachineReadableCodeObject)?.stringValue }
+        guard let value = choice.report(values) else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onScan(value)
     }
