@@ -27,12 +27,21 @@ public struct LokaPayDependencies {
     public var meshInbox: PaymentInbox?
     /// The mesh layer's Bluetooth state for the zero-bars meter; nil leaves Bluetooth unmentioned.
     public var bluetoothOn: Bool?
+    /// Bluetooth glue, inbound for the payer: the merchant's ack (`L1|P|1|Y|...`) and receipt
+    /// (`L1|P|1|X|...`) texts. Pay checks the ones about the note on screen with
+    /// `PayModel.acceptReturn` (`MeshReturns.attach`). nil: returns come by camera only.
+    public var meshReturns: PaymentInbox?
+    /// Bluetooth glue, outbound for the merchant: the ack, then the receipt, for the note on the
+    /// Receive screen. The glue sends a text only to the peer that note arrived from over the mesh,
+    /// and nothing for a note that came by camera. nil: replies go by camera only.
+    public var meshReply: (@MainActor (String) -> Void)?
 
     public init(deployment: Deployment, serverPublicKey: Data?, signer: (any PaymentSigner)?,
                 allowanceWire: Data?, merchantWire: Data?, serials: SerialReservations, ledger: OfflineLedger,
                 settlementClient: SettlementClient?, connectivity: ConnectivityMonitor,
                 meshSend: (@MainActor (String) -> Void)? = nil, meshInbox: PaymentInbox? = nil,
-                bluetoothOn: Bool? = nil) {
+                bluetoothOn: Bool? = nil, meshReturns: PaymentInbox? = nil,
+                meshReply: (@MainActor (String) -> Void)? = nil) {
         self.deployment = deployment
         self.serverPublicKey = serverPublicKey
         self.signer = signer
@@ -45,6 +54,8 @@ public struct LokaPayDependencies {
         self.meshSend = meshSend
         self.meshInbox = meshInbox
         self.bluetoothOn = bluetoothOn
+        self.meshReturns = meshReturns
+        self.meshReply = meshReply
     }
 }
 
@@ -63,6 +74,10 @@ public struct LokaPayHomeView: View {
     @State private var receiveModel: ReceiveModel
     @ObservedObject private var connectivity: ConnectivityMonitor
     private let bluetoothOn: Bool?
+    private let meshReturns: PaymentInbox?
+    private let meshReply: (@MainActor (String) -> Void)?
+    /// Replies already handed to `meshReply` (newest last, bounded), so each goes once.
+    @State private var repliesSent: [String] = []
 
     public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay) {
         let d = dependencies
@@ -78,6 +93,8 @@ public struct LokaPayHomeView: View {
         _tab = State(initialValue: tab)
         connectivity = monitor
         bluetoothOn = d.bluetoothOn
+        meshReturns = d.meshReturns
+        meshReply = d.meshReply
     }
 
     public var body: some View {
@@ -94,8 +111,29 @@ public struct LokaPayHomeView: View {
             }
         }
         .background(LokaColor.paper.ignoresSafeArea())
-        .onAppear { connectivity.start() }
-        .onDisappear { connectivity.stop() }
+        .onAppear {
+            connectivity.start()
+            // Acks and receipts over Bluetooth reach the payment on screen whichever tab is shown.
+            if let meshReturns { MeshReturns.attach(meshReturns, to: payModel) }
+            sendDueReplies()
+        }
+        .onDisappear {
+            connectivity.stop()
+            meshReturns?.detach(payModel)
+        }
+        .onChange(of: receiveModel.payment?.ackText) { sendDueReplies() }
+        .onChange(of: receiveModel.settlement?.receiptText) { sendDueReplies() }
+    }
+
+    /// Hands the Receive screen's new ack or receipt to the Bluetooth glue once each. The glue sends
+    /// it only to the peer the note arrived from over the mesh.
+    private func sendDueReplies() {
+        guard let meshReply else { return }
+        let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText,
+                                         receipt: receiveModel.settlement?.receiptText, sent: repliesSent)
+        guard !due.isEmpty else { return }
+        repliesSent = Array((repliesSent + due).suffix(32))
+        for text in due { meshReply(text) }
     }
 }
 
