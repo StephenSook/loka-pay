@@ -76,18 +76,18 @@ struct LegacyPartyCardsView: View {
             DatePicker("Date of birth",selection:$birthday,in:...Date(),displayedComponents:.date).datePickerStyle(.compact)
             Text("Your date stays on this screen. Only your age confirmation is saved on this device.").font(.caption).foregroundStyle(LokaStyle.muted)
             Button("Confirm age") { adult=true;drinkingAge=birthday <= (Calendar.current.date(byAdding:.year,value:-21,to:Date()) ?? Date.distantPast);birthday=Date() }.buttonStyle(LokaPrimaryButtonStyle()).disabled(birthday > (Calendar.current.date(byAdding:.year,value:session?.settings.drinking==true ? -21 : -18,to:Date()) ?? Date.distantPast))
-            Text("Adult themes and optional drinking. Skipping is always okay.").foregroundStyle(LokaStyle.muted)
+            Text("Adult themes. Skipping is always okay.").foregroundStyle(LokaStyle.muted)
         }
     }
     private var vibe: some View {
         VStack(alignment:.leading,spacing:18) {
             Text("Good company. Great stories.").foregroundStyle(LokaStyle.muted)
-            ForEach(["clean","flirty","dirty"],id:\.self) { value in
+            ForEach(["clean","flirty"],id:\.self) { value in
                 Button { intensity=value } label: {
                     HStack {
                         VStack(alignment:.leading,spacing:8) {
                             Text(value.capitalized).font(.custom("LilitaOne",size:26,relativeTo:.title2))
-                            Text(value=="clean" ? "Just for fun · No sexual content" : value=="flirty" ? "Mild & cheeky · Light teasing" : "Explicit & spicy · Adult content").font(.subheadline).foregroundStyle(LokaStyle.muted)
+                            Text(value=="clean" ? "Just for fun · No sexual content" : "Mild & cheeky · Light teasing").font(.subheadline).foregroundStyle(LokaStyle.muted)
                         };Spacer();if intensity==value { Image(systemName:"checkmark.circle.fill").foregroundStyle(.mint) }
                     }.padding(24).frame(maxWidth:.infinity,alignment:.leading).background(intensity==value ? LokaStyle.mint : LokaStyle.surface,in:RoundedRectangle(cornerRadius:24))
                         .overlay(RoundedRectangle(cornerRadius:24).stroke(intensity==value ? Color.mint : LokaStyle.muted.opacity(0.3)))
@@ -105,7 +105,7 @@ struct LegacyPartyCardsView: View {
     private var library: some View {
         VStack(alignment:.leading,spacing:18) {
             TextField("Find a game",text:$search).padding(14).background(LokaStyle.surface,in:RoundedRectangle(cornerRadius:16))
-            Text("Intensity").bold();chips(["clean","flirty","dirty","all"],intensity) { intensity=$0 }
+            Text("Intensity").bold();chips(["clean","flirty","all"],intensity) { intensity=$0 }
             Text("Players").bold();chips(["2 Players","Group"],count==2 ? "2 Players" : "Group",chooseCount)
             let games=chat.partyGames.filter { $0.name.localizedCaseInsensitiveContains(search) || search.isEmpty }.filter { !eligible($0).isEmpty }
             if games.isEmpty { Text("No cards match. Change your filters to see more games.") }
@@ -143,12 +143,11 @@ struct LegacyPartyCardsView: View {
     }
     private var settings: some View {
         VStack(alignment:.leading,spacing:18) {
-            Text("Intensity").bold();chips(["clean","flirty","dirty","all"],intensity) { intensity=$0 }
+            Text("Intensity").bold();chips(["clean","flirty","all"],intensity) { intensity=$0 }
             Text("Players").bold();chips(["2","3","4"],String(count)) { count=Int($0)!;mode=count==2 ? "friends" : "group";selected=[] }
             Toggle("Ask before each game",isOn:$ask)
             Toggle("Show only clean cards",isOn:Binding(get:{intensity=="clean"},set:{intensity=$0 ? "clean" : "all"}))
             Toggle("Allow consent dares",isOn:$consent)
-            Toggle("Optional drinking",isOn:$drinking).disabled(!drinkingAge)
             Text(session != nil ? "These settings apply to your next round. Everyone will accept the new invitation." : "Filter changes apply to your next card game.").foregroundStyle(LokaStyle.muted)
             Button("Apply settings") { settingsOpen=false;if session==nil { page="library" } }.buttonStyle(LokaPrimaryButtonStyle())
         }
@@ -187,7 +186,7 @@ struct PartySessionContent:View {
         Text(s.members.map(name).joined(separator:" · ")).foregroundStyle(LokaStyle.muted)
         if s.phase=="invited" {
             Text("\(name(s.host)) invited you. \(s.members.count) players; \(s.settings.intensity) cards. You can skip any card.")
-            Text("Optional drinking: \(s.settings.drinking ? "On" : "Off") · Consent dares: \(s.settings.consent ? "Included" : "Off")").foregroundStyle(LokaStyle.muted)
+            Text("Consent dares: \(s.settings.consent ? "Included" : "Off")").foregroundStyle(LokaStyle.muted)
             Button("Accept invitation") { accept() }.buttonStyle(LokaPrimaryButtonStyle())
             Button("Decline") { end() }.buttonStyle(.bordered)
         } else if ["lobby","joining"].contains(s.phase) {
@@ -212,7 +211,6 @@ struct PartySessionContent:View {
             Text("Play your way. Skipping is always okay.").foregroundStyle(LokaStyle.muted)
             Button("Done / Next") { move("done") }.buttonStyle(LokaPrimaryButtonStyle()).disabled(!canAct)
             HStack {
-                Button("Take a sip") { move("sip") }.buttonStyle(.bordered).disabled(!canAct || !s.settings.drinking)
                 Button("Skip") { move("skip") }.buttonStyle(.bordered).disabled(!canAct)
             }
             Button("Shuffle") { move("shuffle") }.frame(maxWidth:.infinity).disabled(!canAct)
@@ -371,7 +369,7 @@ struct FilteredCardsContent:View {
         }.frame(maxWidth:.infinity)
     }
     private func rows(_ values:Binding<Set<String>>)->some View {
-        VStack(spacing:14){ForEach(["clean","drinking","dirty"],id:\.self){category in
+        VStack(spacing:14){ForEach(["clean"],id:\.self){category in
             let checked=values.wrappedValue.contains(category)
             Button {if checked{values.wrappedValue.remove(category)}else{values.wrappedValue.insert(category)}} label:{
                 HStack(spacing:14){Image("loka_mascot_"+category).resizable().scaledToFit().frame(width:52,height:52);VStack(alignment:.leading,spacing:6){Text(category.capitalized).font(.custom("LilitaOne",size:25));Text(category=="clean" ? "Lighthearted fun." : category=="drinking" ? "For a livelier night. · 21+" : "Bolder questions. · 18+").font(.caption)};Spacer();Image(systemName:checked ? "checkmark.circle.fill" : "circle").font(.title2)}.padding(20).frame(maxWidth:.infinity).foregroundStyle(checked ? ink : screenText).background(checked ? chipColor(category) : dark ? Color(red:0.23,green:0.14,blue:0.26) : Color(red:0.94,green:0.90,blue:0.98),in:RoundedRectangle(cornerRadius:24)).overlay(RoundedRectangle(cornerRadius:24).stroke(checked ? ink.opacity(0.5) : muted,lineWidth:1.5))
@@ -646,7 +644,8 @@ private struct CardShufflePose {
     let angle=Double.random(in:-25...25)
 }
 
-private func cardCategory(_ card:PartyCard)->String {card.tags.contains("dirty") ? "dirty" : card.alcohol || card.tags.contains("drinking") ? "drinking" : "clean"}
+// The public catalog is clean-only and ships only the clean card art.
+private func cardCategory(_ card:PartyCard)->String {"clean"}
 private struct CardGraphicView:View {
     let card:PartyCard;let height:CGFloat;var mode="group";var preview=false
     private func promptSize(width:CGFloat,height:CGFloat)->CGFloat {

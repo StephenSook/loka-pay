@@ -6,13 +6,13 @@ struct PartyCatalog {
     var hash:String;var games:[PartyGame]
     private struct Card:Decodable { var id:String;var text:String;var intensity:String;var supportedModes:[String];var minPlayers:Int;var maxPlayers:Int;var requiresConsent:Bool;var tags:[String];var requiresAdult:Bool;var requiresDrinking:Bool;var packs:[String]?;var stage:Int?;var namedText:String? }
     private struct Game:Decodable { var id:String;var name:String;var description:String;var instructionsByMode:[String:String];var supportedModes:[String];var cardCount:Int;var cards:[Card] }
-    private struct Meta:Decodable {var version:String}
+    private struct Meta:Decodable {var version:String;var totalGames:Int;var totalCards:Int}
     private struct Catalog:Decodable {var games:[Game];var meta:Meta}
     static func load(url provided:URL? = nil) throws -> PartyCatalog {
         guard let url=provided ?? Bundle.main.url(forResource:"games",withExtension:"json",subdirectory:"gameJson") else {throw QuizError.invalid}
         let bytes=try Data(contentsOf:url);guard (1...524288).contains(bytes.count) else {throw QuizError.invalid}
         let raw=try JSONDecoder().decode(Catalog.self,from:bytes)
-        guard raw.meta.version=="3.2",raw.games.count==8 else {throw QuizError.invalid}
+        guard raw.meta.version=="3.2",!raw.games.isEmpty,raw.games.count==raw.meta.totalGames else {throw QuizError.invalid}
         let games=try raw.games.map { g -> PartyGame in
             guard g.cardCount==g.cards.count,!g.supportedModes.isEmpty,Set(g.supportedModes).isSubset(of:["couples","friends","group"]),Set(g.instructionsByMode.keys)==Set(g.supportedModes) else {throw QuizError.invalid}
             let cards=try g.cards.map { c -> PartyCard in
@@ -23,7 +23,7 @@ struct PartyCatalog {
             return PartyGame(id:g.id,name:g.name,description:g.description,instructions:g.instructionsByMode,cards:cards)
         }
         guard games.flatMap(\.cards).allSatisfy({ !$0.tags.isEmpty && $0.tags.isSubset(of:["clean","drinking","dirty"]) && (!$0.adult || $0.tags.contains("dirty")) && (!$0.alcohol || $0.tags.contains("drinking")) && (!$0.tags.contains("clean") || (!$0.adult && !$0.alcohol)) }) else {throw QuizError.invalid}
-        let cards=games.flatMap(\.cards);guard cards.count==294,Set(cards.map(\.id)).count==294,Set(games.map(\.id)).count==8 else {throw QuizError.invalid}
+        let cards=games.flatMap(\.cards);guard cards.count==raw.meta.totalCards,Set(cards.map(\.id)).count==cards.count,Set(games.map(\.id)).count==games.count else {throw QuizError.invalid}
         return PartyCatalog(hash:SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(),games:games)
     }
 }

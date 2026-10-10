@@ -5,7 +5,7 @@ final class QuickQuizUiTests: XCTestCase {
     let answers = [0,1,3,2,1,2,3,0,2,0]
     override func setUpWithError() throws {
         #if !targetEnvironment(simulator)
-        let physicalCardChecks=["testFilteredCardShortDragAndBothSwipeDirections","testCardsLightAndDarkBackNavigationAndUniformButtons","testPlayHeaderStaysAboveScrollingContent","testCardFooterFiltersAndExpandedCard","testCardBirthdayWheelAndPinnedNameFooter","testPlayerNameFooterStaysBelowSafeScrollingArea","testLocalPlayerNamesAndBirthdayWheel"]
+        let physicalCardChecks=["testFilteredCardShortDragAndBothSwipeDirections","testCardsLightAndDarkBackNavigationAndUniformButtons","testPlayHeaderStaysAboveScrollingContent","testCardFooterFiltersAndExpandedCard","testCardsStartWithoutAnAgeWheel","testPlayerNameFooterStaysBelowSafeScrollingArea","testLocalPlayerNames"]
         guard physicalCardChecks.contains(where:{name.contains($0)}) else {
             throw XCTSkip("In-memory network fixtures remain simulator-only; physical Cards checks use the production app.")
         }
@@ -81,42 +81,38 @@ final class QuickQuizUiTests: XCTestCase {
         XCTAssertTrue(app.buttons["Filters"].exists);photo("filtered-play")
         let first=app.staticTexts["filtered-current-card"].label
         tap(app.buttons["Filters"]);photo("filter-sheet")
-        tap(app.buttons["card-filter-dirty"]);tap(app.buttons["Apply filters"])
-        XCTAssertTrue(app.staticTexts["Confirm your age"].waitForExistence(timeout:5));photo("age-sheet")
+        XCTAssertTrue(app.buttons["card-filter-clean"].exists);XCTAssertFalse(app.buttons["card-filter-dirty"].exists);XCTAssertFalse(app.buttons["card-filter-drinking"].exists)
         closeCardsSheet()
         XCTAssertEqual(app.staticTexts["filtered-current-card"].label,first)
         tap(app.buttons["Next card"])
         XCTAssertNotEqual(app.staticTexts["filtered-current-card"].label,first)
         XCUIDevice.shared.orientation = .landscapeLeft;photo("filtered-landscape")
     }
-    func testNormalAppPartyAgeCheckStartsUnconfirmed() {
+    func testNormalAppCardsOfferOnlyCleanCards() {
         app.launchArguments=["-loka.onboarding.complete","YES","-loka.localConnection.enabled","NO","-loka.cards.eligible18","NO","-loka.cards.eligible21","NO"]
         app.launch();tap(app.buttons["Play"]);tap(app.buttons["Cards"])
         XCTAssertTrue(app.staticTexts["Choose your cards"].waitForExistence(timeout:10))
+        XCTAssertFalse(app.buttons["card-filter-drinking"].exists);XCTAssertFalse(app.buttons["card-filter-dirty"].exists);photo("clean-only-categories")
         tap(app.buttons["card-filter-clean"])
         XCTAssertFalse(app.buttons["Start playing →"].isEnabled)
-        tap(app.buttons["card-filter-drinking"]);tap(app.buttons["Start playing →"])
-        XCTAssertTrue(app.staticTexts["Confirm your age"].waitForExistence(timeout:5))
-        XCTAssertFalse(app.buttons["Confirm & play"].isEnabled);photo("restricted-age-check")
-        tap(app.buttons["Back to clean cards"])
-        XCTAssertTrue(app.buttons["Next card"].exists)
+        tap(app.buttons["card-filter-clean"]);tap(app.buttons["Start playing →"])
+        XCTAssertTrue(app.buttons["Next card"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["Confirm your age"].exists)
     }
-    func testDrinkingConfirmationAndAllCategoryFilters() {
+    func testFilterSheetOffersOnlyCleanCards() {
         app.launchArguments=["-loka.onboarding.complete","YES","-loka.localConnection.enabled","NO","--reset-card-age"]
-        app.launch();tap(app.buttons["Play"]);tap(app.buttons["Cards"])
-        tap(app.buttons["card-filter-clean"]);tap(app.buttons["card-filter-drinking"]);tap(app.buttons["Start playing →"])
-        XCTAssertTrue(app.pickerWheels.firstMatch.waitForExistence(timeout:5));app.pickerWheels.element(boundBy:2).adjust(toPickerWheelValue:"2000");photo("entered-age-wheel");XCTAssertTrue(app.buttons["Confirm & play"].isEnabled)
-        app.buttons["Confirm & play"].press(forDuration:0.25);XCTAssertTrue(app.buttons["Next card"].waitForExistence(timeout:5));photo("after-drinking-confirm")
-        tap(app.buttons["Filters"]);tap(app.buttons["card-filter-clean"]);tap(app.buttons["card-filter-dirty"]);tap(app.buttons["Apply filters"])
-        XCTAssertFalse(app.staticTexts["Confirm your age"].exists);XCTAssertTrue(app.buttons["Filters"].exists);photo("all-categories")
-        tap(app.buttons["Filters"]);tap(app.buttons["card-filter-clean"]);tap(app.buttons["card-filter-drinking"]);tap(app.buttons["card-filter-dirty"])
+        app.launch();tap(app.buttons["Play"]);tap(app.buttons["Cards"]);tap(app.buttons["Start playing →"])
+        XCTAssertTrue(app.buttons["Next card"].waitForExistence(timeout:5))
+        tap(app.buttons["Filters"]);XCTAssertTrue(app.buttons["card-filter-clean"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["card-filter-drinking"].exists);XCTAssertFalse(app.buttons["card-filter-dirty"].exists);photo("clean-only-filters")
+        tap(app.buttons["card-filter-clean"])
         XCTAssertFalse(app.buttons["Apply filters"].isEnabled);closeCardsSheet()
         XCTAssertTrue(app.staticTexts["filtered-current-card"].exists)
     }
     func testNativeGroupCardTurnsDuplicateDeliveryAndRestart() {
         app.launchArguments=["--party-ui-fixture"];app.launch()
         XCTAssertTrue(app.staticTexts["Card 1"].waitForExistence(timeout:10));XCTAssertTrue(app.staticTexts["Up next"].exists);XCTAssertTrue(app.staticTexts["Playing"].exists);photo("cards-play")
-        XCTAssertFalse(app.buttons["Take a sip"].isEnabled)
+        XCTAssertFalse(app.buttons["Take a sip"].exists)
         tap(app.buttons["Done / Next"])
         XCTAssertFalse(app.buttons["Done / Next"].isEnabled)
         tap(app.buttons["party-test-peers"])
@@ -235,15 +231,12 @@ final class QuickQuizUiTests: XCTestCase {
         app.scrollViews.firstMatch.swipeUp();XCTAssertEqual(start.frame,a);XCTAssertEqual(nearby.frame,b)
         app.scrollViews.firstMatch.swipeDown();XCTAssertEqual(start.frame,a);XCTAssertEqual(nearby.frame,b);photo("cards-fixed-start-footer")
     }
-    func testCardBirthdayWheelAndPinnedNameFooter() {
+    func testCardsStartWithoutAnAgeWheel() {
         app.launchArguments=["-loka.onboarding.complete","YES","-loka.localConnection.enabled","NO","-loka.cards.eligible18","NO","-loka.cards.eligible21","NO","-AppleLocale","en_US"]
         app.launch();tap(app.buttons["Play"]);tap(app.buttons["Cards"]);tap(app.buttons["card-audience-friends"])
-        tap(app.buttons["card-filter-clean"]);tap(app.buttons["card-filter-drinking"]);tap(app.buttons["Start playing →"])
-        XCTAssertTrue(app.pickerWheels.firstMatch.waitForExistence(timeout:5));XCTAssertFalse(app.buttons["Confirm & play"].isEnabled)
-        app.pickerWheels.element(boundBy:2).adjust(toPickerWheelValue:"2000")
-        XCTAssertTrue(app.buttons["Confirm & play"].isEnabled);XCTAssertFalse(app.keyboards.firstMatch.exists)
-        photo("cards-birthday-wheel");tap(app.buttons["Confirm & play"])
+        XCTAssertFalse(app.buttons["card-filter-drinking"].exists);XCTAssertFalse(app.buttons["card-filter-dirty"].exists);tap(app.buttons["Start playing →"])
         XCTAssertTrue(app.staticTexts["filtered-current-card"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.pickerWheels.firstMatch.exists);XCTAssertFalse(app.buttons["Confirm & play"].exists);photo("cards-no-age-wheel")
     }
     func testGameTitleAndRulesStayOutsideThePromptCard() {
         app.launchArguments=["-loka.onboarding.complete","YES","-loka.localConnection.enabled","NO"]
@@ -256,13 +249,10 @@ final class QuickQuizUiTests: XCTestCase {
         tap(app.buttons["Next card"]);XCTAssertNotEqual(prompt.label,text);XCTAssertTrue(title.exists)
     }
 
-    func testLocalPlayerNamesAndBirthdayWheel() {
+    func testLocalPlayerNames() {
         app.launchArguments=["-loka.onboarding.complete","YES","-loka.localConnection.enabled","NO","-loka.cards.eligible21","NO","-AppleLocale","en_US"]
         app.launch();tap(app.buttons["Play"]);tap(app.buttons["Cards"]);tap(app.buttons["card-audience-friends"])
-        tap(app.buttons["card-filter-drinking"]);tap(app.buttons["Start playing →"])
-        XCTAssertTrue(app.pickerWheels.firstMatch.waitForExistence(timeout:5))
-        app.pickerWheels.element(boundBy:2).adjust(toPickerWheelValue:"1990")
-        photo("birthday-wheel-eligible");tap(app.buttons["Confirm & play"])
+        tap(app.buttons["Start playing →"])
         let turn=app.staticTexts["cards-current-player"];XCTAssertTrue(app.staticTexts["filtered-current-card"].waitForExistence(timeout:5));XCTAssertEqual(turn.label,"Alex’s turn")
         tap(app.buttons["Next card"]);XCTAssertEqual(turn.label,"Blair’s turn");tap(app.buttons["Skip"]);XCTAssertEqual(turn.label,"Alex’s turn")
     }
@@ -300,7 +290,7 @@ final class QuickQuizUiTests: XCTestCase {
         func matches(_ label:String){let action=app.buttons[label];XCTAssertTrue(action.waitForExistence(timeout:5));XCTAssertEqual(action.frame.width,expected.width,accuracy:1);XCTAssertEqual(action.frame.height,expected.height,accuracy:1)}
         tap(app.buttons["Start playing →"]);tap(app.buttons["How to play"]);matches("Got it");photo("uniform-rules");closeCardsSheet()
         tap(app.buttons["Filters"]);matches("Apply filters");photo("uniform-filters")
-        tap(app.buttons["card-filter-dirty"]);tap(app.buttons["Apply filters"]);matches("Confirm & play");photo("uniform-birthday")
+        XCTAssertFalse(app.buttons["card-filter-dirty"].exists);XCTAssertFalse(app.buttons["card-filter-drinking"].exists)
         XCTAssertFalse(app.buttons["Back to Clean cards"].exists);closeCardsSheet()
         XCTAssertTrue(app.buttons["Next card"].waitForExistence(timeout:5));XCTAssertFalse(app.staticTexts["Confirm your age"].exists)
     }

@@ -11,7 +11,7 @@ internal data class PartyCatalog(val hash:String,val games:List<PartyGame>) {
         fun load(context:Context):PartyCatalog {
             val bytes=context.assets.open("games.json").use{it.readBytes()};require(bytes.size in 1..524288)
             val json=JSONObject(String(bytes,Charsets.UTF_8));val array=json.getJSONArray("games")
-            require(json.getJSONObject("meta").getString("version")=="3.2" && array.length()==8)
+            val meta=json.getJSONObject("meta");require(meta.getString("version")=="3.2" && array.length()>0 && array.length()==meta.getInt("totalGames"))
             val games=(0 until array.length()).map { at ->
                 val game=array.getJSONObject(at);val id=game.getString("id");val raw=game.getJSONArray("cards");val ruleJson=game.getJSONObject("instructionsByMode");val rules=ruleJson.keys().asSequence().associateWith{ruleJson.getString(it)}
                 val cards=(0 until raw.length()).map { index ->
@@ -28,7 +28,7 @@ internal data class PartyCatalog(val hash:String,val games:List<PartyGame>) {
                 require(modes.isNotEmpty() && modes.all{it in listOf("couples","friends","group")} && instructions.keys().asSequence().toSet()==modes && cards.all{modes.containsAll(it.modes)})
                 PartyGame(id,game.getString("name"),game.getString("description"),modes.associateWith{instructions.getString(it)},cards)
             }
-            val cards=games.flatMap{it.cards};require(cards.size==294 && cards.map{it.id}.toSet().size==294 && games.map{it.id}.toSet().size==8)
+            val cards=games.flatMap{it.cards};require(cards.size==meta.getInt("totalCards") && cards.map{it.id}.toSet().size==cards.size && games.map{it.id}.toSet().size==games.size)
             val hash=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
             return PartyCatalog(hash,games)
         }
