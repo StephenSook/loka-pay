@@ -20,6 +20,8 @@ public final class ScreenBrightness {
     private let write: @MainActor (Double) -> Void
     private var holders = 0
     private var before: Double?
+    /// The level the screen was left at when the last hold went, until a hold raises it again.
+    private var letGoAt: Double?
 
     init(read: @escaping @MainActor () -> Double?, write: @escaping @MainActor (Double) -> Void) {
         self.read = read
@@ -29,8 +31,16 @@ public final class ScreenBrightness {
     /// True while at least one payment code holds the brightness up.
     public var isHeld: Bool { holders > 0 }
 
+    /// True when no code holds the screen and its brightness has moved since the last hold went:
+    /// the person set it meanwhile, for example in Control Center.
+    var changedSinceLetGo: Bool {
+        guard holders == 0, let letGoAt, let now = read() else { return false }
+        return abs(now - letGoAt) >= 0.01
+    }
+
     public func hold() {
         if holders == 0 {
+            letGoAt = nil
             before = read()
             if before != nil { write(Self.full) }
         }
@@ -41,9 +51,12 @@ public final class ScreenBrightness {
     public func release() {
         guard holders > 0 else { return }
         holders -= 1
-        guard holders == 0, let earlier = before else { return }
-        before = nil
-        if let now = read(), abs(now - Self.full) < 0.01 { write(earlier) }
+        guard holders == 0 else { return }
+        if let earlier = before {
+            before = nil
+            if let now = read(), abs(now - Self.full) < 0.01 { write(earlier) }
+        }
+        letGoAt = read()
     }
 
     #if canImport(UIKit)
@@ -68,15 +81,51 @@ public final class ScreenBrightness {
     }
 }
 
+/// One code's share of `ScreenBrightness` over a presentation: from the moment the code comes on
+/// screen until it leaves. The app going inactive (Control Center, Notification Center) lets go of
+/// the hold and the earlier brightness comes back. If the person sets a brightness then, it is
+/// theirs for the rest of the presentation: the app coming back to the foreground does not raise
+/// it, and leaving does not put the earlier one back. A trip through the background (another app,
+/// the lock screen) ends that pause, so coming back raises the screen again. The next
+/// presentation raises it again in every case.
+struct BrightnessPresentation {
+    private(set) var holding = false
+    /// Let go while the app was inactive with the code still shown.
+    private var letGoInactive = false
+    /// The person set the brightness while this presentation had let go.
+    private var overridden = false
+
+    @MainActor
+    mutating func sync(enabled: Bool, shown: Bool, phase: ScenePhase, brightness: ScreenBrightness) {
+        if !shown { overridden = false }
+        if !shown || phase == .background { letGoInactive = false }
+        let wanted = RaisesScreenBrightness.wanted(enabled: enabled, shown: shown, phase: phase)
+        if wanted, !holding, !overridden {
+            if letGoInactive, brightness.changedSinceLetGo {
+                overridden = true
+            } else {
+                brightness.hold()
+                holding = true
+            }
+            letGoInactive = false
+        } else if !wanted, holding {
+            brightness.release()
+            holding = false
+            letGoInactive = shown && phase == .inactive
+        }
+    }
+}
+
 /// Holds `ScreenBrightness.shared` while the view is on screen and the app is in the foreground.
 /// Leaving the app gives the brightness back, so it never stays raised behind another app; coming
-/// back with the code still shown raises it again. Each view holds at most once. With `enabled`
-/// false it holds nothing.
+/// back with the code still shown raises it again, unless the person set a brightness in Control
+/// Center (`BrightnessPresentation`). Each view holds at most once. With `enabled` false it holds
+/// nothing.
 struct RaisesScreenBrightness: ViewModifier {
     var enabled = true
     @Environment(\.scenePhase) private var scenePhase
     @State private var shown = false
-    @State private var holding = false
+    @State private var presentation = BrightnessPresentation()
 
     func body(content: Content) -> some View {
         content
@@ -98,14 +147,7 @@ struct RaisesScreenBrightness: ViewModifier {
     }
 
     private func sync(shown: Bool, phase: ScenePhase) {
-        let wanted = Self.wanted(enabled: enabled, shown: shown, phase: phase)
-        if wanted, !holding {
-            ScreenBrightness.shared.hold()
-            holding = true
-        } else if !wanted, holding {
-            ScreenBrightness.shared.release()
-            holding = false
-        }
+        presentation.sync(enabled: enabled, shown: shown, phase: phase, brightness: .shared)
     }
 }
 

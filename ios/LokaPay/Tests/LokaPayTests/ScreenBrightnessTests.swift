@@ -54,6 +54,69 @@ struct ScreenBrightnessTests {
         #expect(screen.writes.isEmpty)
     }
 
+    @Test("a brightness set in Control Center stays when the app comes back, until the code leaves")
+    func controlCenterChoiceStays() {
+        let screen = FakeScreen()
+        let brightness = screen.make()
+        var code = BrightnessPresentation()
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        #expect(screen.value == 1)
+        // Opening Control Center makes the app inactive: the hold lets go.
+        code.sync(enabled: true, shown: true, phase: .inactive, brightness: brightness)
+        #expect(screen.value == 0.4)
+        screen.value = 0.2  // the person lowers it
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.2, "closing Control Center keeps the person's level")
+        #expect(!brightness.isHeld)
+        code.sync(enabled: true, shown: true, phase: .inactive, brightness: brightness)
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.2)
+        // The code leaves with the person's level untouched; the next presentation raises it again.
+        code.sync(enabled: true, shown: false, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.2)
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        #expect(screen.value == 1)
+        code.sync(enabled: true, shown: false, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.2)
+        #expect(screen.writes == [1, 0.4, 1, 0.2])
+    }
+
+    @Test("two codes through Control Center with no change both hold again, and the last to leave puts the level back")
+    func controlCenterUntouched() {
+        let screen = FakeScreen()
+        let brightness = screen.make()
+        var first = BrightnessPresentation()
+        var second = BrightnessPresentation()
+        for phase in [ScenePhase.active, .inactive, .active] {
+            first.sync(enabled: true, shown: true, phase: phase, brightness: brightness)
+            second.sync(enabled: true, shown: true, phase: phase, brightness: brightness)
+        }
+        #expect(first.holding && second.holding)
+        #expect(screen.value == 1)
+        first.sync(enabled: true, shown: false, phase: .active, brightness: brightness)
+        #expect(screen.value == 1, "the second code is still shown")
+        second.sync(enabled: true, shown: false, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.4)
+        #expect(screen.writes == [1, 0.4, 1, 0.4])
+    }
+
+    @Test("back from another app or the lock screen, a code still shown raises the screen again")
+    func backgroundTripRaisesAgain() {
+        let screen = FakeScreen()
+        let brightness = screen.make()
+        var code = BrightnessPresentation()
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        code.sync(enabled: true, shown: true, phase: .inactive, brightness: brightness)
+        code.sync(enabled: true, shown: true, phase: .background, brightness: brightness)
+        screen.value = 0.45  // the system's own level after unlocking
+        code.sync(enabled: true, shown: true, phase: .inactive, brightness: brightness)
+        code.sync(enabled: true, shown: true, phase: .active, brightness: brightness)
+        #expect(screen.value == 1)
+        code.sync(enabled: true, shown: false, phase: .active, brightness: brightness)
+        #expect(screen.value == 0.45)
+        #expect(screen.writes == [1, 0.4, 1, 0.45])
+    }
+
     @Test("brightness is wanted only for an enabled code on screen with the app active")
     func wanted() {
         #expect(RaisesScreenBrightness.wanted(enabled: true, shown: true, phase: .active))
