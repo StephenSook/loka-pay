@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { verifyP256 } from "@lokapay/protocol";
 import {
   NOTE_FIELDS,
   NOTE_LENGTH,
@@ -245,6 +246,26 @@ test.describe("the re-check", () => {
     if (zero.evaluation.kind !== "failed") throw new Error("unreachable");
     expect(zero.evaluation.code).toBe("amount_zero");
     expect(zero.evaluation.located?.stage).toBe("note");
+  });
+
+  test("an edit onto a note the same payer also signed is a mismatch of the kept signature only", () => {
+    // equivocation.secondNoteWireHex: note 0 at 0.50 for test merchant B, signed by the same
+    // payer key. Its own signature verifies over these bytes; note 0's does not. So the
+    // panel's words may say only that the original signature does not match.
+    const second = bytes(vectors.equivocation.secondNoteWireHex);
+    const secondNote = second.slice(0, 141);
+    const edited = reencodeNote(bytes(note0.noteHex), {
+      amount: BigInt(500_000),
+      payeeKeyHash: bytes(vectors.keys.merchantB.keyHashHex),
+    });
+    expect(Buffer.from(edited).toString("hex")).toBe(Buffer.from(secondNote).toString("hex"));
+    const payerKey = bytes(vectors.keys.payer.publicKeyHex);
+    expect(Buffer.from(second.slice(205, 238)).toString("hex")).toBe(vectors.keys.payer.publicKeyHex);
+    expect(() => verifyP256(second.slice(141, 205), secondNote, payerKey)).not.toThrow();
+    expect(() => verifyP256(bytes(note0.wireHex).slice(141, 205), secondNote, payerKey)).toThrow(/bad_signature/);
+
+    const outcome = recheck(receipt, edited, null, vectorDeployment);
+    expect(outcome.kind).toBe("signature_mismatch");
   });
 });
 

@@ -222,7 +222,6 @@ function ResultBody({ evaluation, pinned, testVector }: { evaluation: Evaluation
           <AttackerPanel
             key={toHex(evaluation.bytes)}
             receipt={evaluation.bytes}
-            context={evaluation.context}
             pinned={pinned}
             testVector={testVector}
           />

@@ -62,8 +62,9 @@ function payeePositions(keyHashHex: string): number[] {
 
 const short = (hex: string) => `${hex.slice(0, 8)}...${hex.slice(-8)}`;
 
-// The test receipt is a published test vector, so the payer is a public test key, not a phone.
-const MISMATCH = "Signature no longer matches: the payer's test key never signed this.";
+// What the check shows, and nothing more: the retained signature fails over the edited
+// bytes. It must not claim the payer never signed them (see the equivocation test below).
+const MISMATCH = "The original signature does not match these edited bytes.";
 
 async function openWithTestReceipt(page: Page) {
   const response = await page.goto("/verify");
@@ -159,6 +160,33 @@ test("picking another labelled merchant fails the signature and names the payee 
 
   await panel.getByRole("button", { name: "Undo: restore the signed note" }).click();
   await expect(panel.getByTestId("attacker-result")).toHaveAttribute("data-outcome", "matches");
+});
+
+test("an edit that lands on a note the same payer also signed fails without claiming it was never signed", async ({
+  page,
+}) => {
+  // The vectors file's equivocation pair: its second note is note 0 at 0.50 for test
+  // merchant B, signed by the same payer key. The page keeps note 0's signature, so the
+  // check must fail, and the words must not say the payer never signed these bytes.
+  const second = Buffer.from(vectors.equivocation.secondNoteWireHex, "hex");
+  expect(second.subarray(205, 238).toString("hex")).toBe(vectors.keys.payer.publicKeyHex);
+  const edited = Buffer.from(signedNote);
+  Buffer.from(merchantB.keyHashHex, "hex").copy(edited, PAYEE_AT);
+  edited.writeBigUInt64BE(BigInt(500_000), AMOUNT_AT);
+  expect(edited.toString("hex")).toBe(second.subarray(0, 141).toString("hex"));
+  const positions = differing(signedNote, edited);
+
+  const panel = await openWithTestReceipt(page);
+  await panel.getByRole("textbox", { name: "Amount (sandbox USD)" }).fill("0.50");
+  await panel
+    .getByRole("combobox", { name: "Merchant (payee key hash)" })
+    .selectOption({ label: `Test merchant B: ${short(merchantB.keyHashHex)}` });
+  await expect(panel.getByTestId("attacker-result")).toHaveAttribute("data-outcome", "signature_mismatch");
+  await expect(panel.getByTestId("attacker-verdict")).toHaveText(MISMATCH);
+  await expect(panel.getByTestId("attacker-changed")).toHaveText(
+    `${positions.length} of 141 bytes changed: ${describePositions(positions)} (merchant key hash and amount).`,
+  );
+  await expect(panel).not.toContainText("never signed");
 });
 
 test("editing and re-checking send nothing: zero requests while the panel works", async ({ page }) => {

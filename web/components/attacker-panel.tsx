@@ -28,7 +28,7 @@ import {
   type Outcome,
 } from "@/lib/attacker";
 import { REFUSED_CHEAT_TX_SIGNATURE } from "@/lib/facts";
-import { ERROR_WORDS, STAGE_WORDS, type ContextKind, type SerializedDeployment } from "@/lib/receipt";
+import { ERROR_WORDS, STAGE_WORDS, type SerializedDeployment } from "@/lib/receipt";
 import type { TestVector } from "@/lib/test-vector";
 import { OutlineChip, StateChip } from "./chips";
 import { AlertIcon, ArrowUpRightIcon, CrossIcon } from "./icons";
@@ -48,12 +48,10 @@ const AMOUNT_PROBLEM_WORDS: Record<AmountProblem, string> = {
 
 export function AttackerPanel({
   receipt,
-  context,
   pinned,
   testVector,
 }: {
   receipt: Uint8Array;
-  context: ContextKind;
   pinned: SerializedDeployment | null;
   testVector: TestVector;
 }) {
@@ -105,7 +103,6 @@ export function AttackerPanel({
   const preset = presetAmount(signed.amount);
   const runs: ChangedRun[] = attempt && attempt.outcome.kind !== "matches" ? attempt.outcome.runs : [];
   const changed = new Set(runs.flatMap((r) => Array.from({ length: r.last - r.first + 1 }, (_, k) => r.first + k)));
-  const signer = context === "pinned" ? "the payer's phone" : "the payer's test key";
   const payeeOptions = [
     { value: signed.payeeHex, label: `As signed: ${payeeWords(signed.payeeHex, merchants)}` },
     ...merchants
@@ -201,7 +198,7 @@ export function AttackerPanel({
         className="flex min-w-0 flex-col gap-2 rounded-xl border-2 border-ink bg-paper p-4"
       >
         {attempt ? (
-          <Verdict outcome={attempt.outcome} signer={signer} />
+          <Verdict outcome={attempt.outcome} />
         ) : (
           <>
             <OutlineChip label="Not checked" Icon={AlertIcon} />
@@ -241,7 +238,7 @@ function changedWords(runs: ChangedRun[]): string {
   return `${changedCount(runs)} of ${NOTE_LENGTH} bytes changed: ${describeRuns(runs)} (${describeFields(runs)}).`;
 }
 
-function Verdict({ outcome, signer }: { outcome: Outcome; signer: string }) {
+function Verdict({ outcome }: { outcome: Outcome }) {
   switch (outcome.kind) {
     case "matches":
       return (
@@ -256,8 +253,11 @@ function Verdict({ outcome, signer }: { outcome: Outcome; signer: string }) {
       return (
         <>
           <StateChip state="failed" label="Not verified" testId="attacker-chip" />
+          {/* Says only what the check shows. It never claims the payer did not sign these bytes:
+              an edit can land on a note the same key also signed (the vectors file's
+              equivocation.secondNoteWireHex is note 0 at 0.50 for test merchant B). */}
           <p className="text-lg font-bold" data-testid="attacker-verdict">
-            Signature no longer matches: {signer} never signed this.
+            The original signature does not match these edited bytes.
           </p>
           <p data-testid="attacker-changed">{changedWords(outcome.runs)}</p>
           <p className="text-sm">
