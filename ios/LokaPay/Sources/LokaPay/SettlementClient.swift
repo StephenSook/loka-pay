@@ -147,6 +147,12 @@ public enum SettlementError: Error, Equatable, Sendable {
     /// during the first request) its signature and retryAfter are nil and the server may not
     /// have started. Registering the same key again is safe: the endpoints are idempotent by key.
     case registrationPending(PendingRegistration)
+
+    /// A note upload whose automatic retries ended on an answer that decides nothing for that one
+    /// request (the wrapped error: a 422, a 429, a 400, `chain_unavailable`), after an earlier
+    /// attempt of the same call got no answer this phone can trust. That attempt may have reached
+    /// the server, which may have settled the note, so the note's outcome is unknown. Never retried.
+    indirect case afterUnansweredAttempt(SettlementError)
 }
 
 extension SettlementError {
@@ -165,6 +171,38 @@ extension SettlementError {
         .timedOut, .networkConnectionLost, .notConnectedToInternet,
         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
+
+    /// True when a note upload or read got no answer this phone can trust: the request may have
+    /// reached the server, which may have settled the note before the answer was lost (or sent one
+    /// that did not verify). Only a verified CONF says what happened, so the note stays reserved and
+    /// the screen offers Check again (`GET /v1/notes/{noteId}`). False for the answers API v1
+    /// defines as reaching no decision for this request: a 422 refusal, the 400 errors,
+    /// `unknown_note`, the 429s and `chain_unavailable` (nothing was signed), and for `stillPending`
+    /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` speaks for earlier uploads.
+    /// True again when one of those ended an upload whose earlier automatic attempt got no answer
+    /// (`afterUnansweredAttempt`). The two registration errors describe a registration, never a
+    /// note: false.
+    public var leavesOutcomeUnknown: Bool {
+        switch self {
+        case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
+             .payerMismatch, .merchantMismatch, .protocolViolation, .afterUnansweredAttempt:
+            return true
+        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
+             .budgetExhausted, .chainUnavailable, .stillPending, .registrationFailed, .registrationPending:
+            return false
+        }
+    }
+
+    /// True for an answer about the note id itself that settles what an earlier lost answer left
+    /// open: only `unknown_note` from the note-id lookup (the server never attempted this note id).
+    /// A verified CONF and a 202 also settle it; they are not errors. Everything else describes only
+    /// the latest request: a 422 is unsigned, remembered by nobody and binds nothing (API-V1
+    /// section 1), so it says nothing about an earlier upload, and nor do the 400s, the 429s or
+    /// `chain_unavailable`.
+    public var resolvesUnknownOutcome: Bool {
+        if case .unknownNote = self { return true }
+        return false
+    }
 }
 
 /// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`,
@@ -360,6 +398,8 @@ public struct SettlementClient: Sendable {
     /// sends the SAME bytes, so a repeat gets the pending body or the first decision back
     /// (`replayed: true`), and the chain refuses a used serial anyway. Never retry with re-signed
     /// or different note bytes. Adding an ack to a decided note changes neither decision nor CONF.
+    /// When an attempt got no answer this phone can trust and a later attempt was refused, the
+    /// refusal comes wrapped in `.afterUnansweredAttempt`: the note's outcome is then unknown.
     public func settle(note: SignedNote, ack: Ack? = nil) async throws -> SettlementOutcome {
         try await settle(note: note, ack: ack, deadline: nil)
     }
@@ -398,7 +438,7 @@ public struct SettlementClient: Sendable {
     private func settle(note: SignedNote, ack: Ack?, deadline: TimeInterval?) async throws -> SettlementOutcome {
         let body = SettlementAPI.NoteRequest(note: Base64URL.encode(note.wire), ack: ack.map { Base64URL.encode($0.wire) })
         let request = try post("v1/notes", body)
-        let (data, response) = try await performWithRetry(request, deadline: deadline)
+        let (data, response) = try await performWithRetry(request, deadline: deadline, upload: true)
         return try outcome(data: data, response: response, noteId: note.noteId)
     }
 
@@ -580,18 +620,30 @@ public struct SettlementClient: Sendable {
         return request
     }
 
-    private func performWithRetry(_ request: URLRequest, deadline: TimeInterval?) async throws -> (Data, HTTPURLResponse) {
+    /// `upload`: the request uploads a note. Then an attempt that got no answer this phone can
+    /// trust may have reached the server and settled the note, and a later answer that decides
+    /// nothing for its own request cannot speak for it: the final error is wrapped in
+    /// `.afterUnansweredAttempt` so the caller learns the outcome is unknown. A read decides
+    /// nothing either way, so its final error is passed on as it is.
+    private func performWithRetry(_ request: URLRequest, deadline: TimeInterval?,
+                                  upload: Bool = false) async throws -> (Data, HTTPURLResponse) {
         var attempt = 1
+        var unanswered = false
+        func lastError(_ error: SettlementError) -> SettlementError {
+            unanswered && !error.leavesOutcomeUnknown ? .afterUnansweredAttempt(error) : error
+        }
         while true {
             do {
                 return try await perform(request, deadline: deadline)
-            } catch let error as SettlementError where error.isRetryable {
+            } catch let error as SettlementError {
+                guard error.isRetryable else { throw lastError(error) }
+                if upload, error.leavesOutcomeUnknown { unanswered = true }
                 // The budget ran out during the request: report that, not the timeout it caused.
                 if let deadline, clock.now() >= deadline { throw BudgetSpent() }
-                guard attempt < retryPolicy.maxAttempts else { throw error }
+                guard attempt < retryPolicy.maxAttempts else { throw lastError(error) }
                 let delay = retryPolicy.baseDelaySeconds * pow(2, Double(attempt - 1))
                 // No room for the delay and one more request: the failure itself is the answer.
-                if let deadline, clock.now() + delay + Self.minRequestBudget > deadline { throw error }
+                if let deadline, clock.now() + delay + Self.minRequestBudget > deadline { throw lastError(error) }
                 if delay > 0 { try await clock.sleep(delay) }
                 attempt += 1
             }

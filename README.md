@@ -10,23 +10,19 @@ Sandbox tokens only: devnet USDC has no value. Moving real dollars would require
 
 | What | Where | Status |
 |---|---|---|
-| Judge guide: a 3-minute itinerary | https://zerobars.us/judge | TODO(3.2): live after deploy |
-| Live ledger with explorer links | https://zerobars.us/live | TODO(2.19) |
-| Verify a signed receipt | https://zerobars.us/verify | TODO(3.2) |
+| Judge guide: a 3-minute itinerary | https://zerobars.us/judge | Live: program facts read from devnet and CI results read from GitHub when the page loads, each with its read time |
+| Live ledger with explorer links | https://zerobars.us/live | Live: your browser streams the program's transactions from devnet; the chip says Live only while the connection carries traffic |
+| Verify a signed receipt | https://zerobars.us/verify | Live: your browser checks every signature; try the labelled test receipt |
 | Web lab: pay with your own passkey | https://zerobars.us/lab | TODO(3.10, 3.23), T2 |
-| Proof page: claims table, reserves, measured numbers | https://zerobars.us/proof | TODO(3.24), T2 |
-| Settlement API | https://api.zerobars.us | TODO(0.6) |
-| iPhone app (TestFlight) | TODO(4.7): public link + QR | In Apple beta review (TODO: update to the real state) |
+| Proof page: claims table, reserves, built this weekend | https://zerobars.us/proof | Live: each claim says Live only from a current read and shows its age; proof of reserves reads every balance at one slot; the commit count since hacking started comes from GitHub |
+| Settlement API | https://api.zerobars.us | Live on devnet: `curl -s https://api.zerobars.us/api/health` returns the cluster, the program id and the current slot |
+| iPhone app (TestFlight) | TODO(4.7): public link + QR once Apple approves | Build 1 submitted to Apple beta review Sat Oct 10, 12:05 AM ET |
+| The Solana program (devnet) | https://explorer.solana.com/address/HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG?cluster=devnet | Live: deployed Sat Oct 10, 1:01 AM ET; vault initialized 1:05 AM ([transaction](https://explorer.solana.com/tx/2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R?cluster=devnet)); every public address is in `config/pins.json` |
+| First real payment and refused cheat on devnet | [settled payment](https://explorer.solana.com/tx/5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa?cluster=devnet) and [refused cheat](https://explorer.solana.com/tx/2SQ8aiTmRizKpy17cQxzH1Bnae828qdico7Y8BMzrkYKBa1yTiBevM94ijzhEaiGZEmviaeu3BEXsRywS4Excohv?cluster=devnet) | Sat Oct 10, 2:01 AM ET: a P-256 signed note verified by Solana's secp256r1 precompile on devnet and credited the merchant; the same allowance and serial signed again was refused on chain with `SerialUsed` (error 6011). This run was signed outside the iPhone app; the run signed by an iPhone's Secure Enclave comes next |
 | Android relay APK (relay only, clean catalog) | GitHub Releases | TODO(3.8), T2 |
 | Demo video (2 to 3 minutes, public) | TODO(3.7): YouTube link | TODO |
 
-Check the headline numbers yourself; this endpoint recomputes them on every request:
-
-```sh
-curl -s https://api.zerobars.us/api/stats
-```
-
-<!-- TODO(2.10): paste one real response here and name each field. -->
+<!-- TODO(2.10): when GET /api/stats is live, add: "Check the headline numbers yourself; this endpoint recomputes them on every request", the curl, one real response, and each field named. It answers 404 today, so it stays off this page until then. -->
 
 ## What happens in the demo
 
@@ -39,12 +35,14 @@ curl -s https://api.zerobars.us/api/stats
 ## How it works
 
 - **The allowance** is locked in an on-chain vault before anyone goes offline, so the payer can never settle more than its cap.
-- **The note** is a fixed 141-byte structure signed by a P-256 key in the iPhone's Secure Enclave, behind Face ID or the device passcode. Spec: `protocol/PAYMENT-V1.md` (TODO(1.2)).
+- **The note** is a fixed 141-byte structure signed by a P-256 key in the iPhone's Secure Enclave, behind Face ID or the device passcode. Byte layouts and validation: `protocol/PAYMENT-V1.md`; the HTTP contract: `protocol/API-V1.md`; test vectors: `protocol/vectors/payment-v1.json`.
 - **Settlement:** Solana's secp256r1 precompile verifies the phone's signature on-chain, so neither a relaying phone nor our server can forge or redirect a payment. The program checks the serial, cap, expiry and earmark, then credits the merchant.
 - **Offline risk is bounded and visible:** a merchant who accepts offline carries a limited, attributable risk, capped by the allowance's offline limit. A reused serial fails on-chain.
-- **Architecture diagram:** TODO(3.11).
+- **Architecture diagram:** below; source in `docs/payments-architecture.html`.
 
-Trust assumptions and the threat model, in plain words: https://zerobars.us/trust (TODO(3.2)).
+![How a LOKA Pay payment moves: payer phone to merchant phone offline, merchant to the settlement API online, then one Solana transaction checked by the secp256r1 precompile and the loka_vault program](docs/payments-architecture.png)
+
+Trust assumptions and the threat model, in plain words: https://zerobars.us/trust (who holds the program's upgrade authority is read from devnet when the page loads).
 
 ## Built before Hacklanta (disclosure)
 
@@ -68,7 +66,7 @@ git diff --stat pre-hacklanta-foundation pre-hacklanta-kit   # the pre-event kit
 
 ## AI tools we used
 
-Claude Code, Codex and Grok helped write and review code. <!-- TODO(4.3): add Greptile if it reviewed our pull requests. --> Their output was checked by the protocol spec and test vectors, tests in CI, adversarial reviews of every money path, and live runs on our own phones.
+Claude Code, Codex and Grok helped write and review code, and Greptile reviewed our pull requests. Their output was checked by the protocol spec and test vectors, tests in CI, adversarial reviews of every money path, and live runs on our own phones.
 
 ## Build and run
 
@@ -76,16 +74,16 @@ Toolchain and commands for every part are in `AGENTS.md`.
 
 | Part | Folder | Quick check |
 |---|---|---|
-| iPhone app (LOKA + payment screens) | `ios/` | TODO(1.1b): `swift test --package-path ios/LokaPay`, then open `ios/LOKA.xcodeproj` |
+| iPhone app (LOKA + payment screens) | `ios/` | `swift test --package-path ios/LokaPay`, then open `ios/LOKA.xcodeproj` |
 | Android relay | `android/loka-mesh-lab/` | `./gradlew :core:test :app:assembleDebug` |
-| Solana program | `programs/` | TODO(1.4): `anchor test` |
+| Solana program | `programs/` | the commands in `programs/README.md` (toolchain in `programs/TOOLCHAIN.md`; devnet SOL notes in `docs/SOLANA-DEVNET.md`) |
 | Settlement server | `server/` | TODO(1.9): `pnpm test` |
 | Website | `web/` | `pnpm install --frozen-lockfile && pnpm build` (more in `web/README.md`) |
 
 ## Tests named in the demo
 
 - `server/test/replay.test.ts`: the same note through two gateways redeems once. TODO(2.5)
-- `programs/loka_vault/tests/redeem.ts`: a reused serial, a high-S signature, a wrong message, the wrong mint and a substituted merchant record are each refused. TODO(1.4)
+- `programs/loka_vault/tests/redeem.ts`: a reused serial, a high-S signature, a wrong message, the wrong program or mint, a different payer's signature and a substituted merchant or allowance account are each refused; these run against the real secp256r1 precompile on a local validator in CI.
 
 ## Team
 

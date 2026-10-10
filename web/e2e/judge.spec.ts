@@ -75,7 +75,8 @@ test("privacy: loads with no login and says what is true today", async ({
 
   const main = page.getByRole("main");
   await expect(main).toContainText("No sign-up");
-  await expect(main).toContainText("Updated 2026-10-09");
+  await expect(main).toContainText("Updated 2026-10-10");
+  await expect(main).toContainText("One page makes your browser contact another website");
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
   await expect(main).toContainText("The settlement server is not live yet.");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();
