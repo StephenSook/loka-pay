@@ -1,16 +1,20 @@
-// /live at the judge desk (PLAN.md 3.84): what a row says before its details arrive, and the
-// kiosk's "Last payment" line. Pure functions over lib/program-feed.ts rows, unit-tested in
-// unit/live-desk.test.ts. The labels for recorded rows are lib/row-labels.ts (server side, since
-// they read docs/FACTS.json).
+// /live at the judge desk (PLAN.md 3.84): what a failed row says, before and after its details
+// arrive, and the kiosk's "Last payment" line. Pure functions over lib/program-feed.ts rows,
+// unit-tested in unit/live-desk.test.ts. The labels for recorded rows are lib/row-labels.ts
+// (server side, since they read docs/FACTS.json).
 //
-// A failed row is named from devnet's error code as soon as the signature list arrives
-// (lib/program-errors.ts), so a refusal reads "SerialUsed (6011)" while its details are still
-// queued under devnet's rate limit; the program's own log line, once read, wins. Raw error JSON
-// is never shown.
+// A failed row says its error code in words as soon as the signature list arrives, so it is
+// never blank or raw JSON while its details are queued under devnet's rate limit. It is named
+// (SerialUsed) only once its details show that the failing instruction is the program's own
+// (lib/program-errors.ts), because another program in the same transaction can return 6011 too;
+// until then it reads "Failed with error code 6011 at instruction 1 (reading details)". The
+// program's own log line, once read, wins. A failure is a refusal only when the program raised
+// it: a transaction that failed in another program's instruction, or for the whole transaction,
+// is never labelled Refused, whatever its instruction data says.
 
 import type { ProgramError } from "./logs";
 import type { Row } from "./program-feed";
-import { describeTxError, programErrorOf } from "./program-errors";
+import { describeTxError, failureOwner, programErrorOf, type OwnInstructions, type Owner } from "./program-errors";
 
 /** devnet's `err` field back from a row's errText (it is JSON.stringify of that field), or undefined. */
 function errOf(row: Pick<Row, "errText">): unknown {
@@ -22,38 +26,53 @@ function errOf(row: Pick<Row, "errText">): unknown {
   }
 }
 
-export type Refusal =
-  /** The program's error, from its log line (details read) or its error code (before details). */
+/** Which of the row's top-level instructions are the program's, as far as its details have been read. */
+export function ownInstructionsOfRow(row: Pick<Row, "details" | "ownInstructions">): OwnInstructions {
+  if (row.details === "read" && row.ownInstructions) return { kind: "read", indexes: row.ownInstructions };
+  return row.details === "reading" ? { kind: "reading" } : { kind: "unread" };
+}
+
+export type Failure =
+  /** The program's own error: from its log line, or from its error code at one of its own instructions. */
   | { kind: "program"; error: ProgramError; fromLogs: boolean }
-  /** Any other failure, in words (lib/program-errors.ts describeTxError). */
-  | { kind: "words"; words: string };
+  /** Any other failure, in words (lib/program-errors.ts describeTxError); `owner` says who raised it, as far as is known. */
+  | { kind: "words"; words: string; owner: Owner };
 
 /** Why a failed row failed, for the page to show. Null for a row that did not fail. */
-export function refusalOf(row: Pick<Row, "result" | "error" | "errText">): Refusal | null {
+export function failureOf(row: Pick<Row, "result" | "error" | "errText" | "details" | "ownInstructions">): Failure | null {
   if (row.result !== "failed") return null;
   if (row.error) return { kind: "program", error: row.error, fromLogs: true };
   const err = errOf(row);
-  const error = programErrorOf(err);
+  const own = ownInstructionsOfRow(row);
+  const error = programErrorOf(err, own);
   if (error) return { kind: "program", error, fromLogs: false };
-  return { kind: "words", words: describeTxError(err) };
+  return { kind: "words", words: describeTxError(err, own), owner: failureOwner(err, own) };
 }
 
-/** One line for a refusal: "SerialUsed (6011): This allowance serial was already redeemed." */
-export function refusalWords(refusal: Refusal): string {
-  return refusal.kind === "program" ? `${refusal.error.name} (${refusal.error.number}): ${refusal.error.message}.` : refusal.words;
+/** Whether the program refused it: its own log line names the error, or its own instruction failed. */
+export function isRefusal(failure: Failure): boolean {
+  return failure.kind === "program" || failure.owner === "ours";
+}
+
+/** One line for a failure: "SerialUsed (6011): This allowance serial was already redeemed." */
+export function failureWords(failure: Failure): string {
+  return failure.kind === "program" ? `${failure.error.name} (${failure.error.number}): ${failure.error.message}.` : failure.words;
 }
 
 export type LastPayment =
   | { kind: "paid"; row: Row; amountUnits: string | null; newerReading: number }
-  | { kind: "refused"; row: Row; refusal: Refusal; newerReading: number }
+  | { kind: "refused"; row: Row; failure: Failure; newerReading: number }
   | { kind: "unknown"; row: Row; newerReading: number }
   /** No redeem_note among the rows read so far; `reading` rows may still turn out to be one. */
   | { kind: "none"; reading: number };
 
 /**
  * The newest payment among the rows (newest first, as the feed keeps them): the first row whose
- * instructions include redeem_note. A row whose details are still being read cannot be told
- * apart yet: rows like that above the payment are counted in `newerReading`, and with no payment
+ * instructions include redeem_note and that settled, that the program refused, or whose result is
+ * unknown. A failed one the program did not refuse (another program's instruction failed, or the
+ * whole transaction) is not a payment and is passed over. A row whose details are still being
+ * read cannot be told apart yet, nor can a failed redeem_note whose failing instruction is not
+ * known yet: rows like that above the payment are counted in `newerReading`, and with no payment
  * found, in `reading`.
  */
 export function lastPayment(rows: readonly Row[]): LastPayment {
@@ -67,8 +86,12 @@ export function lastPayment(rows: readonly Row[]): LastPayment {
       const redeemed = row.amounts.find((a) => a.label === "Note redeemed");
       return { kind: "paid", row, amountUnits: redeemed ? redeemed.units : null, newerReading: reading };
     }
-    const refusal = refusalOf(row);
-    if (refusal) return { kind: "refused", row, refusal, newerReading: reading };
+    const failure = failureOf(row);
+    if (failure) {
+      if (isRefusal(failure)) return { kind: "refused", row, failure, newerReading: reading };
+      if (failure.kind === "words" && failure.owner === "unknown" && row.details === "reading") reading += 1;
+      continue;
+    }
     return { kind: "unknown", row, newerReading: reading };
   }
   return { kind: "none", reading };

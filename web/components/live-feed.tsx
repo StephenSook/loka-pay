@@ -6,10 +6,11 @@
 // the settlement server exists and keeps working if it goes down. Nothing here is invented
 // while a read is pending or failed.
 //
-// At the judge desk (PLAN.md 3.84): a failed row is named from its error code before its details
-// arrive (lib/live-desk.ts), never shown as raw JSON; rows docs/FACTS.json records carry their
-// label (lib/row-labels.ts, built on the server); and the kiosk (/live?kiosk=1) leads with a large
-// "Last payment" line, the newest redeem_note this page has read.
+// At the judge desk (PLAN.md 3.84): a failed row says its error code in words before its details
+// arrive, and is named (SerialUsed) only once they show the failing instruction is the program's
+// own (lib/live-desk.ts), never shown as raw JSON; rows docs/FACTS.json records carry their label
+// (lib/row-labels.ts, built on the server); and the kiosk (/live?kiosk=1) leads with a large "Last
+// payment" line, the newest redeem_note this page has read that settled or that the program refused.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -22,7 +23,7 @@ import {
   type History,
   type Row,
 } from "@/lib/program-feed";
-import { lastPayment, refusalOf, refusalWords, shortSignature, type LastPayment } from "@/lib/live-desk";
+import { failureOf, failureWords, lastPayment, shortSignature, type LastPayment } from "@/lib/live-desk";
 import type { RowLabel } from "@/lib/row-labels";
 import { RPC_URL, WS_URL, explorerTx } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
@@ -236,12 +237,12 @@ function LastPaymentBody({ last, label }: { last: Exclude<LastPayment, { kind: "
       <p className="font-display text-5xl font-extrabold leading-tight tracking-tight break-words sm:text-6xl" data-testid="last-payment-headline">
         {last.kind === "paid" && (last.amountUnits ? `Paid ${formatUnits(last.amountUnits)} sandbox USDC` : "Paid")}
         {last.kind === "refused" &&
-          (last.refusal.kind === "program" ? `Refused: ${last.refusal.error.name} (${last.refusal.error.number})` : "Refused on chain")}
+          (last.failure.kind === "program" ? `Refused: ${last.failure.error.name} (${last.failure.error.number})` : "Refused on chain")}
         {last.kind === "unknown" && "Result unknown: devnet did not say whether it settled"}
       </p>
       {last.kind === "refused" ? (
         <p className="text-2xl break-words" data-testid="last-payment-reason">
-          {last.refusal.kind === "program" ? `${last.refusal.error.message}. No money moved.` : `${last.refusal.words} No money moved.`}
+          {last.failure.kind === "program" ? `${last.failure.error.message}. No money moved.` : `${last.failure.words} No money moved.`}
         </p>
       ) : null}
       <p className="text-2xl" data-testid="last-payment-when">
@@ -262,7 +263,7 @@ function LastPaymentBody({ last, label }: { last: Exclude<LastPayment, { kind: "
 
 function TxRow({ row, kiosk, label }: { row: Row; kiosk: boolean; label: RowLabel | undefined }) {
   const title = row.actions.length > 0 ? row.actions.join(", ") : null;
-  const refusal = refusalOf(row);
+  const failure = failureOf(row);
   return (
     <li
       className="flex min-w-0 flex-col gap-2 rounded-card border-3 border-ink bg-surface p-5 shadow-hard"
@@ -287,7 +288,7 @@ function TxRow({ row, kiosk, label }: { row: Row; kiosk: boolean; label: RowLabe
         <span className="flex flex-wrap items-center gap-2">
           {label ? <OutlineChip label={label.chip} Icon={CheckIcon} testId="tx-label" /> : null}
           {row.arrivedLive ? <OutlineChip label="New" Icon={CircleIcon} testId="tx-new" /> : null}
-          <TxStatusChip result={row.result} errorName={refusal?.kind === "program" ? refusal.error.name : null} />
+          <TxStatusChip result={row.result} errorName={failure?.kind === "program" ? failure.error.name : null} />
         </span>
       </div>
       {label ? (
@@ -305,9 +306,9 @@ function TxRow({ row, kiosk, label }: { row: Row; kiosk: boolean; label: RowLabe
           ))}
         </ul>
       ) : null}
-      {refusal ? (
+      {failure ? (
         <p className="break-words text-sm" data-testid="tx-error">
-          {refusalWords(refusal)}
+          {failureWords(failure)}
         </p>
       ) : null}
       {row.result === "unknown" ? (

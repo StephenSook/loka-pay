@@ -100,7 +100,7 @@ async function routeSocket(page: Page) {
   return socket;
 }
 
-test("/live: refused rows are named from the error code before their details load, and no row shows raw error JSON", async ({ page }) => {
+test("/live: before their details load, failed rows say the error code and instruction in words, unnamed, and no row shows raw error JSON", async ({ page }) => {
   // Devnet answers the list but has no details yet ("not found yet"), as under a rate limit.
   const devnet = await routeDevnet(page, LIST, { holdDetails: true });
   await routeSocket(page);
@@ -110,17 +110,64 @@ test("/live: refused rows are named from the error code before their details loa
   for (const signature of failed) {
     const r = row(page, signature);
     await expect(r).toHaveAttribute("data-details", "reading");
-    await expect(r.getByTestId("tx-error")).toHaveText(SERIAL_USED);
-    await expect(r.getByTestId("tx-status")).toHaveText("Failed: SerialUsed");
+    // Which program ran instruction 1 is not read yet, so 6011 is not named SerialUsed.
+    await expect(r.getByTestId("tx-error")).toHaveText("Failed with error code 6011 at instruction 1 (reading details).");
+    await expect(r.getByTestId("tx-status")).toHaveText("Failed");
   }
   await expect(page.getByTestId("tx-row")).toHaveCount(20);
   await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
+  // No error line or status chip names the code yet (the FACTS label detail of a recorded row is a recorded caption, not this naming).
+  await expect(page.getByTestId("tx-error").filter({ hasText: "SerialUsed" })).toHaveCount(0);
+  await expect(page.getByTestId("tx-status").filter({ hasText: "SerialUsed" })).toHaveCount(0);
   await expect(page.getByTestId("tx-list")).not.toContainText("{");
   // After the page gives up on the details, the rows still say why they failed, in words.
   devnet.failDetails = true;
   await expect(row(page, REFUSED_IPHONE)).toHaveAttribute("data-details", "unread", { timeout: 20_000 });
-  await expect(row(page, REFUSED_IPHONE).getByTestId("tx-error")).toHaveText(SERIAL_USED);
+  await expect(row(page, REFUSED_IPHONE).getByTestId("tx-error")).toHaveText(
+    "Failed with error code 6011 at instruction 1 (details not read, so not named).",
+  );
   await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
+});
+
+test("/live: another program's 6011 at instruction 0 is never named SerialUsed, and the kiosk passes over it", async ({ page }) => {
+  // TEST FIXTURE, the attack: a transaction whose instruction 0 is another program failing with
+  // Custom 6011, and whose instruction 1 is a loka_vault redeem_note (the recorded cheat's
+  // bytes) that never ran. Built from the recorded refusal 3XtQtnHR, newer than every listed row.
+  const base = TX[REFUSED_IPHONE] as {
+    slot: number;
+    blockTime: number;
+    meta: Record<string, unknown>;
+    transaction: { signatures: string[]; message: { accountKeys: string[]; instructions: Array<Record<string, unknown>> } };
+  };
+  const OTHER = "Another1111111111111111111111111111111111111";
+  const CRAFTED = "Crafted1111111111111111111111111111111111111111111111111111111111111111111111111111111";
+  const err = { InstructionError: [0, { Custom: 6011 }] };
+  const message = base.transaction.message;
+  const slot = LIST[0].slot + 1000;
+  TX[CRAFTED] = {
+    ...base,
+    slot,
+    meta: { ...base.meta, err, logMessages: [`Program ${OTHER} invoke [1]`, `Program ${OTHER} failed: custom program error: 0x177b`] },
+    transaction: {
+      ...base.transaction,
+      signatures: [CRAFTED],
+      message: { ...message, accountKeys: [...message.accountKeys, OTHER], instructions: [{ ...message.instructions[0], programIdIndex: message.accountKeys.length }, message.instructions[1]] },
+    },
+  };
+  await routeDevnet(page, [{ signature: CRAFTED, slot, err, blockTime: base.blockTime }, ...LIST]);
+  await routeSocket(page);
+  await page.goto("/live?kiosk=1");
+  const crafted = row(page, CRAFTED);
+  await expect(crafted).toHaveAttribute("data-details", "read");
+  await expect(crafted.getByTestId("tx-action")).toHaveText("redeem_note");
+  await expect(crafted.getByTestId("tx-error")).toHaveText("Error code 6011 at instruction 0, which another program ran, so it is not this program's error.");
+  await expect(crafted.getByTestId("tx-status")).toHaveText("Failed");
+  await expect(crafted).not.toContainText("SerialUsed");
+  // The newest payment the program refused is still the recorded 5:09 PM cheat.
+  const last = page.getByTestId("last-payment");
+  await expect(last).toHaveAttribute("data-signature", REFUSED_RUN2);
+  await expect(last).toHaveAttribute("data-state", "refused");
+  await expect(last.getByTestId("last-payment-headline")).toHaveText("Refused: SerialUsed (6011)");
 });
 
 test("/live: with details, both iPhone runs are labelled from FACTS and still no row shows raw error JSON", async ({ page }) => {

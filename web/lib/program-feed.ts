@@ -31,6 +31,7 @@
 // row "unavailable", and the other rows of the batch still get their details.
 
 import { resultOf, summarizeLogs, summarizeTransaction, type TxResult, type TxSummary } from "./logs";
+import { ownInstructionsOf } from "./program-errors";
 import { RpcError, WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
 import { isUnixSeconds } from "./time";
 
@@ -62,7 +63,17 @@ const LIVENESS_CHECK_MS = 1000;
  */
 export type Details = "reading" | "read" | "unread" | "unavailable";
 
-export type Row = TxSummary & { arrivedLive: boolean; seenAtMs: number | null; details: Details };
+export type Row = TxSummary & {
+  arrivedLive: boolean;
+  seenAtMs: number | null;
+  details: Details;
+  /**
+   * The indexes of the transaction's top-level instructions addressed to the program, from its
+   * getTransaction answer (lib/program-errors.ts ownInstructionsOf); absent until that answer is
+   * read. An error code is the program's only at one of these instructions.
+   */
+  ownInstructions?: readonly number[];
+};
 
 /**
  * The newest `max` rows, newest first by slot (a row with no slot yet, just arrived, on
@@ -184,7 +195,8 @@ export function rowsFromSignatures(result: unknown): Row[] {
 }
 
 export type DetailOutcome =
-  | { kind: "read"; summary: TxSummary }
+  /** The answer, and which of its top-level instructions are the program's. */
+  | { kind: "read"; summary: TxSummary; ownInstructions: readonly number[] }
   /** Try again later; `rateLimited` pauses every detail read (RATE_LIMIT_PAUSE_MS). */
   | { kind: "retry"; rateLimited: boolean }
   | { kind: "unread" }
@@ -201,7 +213,8 @@ export function detailOutcome(outcome: RpcOutcome, programId: string): DetailOut
   if (outcome.result === null) return { kind: "retry", rateLimited: false };
   try {
     const summary = summarizeTransaction(outcome.result, programId);
-    return summary ? { kind: "read", summary } : { kind: "unavailable" };
+    const own = ownInstructionsOf(outcome.result, programId);
+    return summary && own.kind === "read" ? { kind: "read", summary, ownInstructions: own.indexes } : { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };
   }
@@ -237,6 +250,11 @@ export function mergeDetails(current: Row, summary: TxSummary): Row {
     error: summary.error ?? current.error,
     details: "read",
   };
+}
+
+/** A row with a getTransaction answer read into it: its details, and which instructions are the program's. */
+export function readInto(current: Row, read: { summary: TxSummary; ownInstructions: readonly number[] }): Row {
+  return { ...mergeDetails(current, read.summary), ownInstructions: read.ownInstructions };
 }
 
 /** The words for a result, for the screen-reader announcement. */
@@ -485,7 +503,7 @@ export class ProgramFeed {
         return;
       }
       if (outcome.kind === "read") {
-        this.setRow(mergeDetails(current, outcome.summary));
+        this.setRow(readInto(current, outcome));
         this.forget(row.signature);
       } else if (outcome.kind === "unread" || outcome.kind === "unavailable") {
         this.setRow({ ...current, details: outcome.kind });
