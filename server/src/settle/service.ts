@@ -160,7 +160,7 @@ export class SettlementService {
       const conf = await this.options.signConfirmation({
         noteId: P.fromHex(row.noteId), txSignature: base58.decode(signature), slot: BigInt(chain.slot),
         blockTime: BigInt(chain.blockTime), uploadedAt: BigInt(row.uploadedAt),
-        status: chain.error === null ? 'settled' : 'failed_on_chain', errorCode: chain.errorCode,
+        status: chain.error === null ? 'settled' : 'failed_on_chain', errorCode: chain.errorCode ?? 0,
       });
       const decision: Decision = {
         noteId: row.noteId, status: chain.error === null ? 'settled' : 'failed', ...chain,

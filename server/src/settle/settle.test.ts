@@ -502,3 +502,13 @@ test('GET recovery cannot sign when stored payer binding cannot be verified', as
   expect((await f.service.get(noteId)).body.signature).toBeNull();
   expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).not.toHaveBeenCalled();
 });
+
+test('generic confirmed transaction failure signs failed CONF with absent-code sentinel', async () => {
+  const f = await fixture(); f.chain.decision = { slot: 55, blockTime: 1800000000, error: 'TransactionFailed', errorCode: null };
+  const result = await f.service.submit({ note });
+  expect(result.statusCode).toBe(200); expect(result.body).toMatchObject({ status: 'failed', error: 'TransactionFailed', errorCode: null });
+  if (result.statusCode !== 200) throw new Error('Expected failed chain decision');
+  const conf = P.verifyConfWire(P.base64urlDecode(result.body.conf), ed25519.getPublicKey(f.seed));
+  expect(conf.status).toBe(2); expect(conf.errorCode).toBe(0);
+  expect(base58.encode(conf.txSignature)).toBe(result.body.signature);
+});

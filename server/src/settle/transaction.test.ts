@@ -118,14 +118,14 @@ test('only confirmed or finalized statuses with a real block time become decisio
 
 test('maps the redeem error namespace without mislabeling other instructions or runtime errors', () => {
   expect(decodeChainError({ InstructionError: [1, { Custom: 6011 }] })).toEqual({ error: 'SerialUsed', errorCode: 6011 });
-  expect(decodeChainError({ InstructionError: [0, { Custom: 6011 }] })).toBeNull();
-  expect(decodeChainError({ InstructionError: [1, { Custom: 70000 }] })).toBeNull();
-  expect(decodeChainError('BlockhashNotFound')).toBeNull();
+  expect(decodeChainError({ InstructionError: [0, { Custom: 6011 }] })).toEqual({ error: 'TransactionFailed', errorCode: null });
+  expect(decodeChainError({ InstructionError: [1, { Custom: 70000 }] })).toEqual({ error: 'TransactionFailed', errorCode: null });
+  expect(decodeChainError('BlockhashNotFound')).toEqual({ error: 'TransactionFailed', errorCode: null });
 });
 
-test('history lookup distinguishes missing signatures from found but unrepresentable results', async () => {
+test('history lookup distinguishes missing signatures from found but incomplete metadata', async () => {
   const rpc = { getSignatureStatuses: vi.fn(async (): Promise<{ value: unknown[] }> => ({ value: [null] })),
-    getBlockHeight: vi.fn(async () => 101) };
+    getBlockTime: vi.fn(async () => null), getBlockHeight: vi.fn(async () => 101) };
   const chain = new SolanaGateway(rpc as unknown as Connection, Keypair.generate());
   expect(await chain.blockHeight()).toBe(101); expect(rpc.getBlockHeight).toHaveBeenCalledExactlyOnceWith('confirmed');
   expect(await chain.lookup('original')).toEqual({ found: false, decision: null });
@@ -133,3 +133,13 @@ test('history lookup distinguishes missing signatures from found but unrepresent
   rpc.getSignatureStatuses.mockResolvedValue({ value: [{ confirmationStatus: 'confirmed', err: 'BlockhashNotFound' }] });
   expect(await chain.lookup('original')).toEqual({ found: true, decision: null });
 });
+
+test.each([{ InstructionError: [0, { Custom: 6011 }] }, { InstructionError: [1, { Custom: 70000 }] },
+  'BlockhashNotFound', { InstructionError: [1, 'InvalidArgument'] }] as const)(
+  'confirmed failure %j resolves without fabricating a redeem code', async err => {
+    const rpc = { getSignatureStatuses: vi.fn(async () => ({ value: [{ slot: 55, confirmationStatus: 'confirmed', err }] })),
+      getBlockTime: vi.fn(async () => 1800000000) };
+    const chain = new SolanaGateway(rpc as unknown as Connection, Keypair.generate());
+    expect(await chain.lookup('saved')).toEqual({ found: true,
+      decision: { slot: 55, blockTime: 1800000000, error: 'TransactionFailed', errorCode: null } });
+  });

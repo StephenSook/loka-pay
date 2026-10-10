@@ -37,14 +37,15 @@ export function buildRedeemTransaction(note: P.ValidatedNote): Transaction {
   return new Transaction().add(precompile, instruction);
 }
 
-export function decodeChainError(error: TransactionError | null): { error: string | null; errorCode: number } | null {
+export function decodeChainError(error: TransactionError | null): { error: string | null; errorCode: number | null } {
   if (error === null) return { error: null, errorCode: 0 };
-  if (typeof error !== 'object' || !('InstructionError' in error)) return null;
+  const generic = { error: 'TransactionFailed', errorCode: null };
+  if (typeof error !== 'object' || !('InstructionError' in error)) return generic;
   const detail = (error as { InstructionError: [number, unknown] }).InstructionError;
   // Only redeem_note (instruction 1) owns the error-code namespace below.
-  if (detail[0] !== 1 || !detail[1] || typeof detail[1] !== 'object' || !('Custom' in detail[1])) return null;
+  if (detail[0] !== 1 || !detail[1] || typeof detail[1] !== 'object' || !('Custom' in detail[1])) return generic;
   const code = (detail[1] as { Custom: number }).Custom;
-  if (!Number.isInteger(code) || code <= 0 || code > 65535) return null;
+  if (!Number.isInteger(code) || code <= 0 || code > 65535) return generic;
   const named = idl.errors.find((entry: { code: number }) => entry.code === code);
   return { error: named?.name ?? `ProgramError${code}`, errorCode: code };
 }
@@ -105,7 +106,6 @@ export class SolanaGateway implements ChainGateway {
     if (!status) return { found: false, decision: null };
     if (!['confirmed', 'finalized'].includes(status.confirmationStatus ?? '')) return { found: true, decision: null };
     const result = decodeChainError(status.err);
-    if (!result) return { found: true, decision: null };
     const blockTime = await this.connection.getBlockTime(status.slot);
     if (blockTime === null || !Number.isSafeInteger(blockTime) || !Number.isSafeInteger(status.slot)) return { found: true, decision: null };
     return { found: true, decision: { slot: status.slot, blockTime, ...result } };

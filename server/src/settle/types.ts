@@ -13,7 +13,7 @@ export interface ChainDecision {
   slot: number;
   blockTime: number;
   error: string | null;
-  errorCode: number;
+  errorCode: number | null;
 }
 export interface ChainGateway {
   checkIdentity(note: ValidatedNote): Promise<IdentityRefusal | null>;
