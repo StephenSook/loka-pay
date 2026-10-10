@@ -39,8 +39,9 @@ final class LokaPayStore: ObservableObject {
         case notLoaded
         case loading
         case ready
-        /// No Secure Enclave on this device (the Simulator, for one). Pay stays locked: payments
-        /// never fall back to a software key.
+        /// `SecureEnclave.isAvailable` is false on this device. Pay stays locked: payments never
+        /// fall back to a software key. (An Apple silicon Simulator can report true and then fail
+        /// at the Keychain instead, which is `failed`.)
         case noSecureEnclave
         /// The enclave or the Keychain refused; the text is the system's error.
         case failed(String)
@@ -163,6 +164,9 @@ final class LokaPayStore: ObservableObject {
                 }.value
                 signer = loaded
                 keyState = .ready
+            } catch PaymentError.storage {
+                signer = nil
+                keyState = .failed("the Keychain refused to read or store the key (storage)")
             } catch {
                 signer = nil
                 keyState = .failed(Self.systemText(error))
@@ -506,11 +510,13 @@ struct LokaPaySetupView: View {
         case .noSecureEnclave:
             list.append(Blocker(
                 id: "enclave", title: "No Secure Enclave on this device",
-                detail: "Payments are signed by a key that never leaves the Secure Enclave. This device has none "
-                    + "(the Simulator has none), so Pay stays locked. No software key is used instead."))
+                detail: "Payments are signed by a key that never leaves the Secure Enclave. This device reports "
+                    + "none, so Pay stays locked. No software key is used instead."))
         case .failed(let text):
-            list.append(Blocker(id: "key", title: "The payment key could not be loaded",
-                                detail: "The system said: \(text). Unlock the phone, then load it again."))
+            list.append(Blocker(
+                id: "key", title: "The payment key could not be loaded",
+                detail: "The system said: \(text). Pay stays locked; no software key is used instead. On a phone, "
+                    + "unlock it and load the key again. A build without code signing may have no Keychain access at all."))
         case .notLoaded, .loading, .ready:
             break
         }
