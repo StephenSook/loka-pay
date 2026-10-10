@@ -686,11 +686,13 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
 // ---------- the desk code ----------
 
 test.describe("desk code (LOKA_CALL_CODE)", () => {
-  const CODE = "desk-code-for-the-test";
-  const fromClient = (address: string, body: unknown) =>
+  // Letters and digits, at least 8: valid on a deployment too (DEPLOYED_DESK_CODE).
+  const CODE = "Desk2026Code";
+  /** A request as Vercel's edge would pass it on: its own x-vercel-forwarded-for, and an x-forwarded-for the client may have written. */
+  const fromClient = (address: string, body: unknown, spoofed = `${address}, 10.0.0.1`) =>
     new Request("http://x/api/call", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-forwarded-for": `${address}, 10.0.0.1` },
+      headers: { "content-type": "application/json", "x-vercel-forwarded-for": address, "x-forwarded-for": spoofed },
       body: JSON.stringify(body),
     });
 
@@ -760,9 +762,55 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
     const secret = randomBytes(32).toString("hex");
     const key = clientKey(fromClient("203.0.113.5", {}), secret);
     expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(key).not.toContain("203.0.113.5");
     expect(key).not.toBe(clientKey(fromClient("198.51.100.7", {}), secret));
     expect(key).toBe(clientKey(fromClient("203.0.113.5", {}), secret));
-    expect(clientKey(callRequest({}), secret)).toBe(clientKey(callRequest({ other: 1 }), secret));
+  });
+
+  test("the limiter keys on Vercel's own header, not on x-forwarded-for a client can write", async () => {
+    await withStandIn({}, async (s) => {
+      await withEnv(callEnv(s.base, { LOKA_CALL_CODE: CODE, VERCEL_ENV: "production" }), async () => {
+        const d = deps();
+        // A different spoofed x-forwarded-for on every guess, one x-vercel-forwarded-for: one bucket.
+        for (let i = 0; i < FAILURE_LIMIT; i += 1) {
+          const r = await handleCall(fromClient("203.0.113.5", { to: NUMBER, lang: "en", code: `guess-${i}` }, `192.0.2.${i}`), d);
+          expect(r.status).toBe(403);
+        }
+        expect(d.failures.size).toBe(1);
+        const next = await handleCall(fromClient("203.0.113.5", { to: NUMBER, lang: "en", code: "guess-x" }, "192.0.2.200"), d);
+        expect(next.status).toBe(429);
+        expect((await next.json()).limit).toBe("desk_code");
+        // x-real-ip when Vercel's header is missing.
+        const realIp = (address: string, code: string) =>
+          new Request("http://x/api/call", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-real-ip": address, "x-forwarded-for": "192.0.2.77" },
+            body: JSON.stringify({ to: NUMBER, lang: "en", code }),
+          });
+        expect((await handleCall(realIp("198.51.100.20", "nope"), d)).status).toBe(403);
+        expect(d.failures.size).toBe(2);
+        // On a deployment, a request with neither header is refused, never put in a shared bucket.
+        const bare = await handleCall(new Request("http://x/api/call", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": "192.0.2.1" },
+          body: JSON.stringify({ to: NUMBER, lang: "en", code: CODE }),
+        }), d);
+        expect(bare.status).toBe(400);
+        expect(await bare.json()).toEqual({ error: "bad_request", reason: "the request carries no client address" });
+        expect(d.failures.size).toBe(2);
+        expect(s.seen.rpc).toHaveLength(0);
+        expect(s.seen.vonage).toHaveLength(0);
+      });
+    });
+    const secret = randomBytes(32).toString("hex");
+    // Only a local run (no VERCEL_ENV) may use the one constant key.
+    withEnvSync({ VERCEL_ENV: undefined }, () => {
+      expect(clientKey(callRequest({}), secret)).toMatch(/^[0-9a-f]{64}$/);
+      expect(clientKey(callRequest({}), secret)).toBe(clientKey(callRequest({ other: 1 }), secret));
+    });
+    for (const vercelEnv of ["production", "preview", "development"]) {
+      withEnvSync({ VERCEL_ENV: vercelEnv }, () => expect(clientKey(callRequest({}), secret), vercelEnv).toBeNull());
+    }
   });
 });
 
@@ -926,7 +974,7 @@ test.describe("limits end state (table)", () => {
             handleCall(
               new Request("http://x/api/call", {
                 method: "POST",
-                headers: { "content-type": "application/json", ...(m.client ? { "x-forwarded-for": m.client } : {}) },
+                headers: { "content-type": "application/json", ...(m.client ? { "x-vercel-forwarded-for": m.client } : {}) },
                 body: m.raw ?? JSON.stringify(m.body),
               }),
               d,
@@ -987,9 +1035,9 @@ test.describe("limits end state (table)", () => {
 
 test.describe("the desk code fails closed on Vercel", () => {
   for (const vercelEnv of ["production", "preview"]) {
-    test(`VERCEL_ENV=${vercelEnv}: no code or a 4-character code turns calls off; 6 or more works`, async () => {
+    test(`VERCEL_ENV=${vercelEnv}: no code, a short code or one that is not letters and digits turns calls off; 8 letters and digits work`, async () => {
       await withStandIn({}, async (s) => {
-        for (const code of [undefined, "", "1234", "12345"]) {
+        for (const code of [undefined, "", "1234", "123456", "abc1234", "abcdefgh", "12345678", "abcd-1234", "abcd 1234"]) {
           const r = await withEnv(callEnv(s.base, { VERCEL_ENV: vercelEnv, LOKA_CALL_CODE: code }), () =>
             handleCall(callRequest({ to: NUMBER, lang: "en", code: code ?? "x" }), deps()),
           );
@@ -997,8 +1045,15 @@ test.describe("the desk code fails closed on Vercel", () => {
           expect(await r.json(), String(code)).toEqual({ error: "calls_off", reason: "not set: LOKA_CALL_CODE" });
         }
         expect(s.seen.rpc).toHaveLength(0);
-        const r = await withEnv(callEnv(s.base, { VERCEL_ENV: vercelEnv, LOKA_CALL_CODE: "123456" }), () =>
-          handleCall(callRequest({ to: NUMBER, lang: "en", code: "123456" }), deps()),
+        const r = await withEnv(callEnv(s.base, { VERCEL_ENV: vercelEnv, LOKA_CALL_CODE: "abcd1234" }), () =>
+          handleCall(
+            new Request("http://x/api/call", {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-vercel-forwarded-for": "203.0.113.9" },
+              body: JSON.stringify({ to: NUMBER, lang: "en", code: "abcd1234" }),
+            }),
+            deps(),
+          ),
         );
         expect(r.status).toBe(200);
         expect(s.seen.vonage).toHaveLength(1);

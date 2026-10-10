@@ -19,8 +19,10 @@
 // DeskCodeFailures, for wrong or missing desk codes, which never touch the caps above (so
 // nobody can lock judges out by sending bad codes): at most FAILURE_LIMIT failures in
 // FAILURE_WINDOW_MS per client, keyed by HMAC-SHA256(a random secret made when the server
-// starts, the client's address), never the address itself. Clients behind one address share
-// a key, so the limit is loose enough for typos at a venue.
+// starts, the client's address), never the address itself. The address comes from Vercel's
+// x-vercel-forwarded-for, then x-real-ip, never the client-writable x-forwarded-for; a
+// deployed request with neither is refused (lib/call-server.ts clientKey). Clients behind one
+// address share a key, so the limit is loose enough for typos at a venue.
 //
 // Every map is bounded: entries expire with their window, and a map at its maximum size drops
 // its oldest entry. With the caps far below those maximums, nothing is dropped in practice;

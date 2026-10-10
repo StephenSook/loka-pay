@@ -50,8 +50,12 @@ export const DEFAULT_PUBLIC_ORIGIN = "https://zerobars.us";
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 const TTS_TIMEOUT_MS = 20_000;
 const MAX_BODY_CHARS = 2048;
-/** On a deployed site the desk code is required and at least this long. */
-export const MIN_DESK_CODE_CHARS = 6;
+/**
+ * On a deployed site the desk code is required: at least 8 letters and digits, with at least
+ * one of each. Its entropy and the per-client failure limit together bound guessing; there is
+ * no site-wide failure cap, because one attacker could then lock every judge out.
+ */
+export const DEPLOYED_DESK_CODE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,64}$/;
 
 export interface CallConfig {
   applicationId: string;
@@ -141,13 +145,13 @@ export function callConfig(): CallConfigResult {
     .filter(([, v]) => v === "")
     .map(([name]) => name);
   if (missing.length > 0) return off(`not set: ${missing.join(", ")}`);
-  // The desk code fails closed on Vercel (production and preview): without a code of at least
-  // MIN_DESK_CODE_CHARS characters, calls are off there. Only a local run (no VERCEL_ENV) may go
-  // without one. NODE_ENV alone cannot tell them apart: the local e2e build runs next start
-  // with NODE_ENV=production.
+  // The desk code fails closed on Vercel (production and preview): without a code that matches
+  // DEPLOYED_DESK_CODE, calls are off there. Only a local run (no VERCEL_ENV) may go without one.
+  // NODE_ENV alone cannot tell them apart: the local e2e build runs next start with
+  // NODE_ENV=production.
   const deskCode = process.env.LOKA_CALL_CODE?.trim() || null;
   const deployed = process.env.VERCEL_ENV === "production" || process.env.VERCEL_ENV === "preview";
-  if (deployed && (deskCode === null || deskCode.length < MIN_DESK_CODE_CHARS)) return off("not set: LOKA_CALL_CODE");
+  if (deployed && (deskCode === null || !DEPLOYED_DESK_CODE.test(deskCode))) return off("not set: LOKA_CALL_CODE");
   if (!/^[A-Za-z0-9-]{8,64}$/.test(applicationId)) return off("LOKA_VONAGE_APPLICATION_ID is not a Vonage application id");
   if (!/^[1-9]\d{6,14}$/.test(fromNumber)) return off("LOKA_VONAGE_FROM_NUMBER must be the number's digits in E.164 form, without the plus");
   if (Buffer.byteLength(secret, "utf8") < 32) return off("LOKA_CALL_SECRET must be at least 32 bytes");
@@ -259,14 +263,28 @@ export const PROCESS_DEPS: CallDeps = {
 };
 
 /**
- * The desk-code failure limiter's key for this request: HMAC-SHA256(per-process secret, the
- * client's address), where the address is the first x-forwarded-for value (Vercel sets it to
- * the client's address), or one shared key when there is none. The address itself is never
- * kept, logged or returned.
+ * The client's address for the desk-code failure limiter: Vercel's own x-vercel-forwarded-for
+ * (set by its edge, which a client cannot forge), then x-real-ip. Never x-forwarded-for, whose
+ * first value a client can write itself to get a fresh bucket for every guess.
  */
-export function clientKey(request: Request, clientSecret: string): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0].trim();
-  return createHmac("sha256", clientSecret).update(forwarded || "no-forwarded-for", "utf8").digest("hex");
+export function clientAddress(request: Request): string | null {
+  const vercel = request.headers.get("x-vercel-forwarded-for")?.split(",")[0].trim();
+  if (vercel) return vercel;
+  const real = request.headers.get("x-real-ip")?.trim();
+  return real || null;
+}
+
+/**
+ * The desk-code failure limiter's key for this request: HMAC-SHA256(per-process secret, the
+ * client's address). With no address, a local run (no VERCEL_ENV) uses one constant key, and a
+ * deployment gets null, so the request is refused rather than put in a bucket everyone shares
+ * (one attacker would then lock everyone out). The address itself is never kept, logged or
+ * returned.
+ */
+export function clientKey(request: Request, clientSecret: string): string | null {
+  const address = clientAddress(request);
+  if (address === null && process.env.VERCEL_ENV) return null;
+  return createHmac("sha256", clientSecret).update(address ?? "local run", "utf8").digest("hex");
 }
 
 const NO_STORE = { "cache-control": "no-store" };
@@ -416,6 +434,7 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   const { deskCode } = config.config;
   if (deskCode !== null) {
     const client = clientKey(request, deps.clientSecret);
+    if (client === null) return refuse(400, "bad_request", "the request carries no client address");
     const blocked = deps.failures.check(client);
     if (!blocked.ok) return limited(blocked);
     if (code === null || !deskCodeMatches(deskCode, code)) {
