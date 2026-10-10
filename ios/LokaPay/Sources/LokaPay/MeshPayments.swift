@@ -413,8 +413,13 @@ public enum MeshReturns {
     }
 
     /// The merchant's replies that still need to go back over the mesh, in order: the ack once the
-    /// note is accepted, then the receipt once the chain decided. `sent` holds what already went.
-    public static func repliesDue(ack: String?, receipt: String?, sent: [String]) -> [String] {
-        [ack, receipt].compactMap { $0 }.filter { !sent.contains($0) }
+    /// note is on screen, then the receipt once the chain decided. `sent` holds the `replyKey`s of
+    /// what already went. Keys include the payment's presentation, so the same verified ack goes
+    /// again when a resend brings the payment back, and never twice for one presentation.
+    public static func repliesDue(ack: String?, receipt: String?, presentation: UInt64, sent: [String]) -> [String] {
+        [ack, receipt].compactMap { $0 }.filter { !sent.contains(replyKey($0, presentation: presentation)) }
     }
+
+    /// What `repliesDue` remembers for a reply that went (or has no Bluetooth route).
+    public static func replyKey(_ text: String, presentation: UInt64) -> String { String(presentation) + "|" + text }
 }

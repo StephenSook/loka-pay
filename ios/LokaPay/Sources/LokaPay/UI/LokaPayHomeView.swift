@@ -80,7 +80,8 @@ public struct LokaPayHomeView: View {
     private let bluetoothOn: Bool?
     private let meshReturns: PaymentInbox?
     private let meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
-    /// Replies `meshReply` settled (newest last, bounded), so each goes once.
+    /// Reply keys (`MeshReturns.replyKey`) `meshReply` settled, newest last and bounded, so each reply
+    /// goes once per presentation of its payment.
     @State private var repliesSent: [String] = []
 
     public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay) {
@@ -126,6 +127,7 @@ public struct LokaPayHomeView: View {
             meshReturns?.detach(payModel)
         }
         .onChange(of: receiveModel.payment?.ackText) { sendDueReplies() }
+        .onChange(of: receiveModel.paymentPresentation) { sendDueReplies() }
         .onChange(of: receiveModel.settlement?.receiptText) { sendDueReplies() }
     }
 
@@ -134,9 +136,10 @@ public struct LokaPayHomeView: View {
     private func sendDueReplies() {
         guard let meshReply else { return }
         let origin = receiveModel.payment?.meshOrigin ?? .notOverBluetooth
-        let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText,
-                                         receipt: receiveModel.settlement?.receiptText, sent: repliesSent)
-        let settled = due.filter { meshReply($0, origin) }
+        let presentation = receiveModel.paymentPresentation
+        let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText, receipt: receiveModel.settlement?.receiptText,
+                                         presentation: presentation, sent: repliesSent)
+        let settled = due.filter { meshReply($0, origin) }.map { MeshReturns.replyKey($0, presentation: presentation) }
         guard !settled.isEmpty else { return }
         repliesSent = Array((repliesSent + settled).suffix(32))
     }

@@ -437,13 +437,41 @@ struct MeshPaymentTests {
         #expect(router.takeOutgoing(for: "merchant-a").isEmpty)
     }
 
-    @Test("each merchant reply goes once, ack first")
+    @Test("each merchant reply goes once per presentation of its payment, ack first")
     func repliesDue() {
-        #expect(MeshReturns.repliesDue(ack: nil, receipt: nil, sent: []).isEmpty)
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, sent: []) == ["Y1"])
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, sent: ["Y1"]).isEmpty)
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", sent: ["Y1"]) == ["X1"])
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", sent: []) == ["Y1", "X1"])
+        let y1 = MeshReturns.replyKey("Y1", presentation: 1)
+        #expect(MeshReturns.repliesDue(ack: nil, receipt: nil, presentation: 1, sent: []).isEmpty)
+        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 1, sent: []) == ["Y1"])
+        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 1, sent: [y1]).isEmpty)
+        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", presentation: 1, sent: [y1]) == ["X1"])
+        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", presentation: 1, sent: []) == ["Y1", "X1"])
+        // The same ack bytes on a new presentation (a resend brought the payment back) go again.
+        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 2, sent: [y1]) == ["Y1"])
+    }
+
+    @Test("a resend that brings a payment back re-offers its stored ack to the first sender")
+    func resendReoffersStoredAck() async throws {
+        let router = MeshPaymentRouter()
+        let receive = receiveModel(router)
+        receive.startInbox()
+        let signed = try note()
+        router.receive(allowanceText, from: "contact-a", fromContact: true, packetID: "a-1")
+        router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-1")
+        await receive.inboxDrained()
+        let ack = try #require(receive.payment?.ackText)
+        let first = receive.paymentPresentation
+        let sent = [MeshReturns.replyKey(ack, presentation: first)]
+        #expect(MeshReturns.repliesDue(ack: ack, receipt: nil, presentation: first, sent: sent).isEmpty)
+
+        // The ack expired undelivered; the merchant tapped Next payment and the payer resent.
+        receive.nextPayment()
+        router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-2")
+        await receive.inboxDrained()
+        #expect(receive.payment?.ackText == ack)
+        #expect(receive.paymentPresentation == first + 1)
+        #expect(MeshReturns.repliesDue(ack: receive.payment?.ackText, receipt: nil,
+                                       presentation: receive.paymentPresentation, sent: sent) == [ack])
+        #expect(router.replyTarget(for: ack, origin: try #require(receive.payment?.meshOrigin)) == .peer("contact-a"))
     }
 
     // MARK: One Bluetooth hop, both ways, in software

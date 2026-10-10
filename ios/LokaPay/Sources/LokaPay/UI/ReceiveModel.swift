@@ -99,6 +99,10 @@ public final class ReceiveModel {
     /// payer's payment, until its allowance arrives or the merchant taps Clear the waiting note.
     public private(set) var waitingNote: SignedNote?
     public private(set) var payment: ReceivedPayment?
+    /// Counts each time a payment is put on screen (accepted, or brought back by a resend or a tap).
+    /// The mesh glue offers the ack and receipt again for each, so a payer who resends after an
+    /// undelivered ack gets it, while a redraw of the same screen sends nothing twice.
+    public private(set) var paymentPresentation: UInt64 = 0
     public private(set) var settlement: SettledPayment?
     /// The last HTTP 202 for this note: the chain has not decided yet. Unsigned.
     public private(set) var pendingSettlement: PendingSettlement?
@@ -547,6 +551,7 @@ public final class ReceiveModel {
         if waitingNote?.noteId == note.noteId { waitingNote = nil }
         let origin: MeshOrigin = delivery.map { .delivery($0) } ?? .notOverBluetooth
         acceptedOrigins = Array((acceptedOrigins.filter { $0.noteId != note.noteId } + [(note.noteId, origin)]).suffix(256))
+        paymentPresentation &+= 1
         payment = ReceivedPayment(note: note, certificate: certificate,
                                   receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
                                   receivedWithZeroBars: zeroBars, ack: nil, meshOrigin: origin)
@@ -981,6 +986,7 @@ public final class ReceiveModel {
         show(received.certificate)
         conflictAllowanceId = nil
         if waitingNote?.noteId == received.note.noteId { waitingNote = nil }
+        paymentPresentation &+= 1
         payment = received
         settlement = nil
         pendingSettlement = nil
