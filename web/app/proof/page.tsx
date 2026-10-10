@@ -7,7 +7,7 @@ import { ArrowUpRightIcon } from "@/components/icons";
 import { CARD, ClaimChip, PAGE, type ClaimStatus } from "@/components/judge-ui";
 import { ReservesPanel } from "@/components/reserves-panel";
 import { readProgramFacts, readReserves, type ProgramFacts, type Read, type ReservesRead } from "@/lib/chain";
-import { INIT_TX_SIGNATURE } from "@/lib/facts";
+import { INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readBuiltThisWeekend } from "@/lib/github";
 import { PINS } from "@/lib/pins";
 import { REPO_URL } from "@/lib/site";
@@ -142,7 +142,8 @@ function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRe
       id: "testflight",
       text: "Anyone can install the iPhone app from a public TestFlight link.",
       status: "building",
-      note: "Build 1 is in Apple's beta review.",
+      // The same dated status /judge shows (lib/facts.ts), so one edit updates both pages.
+      note: `${TESTFLIGHT_STATUS}. Status as of ${TESTFLIGHT_STATUS_AS_OF}.`,
     },
   ];
 }

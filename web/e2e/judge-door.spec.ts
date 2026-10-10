@@ -204,6 +204,10 @@ test("/proof: Live claims link their evidence, Building claims link nothing; res
   }
   await expect(page.getByTestId("claim-server")).toHaveAttribute("data-status", "building");
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");
+  // The same dated status as /judge step 6.
+  await expect(page.getByTestId("claim-testflight")).toContainText(
+    "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves. Status as of 2026-10-10.",
+  );
 
   // Proof of reserves: liabilities plus the difference equal the assets, as printed.
   const reserves = page.getByTestId("reserves");
