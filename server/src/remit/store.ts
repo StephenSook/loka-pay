@@ -23,7 +23,7 @@ export class RegistrationStore {
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(namespace,kind,key_hash) DO UPDATE
       SET id=EXCLUDED.id,plan=EXCLUDED.plan,attempt=NULL,result=NULL
       WHERE registration_jobs.kind='payer' AND registration_jobs.result->>'statusCode' IN ('200','201')
-        AND (registration_jobs.plan->>'expiry')::bigint <= $6 RETURNING id`,
+        AND (registration_jobs.plan->>'expiry')::bigint < $6 RETURNING id`,
     [this.namespace, job.plan.kind, job.plan.keyHash, job.id, JSON.stringify(job.plan), now]);
     return result.rows.length === 1;
   }

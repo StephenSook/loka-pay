@@ -116,7 +116,11 @@ test('taken random ids and proven confirmed collisions retry, uncertainty does n
 
 test('renewal is allowed only after a completed allowance expires and receives a fresh id', async () => {
   const f = await fixture(); const publicKey = key();
-  const first = (await f.post('payers', { publicKey })).json(); f.setNow(1800003601);
+  const first = (await f.post('payers', { publicKey })).json();
+  f.setNow(1800003600);
+  const atExpiry = await f.post('payers', { publicKey }); expect(atExpiry.statusCode).toBe(200); expect(atExpiry.json()).toEqual(first);
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  f.setNow(1800003601);
   const next = await f.post('payers', { publicKey }); expect(next.statusCode).toBe(201);
   expect(next.json().allowanceId).not.toBe(first.allowanceId); expect(f.chain.send).toHaveBeenCalledTimes(2);
 });
