@@ -12,6 +12,7 @@ import { Connection, Keypair, PublicKey, VersionedTransaction, type Signer } fro
 import * as P from '@lokapay/protocol';
 import { buildRedeemTransaction } from '../settle/transaction.js';
 import { limitsFromSimulation, summarizeRows, type RedeemRow } from './measurement.js';
+import { saveJournal } from './journal.js';
 
 interface RunInput { payerKeyPath: string; feePayerPath: string; allowanceId: string; payeeKeyHash: string;
   amountUnits: string; expiry: string; startSerial?: number; rpcUrl?: string }
@@ -101,7 +102,7 @@ export async function runRedeems(source: 'measurement' | 'load_test'): Promise<v
     generatedAt: new Date().toISOString(), simulation, limits, rows, attempts, rpc429,
     complete: false, scope: 'Sequential direct-chain redeems including metadata polling. This is not server or merchant-outbox throughput.' };
   mkdirSync(dirname(output), { recursive: true });
-  const save = () => writeFileSync(output, JSON.stringify(report, null, 2) + '\n');
+  const save = () => saveJournal(output, report);
   writeFileSync(output, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
   const started = performance.now();
   try {
