@@ -7,7 +7,8 @@
 // while a read is pending or failed.
 //
 // At the judge desk (PLAN.md 3.84): a failed row is named from its error code before its details
-// arrive (lib/live-desk.ts), never shown as raw JSON.
+// arrive (lib/live-desk.ts), never shown as raw JSON; and rows docs/FACTS.json records carry
+// their label (lib/row-labels.ts, built on the server).
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -21,13 +22,23 @@ import {
   type Row,
 } from "@/lib/program-feed";
 import { refusalOf, refusalWords } from "@/lib/live-desk";
+import type { RowLabel } from "@/lib/row-labels";
 import { RPC_URL, WS_URL, explorerTx } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
 import { OutlineChip, StateChip } from "./chips";
 import { AlertIcon, CheckIcon, CircleIcon, ClockIcon } from "./icons";
 import { BUTTON_SECONDARY, Mono, OutLink, TxStatusChip, When } from "./judge-ui";
 
-export function LiveFeed({ programId, kiosk }: { programId: string; kiosk: boolean }) {
+export function LiveFeed({
+  programId,
+  kiosk,
+  labels = {},
+}: {
+  programId: string;
+  kiosk: boolean;
+  /** Labels for the rows docs/FACTS.json records, by signature (lib/row-labels.ts). */
+  labels?: Record<string, RowLabel>;
+}) {
   const [state, setState] = useState(INITIAL_FEED_STATE);
   const feed = useRef<ProgramFeed | null>(null);
 
@@ -103,7 +114,7 @@ export function LiveFeed({ programId, kiosk }: { programId: string; kiosk: boole
         ) : null}
         <ul className="flex flex-col gap-4" data-testid="tx-list">
           {sorted.map((row) => (
-            <TxRow key={row.signature} row={row} kiosk={kiosk} />
+            <TxRow key={row.signature} row={row} kiosk={kiosk} label={labels[row.signature]} />
           ))}
         </ul>
       </section>
@@ -161,7 +172,7 @@ function HistoryLine({ history }: { history: History }) {
   );
 }
 
-function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
+function TxRow({ row, kiosk, label }: { row: Row; kiosk: boolean; label: RowLabel | undefined }) {
   const title = row.actions.length > 0 ? row.actions.join(", ") : null;
   const refusal = refusalOf(row);
   return (
@@ -186,10 +197,16 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
           )}
         </h3>
         <span className="flex flex-wrap items-center gap-2">
+          {label ? <OutlineChip label={label.chip} Icon={CheckIcon} testId="tx-label" /> : null}
           {row.arrivedLive ? <OutlineChip label="New" Icon={CircleIcon} testId="tx-new" /> : null}
           <TxStatusChip result={row.result} errorName={refusal?.kind === "program" ? refusal.error.name : null} />
         </span>
       </div>
+      {label ? (
+        <p className="text-sm text-muted" data-testid="tx-label-detail">
+          {label.detail}
+        </p>
+      ) : null}
       {/* Amounts only for a transaction known to have succeeded (lib/logs.ts). */}
       {row.result === "succeeded" && row.amounts.length > 0 ? (
         <ul className="flex flex-col gap-1" data-testid="tx-amounts">

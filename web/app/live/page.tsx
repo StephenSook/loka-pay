@@ -4,9 +4,11 @@ import { SandboxChip } from "@/components/chips";
 import { LiveFeed } from "@/components/live-feed";
 import { Mono } from "@/components/judge-ui";
 import { PINS } from "@/lib/pins";
+import { rowLabels } from "@/lib/row-labels";
 
 // /live (PLAN.md 3.72): the browser reads the program's transactions from devnet itself
-// (components/live-feed.tsx). `/live?kiosk=1` uses large type for a screen at the table.
+// (components/live-feed.tsx). `/live?kiosk=1` uses large type for a screen at the table. The labels
+// for the rows docs/FACTS.json records are built here, on the server, so the browser never loads FACTS.
 
 export const metadata: Metadata = {
   title: "Live | LOKA Pay",
@@ -42,7 +44,7 @@ export default async function LivePage({ searchParams }: PageProps<"/live">) {
           </p>
         )}
       </header>
-      <LiveFeed programId={PINS.programId} kiosk={big} />
+      <LiveFeed programId={PINS.programId} kiosk={big} labels={rowLabels()} />
     </main>
   );
 }

@@ -122,3 +122,39 @@ test("/live: refused rows are named from the error code before their details loa
   await expect(row(page, REFUSED_IPHONE).getByTestId("tx-error")).toHaveText(SERIAL_USED);
   await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
 });
+
+test("/live: with details, the iPhone pair is labelled from FACTS and still no row shows raw error JSON", async ({ page }) => {
+  // Reading all 20 rows' details takes three batches at 8 per 11 s.
+  test.setTimeout(60_000);
+  await routeDevnet(page, LIST);
+  await routeSocket(page);
+  await page.goto("/live");
+  const settled = row(page, SETTLED_IPHONE);
+  // Details arrive 8 per 11 s (lib/program-feed.ts pacing), newest first; this row is in the second batch.
+  await expect(settled).toHaveAttribute("data-details", "read", { timeout: 20_000 });
+  await expect(settled.getByTestId("tx-label")).toHaveText("iPhone payment");
+  await expect(settled.getByTestId("tx-label-detail")).toHaveText("Signed on an iPhone (Secure Enclave key), paid offline by camera QR, Sat Oct 10 4:23 PM ET");
+  const refused = row(page, REFUSED_IPHONE);
+  await expect(refused).toHaveAttribute("data-details", "read", { timeout: 20_000 });
+  await expect(refused.getByTestId("tx-label")).toHaveText("iPhone cheat");
+  await expect(refused.getByTestId("tx-label-detail")).toHaveText(
+    "Same allowance and serial signed again on that iPhone, refused by Solana: SerialUsed (6011), Sat Oct 10 4:31 PM ET",
+  );
+  await expect(refused.getByTestId("tx-error")).toHaveText(SERIAL_USED);
+  // The 5:05 PM pair has no FACTS entry, so it carries no label.
+  await expect(row(page, REFUSED_RUN2).getByTestId("tx-label")).toHaveCount(0);
+  await expect(page.getByTestId("tx-label")).toHaveCount(2);
+  await expect.poll(() => page.locator('[data-testid="tx-row"][data-details="reading"]').count(), { timeout: 30_000 }).toBe(0);
+  await expect(page.getByTestId("tx-list")).not.toContainText("InstructionError");
+});
+
+test("/live: the test-key pair is labelled Test key from FACTS", async ({ page }) => {
+  // The list as devnet sent it, with the earlier recorded test-key pair after it (older slots).
+  await routeDevnet(page, [...LIST, entryFor(older.redeem), entryFor(older.refusedRedeem)]);
+  await routeSocket(page);
+  await page.goto("/live");
+  for (const signature of [TEST_KEY_SETTLED, TEST_KEY_REFUSED]) {
+    await expect(row(page, signature).getByTestId("tx-label")).toHaveText("Test key");
+    await expect(row(page, signature).getByTestId("tx-label-detail")).toHaveText("Signed outside the iPhone app with a test key, Sat Oct 10 2:01 AM ET.");
+  }
+});
