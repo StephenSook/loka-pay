@@ -518,6 +518,16 @@ struct SettlementPendingTests {
         }
     }
 
+    @Test("identity refusals are 422s named by the check, never a protocol violation",
+          arguments: ["unknown_allowance", "unknown_merchant", "payer_mismatch"])
+    func identityRefusals(check: String) async throws {
+        let stub = StubTransport([APIFixtures.errorReply(422, check)])
+        await #expect(throws: SettlementError.refused(check: check, message: "m")) {
+            try await APIFixtures.client(stub).settle(note: APIFixtures.note(0))
+        }
+        #expect(stub.requests.count == 1, "a 422 is never retried automatically")
+    }
+
     @Test("HTTP 202 on upload or read is a pending result with the in-flight signature")
     func pendingResult() async throws {
         let stub = StubTransport([APIFixtures.pending(), APIFixtures.pending(signature: nil, retryAfter: nil),
