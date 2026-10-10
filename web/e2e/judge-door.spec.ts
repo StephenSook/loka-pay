@@ -345,7 +345,11 @@ test("/proof: every read-backed claim Live from its current read, exact reserves
   await expect(page.getByTestId("built-commits")).toHaveText(String(EXPECTED.commits));
   await expect(page.getByTestId("built-authors")).toHaveText(String(EXPECTED.authors.length));
   await expect(page.getByTestId("built-files")).toHaveText(String(EXPECTED.filesChanged));
-  await expect(page.getByTestId("built-additions")).toHaveText(String(EXPECTED.additions));
+  await expect(page.getByTestId("built-additions")).toHaveText(EXPECTED.additions);
+  await expect(page.getByTestId("built-additions-note")).toContainText(
+    `GitHub gave no line count for ${EXPECTED.filesWithoutLineCount} of the ${EXPECTED.filesChanged} files`,
+  );
+  await expect(page.getByTestId("built-additions-note")).toContainText("git diff --shortstat pre-hacklanta-kit main");
   await expect(page.getByTestId("built-logins")).toContainText(EXPECTED.authors.join(", "));
 
   // GITHUB_TOKEN: the server sent it to the configured GitHub API, and the page never shows it.

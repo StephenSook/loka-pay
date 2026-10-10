@@ -36,8 +36,10 @@ export const EXPECTED = {
   reserves: { assets: "9.50", allowances: "4.50", bonds: "1.50", merchants: "2.50", liabilities: "8.50", difference: "1.00", verdict: "Covered" },
   commits: 3,
   authors: ["pravinireri", "StephenSook"],
-  filesChanged: 2,
-  additions: 150,
+  filesChanged: 3,
+  /** A floor: one listed file has no line count. */
+  additions: "150+",
+  filesWithoutLineCount: 1,
   mainCommit: MAIN_SHA.slice(0, 7),
   ci: { ios: "success", android: "success", program: "success", server: "failure", web: "success", hygiene: "success" } as Record<string, string>,
 };
@@ -135,7 +137,9 @@ function githubAnswer(pathname: string): unknown {
     return {
       total_commits: EXPECTED.commits,
       commits: [commit("StephenSook", "2026-10-10T00:44:26Z"), commit("pravinireri", "2026-10-10T02:00:00Z"), commit("StephenSook", "2026-10-10T05:23:51Z")],
-      files: [{ additions: 120 }, { additions: 30 }],
+      // The third file has no patch and zero additions, the way GitHub reports a binary or
+      // too-large diff, so the panel must show a floor and say why.
+      files: [{ additions: 120, patch: "@@ -0,0 +1,120 @@" }, { additions: 30, patch: "@@ -0,0 +1,30 @@" }, { additions: 0 }],
     };
   }
   if (pathname === "/github/repos/StephenSook/loka-pay/commits/main/check-runs") {
