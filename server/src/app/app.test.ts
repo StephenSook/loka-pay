@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Writable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { Keypair, type Connection } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import * as P from '@lokapay/protocol';
 import { testDatabase } from '../settle/test-database.js';
@@ -37,7 +38,7 @@ describe('GET /api/health (API-V1 section 6)', () => {
     const first = await app.inject({ url: '/api/health' });
     const second = await app.inject({ url: '/api/health' });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toEqual({ ok: true, commit: 'abc1234', cluster: 'devnet', programId: pins.programId, slot: 1001 });
+    expect(first.json()).toMatchObject({ ok: true, commit: 'abc1234', cluster: 'devnet', programId: pins.programId, slot: 1001 });
     expect(second.json().slot).toBe(1002);
     await app.close();
   });
@@ -46,7 +47,7 @@ describe('GET /api/health (API-V1 section 6)', () => {
     const app = await buildApp(options({ connection: rpc(async () => { throw new Error('rpc down'); }) }));
     const response = await app.inject({ url: '/api/health' });
     expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ ok: false, commit: 'abc1234', cluster: 'devnet', programId: pins.programId, slot: null });
+    expect(response.json()).toMatchObject({ ok: false, commit: 'abc1234', cluster: 'devnet', programId: pins.programId, slot: null });
     await app.close();
   });
 });
@@ -142,4 +143,50 @@ describe('loadConfig', () => {
     const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     expect(() => ed25519Seed(String(privateKey.export({ format: 'pem', type: 'pkcs8' })))).toThrow('not Ed25519');
   });
+});
+
+test('missing Phase 3 config leaves routes unregistered and names each unavailable route in health', async () => {
+  const app = await buildApp(options());
+  try {
+    const health = (await app.inject('/api/health')).json();
+    for (const url of ['/api/volume', '/trust', '/v1/remittances', '/api/reserves']) {
+      expect(health.phase3Routes[url]).toEqual({ registered: false, reason: 'missing_config' });
+      expect((await app.inject({ method: url === '/v1/remittances' ? 'POST' : 'GET', url, ...(url === '/v1/remittances' ? { payload: {} } : {}) })).statusCode).toBe(404);
+    }
+  } finally { await app.close(); }
+});
+
+test('configured Phase 3 modules boot, inherit safe logging and fail closed on unavailable live evidence', async () => {
+  const send = Keypair.generate(); const mintData = Buffer.alloc(82); mintData[44] = 6; mintData[45] = 1;
+  const connection = { getSlot: async () => 1, getAccountInfo: async () => ({ data: mintData, owner: TOKEN_PROGRAM_ID }) } as unknown as Connection;
+  const lines: string[] = []; const stream = new Writable({ write(chunk, _encoding, done) { lines.push(String(chunk)); done(); } });
+  const app = await buildApp(options({ connection, logger: privateLogger(stream), pins: { ...pins, wallets: { ...pins.wallets, send: send.publicKey.toBase58() } },
+    phase3: { volume: { measurementPath: 'missing-evidence' }, trust: true, reserves: true,
+      remittance: { wallet: send, policy: { capUnits: '1', offlineLimitUnits: '1', bondUnits: '0', lifetimeSeconds: 60,
+        earmarks: ['ab'.repeat(32)], daily: { units: '1', funderLamports: '1', feeLamports: '1' } } } } }));
+  try {
+    const health = (await app.inject('/api/health')).json();
+    for (const url of ['/api/volume', '/trust', '/api/reserves']) {
+      expect(health.phase3Routes[url]).toEqual({ registered: true, reason: null });
+      const response = await app.inject(url); expect(response.statusCode).toBe(503);
+      expect(response.json().error).not.toBe('unknown_route');
+    }
+    expect(health.phase3Routes['/v1/remittances']).toEqual({ registered: true, reason: null });
+    expect((await app.inject({ method: 'POST', url: '/v1/remittances', payload: { recipientAllowanceId: 'planted-secret' },
+      remoteAddress: '203.0.113.77' })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/reserves', payload: {} })).statusCode).toBe(404);
+  } finally { await app.close(); }
+  expect(lines.join('')).not.toContain('planted-secret'); expect(lines.join('')).not.toContain('203.0.113.77');
+  for (const line of lines) expect(Object.keys(JSON.parse(line)).sort()).toEqual(['level', 'method', 'route', 'status']);
+});
+
+test('an optional send wallet mismatch does not prevent the core app from booting', async () => {
+  const app = await buildApp(options({ pins: { ...pins, wallets: { ...pins.wallets, send: Keypair.generate().publicKey.toBase58() } },
+    phase3: { remittance: { wallet: wallets.team.funder, policy: { capUnits: '1', offlineLimitUnits: '1', bondUnits: '0',
+      lifetimeSeconds: 60, earmarks: ['ab'.repeat(32)], daily: { units: '1', funderLamports: '1', feeLamports: '1' } } } } }));
+  try {
+    const health = await app.inject('/api/health'); expect(health.statusCode).toBe(200);
+    expect(health.json().phase3Routes['/v1/remittances']).toEqual({ registered: false, reason: 'initialization_failed' });
+    expect((await app.inject({ method: 'POST', url: '/v1/remittances', payload: {} })).statusCode).toBe(404);
+  } finally { await app.close(); }
 });

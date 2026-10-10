@@ -121,7 +121,7 @@ Request:
 - The server runs the note through PAYMENT-V1 section 6 in order. A failure is HTTP 422 named by that check (`length`, `prefix`, `cluster`, `currency`, `amount_zero`, `wrong_program`, `wrong_mint`, `bad_pubkey`, `high_s`, `bad_signature`). A note shorter than 141 bytes has no note id, which is fine: a 422 does not need one.
 - When `ack` is present, the server then checks it: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is HTTP 422 `bad_ack`. A valid note with a bad ack is refused rather than settled without the ack, so the caller learns its ack is broken.
 - Then the identity checks, before the note id is claimed or anything is sent: the allowance account for the note's allowance id must exist (else 422 `unknown_allowance`), the merchant record for its payee key hash must exist (else 422 `unknown_merchant`), and the note's payer key must equal the allowance's stored payer key (else 422 `payer_mismatch`). Neither the allowance's payer key nor the existence of a record changes once created, so the server may cache them. Without the payer check, anyone who had seen a note could re-sign its 141 bytes with their own key: the chain would reject that wire, and its failed decision would be cached under the genuine note's id and block the real payment. Found by the Codex review of #19.
-- **The server does not pre-check spend state** (used serial, cap, expiry, earmark). The identity checks above are not spend state: the genuine payer's reused serial still reaches the chain. Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+- **The server does not pre-check spend state** (used serial, cap, expiry, earmark). Normal redeems keep RPC preflight enabled. Only an explicitly operator-selected deliberate devnet cheat gateway skips it to produce the reused-serial failed transaction and explorer evidence. POST /v1/notes has no client-controlled preflight bypass. A normal preflight refusal is not an on-chain decision and remains pending under the existing saved-attempt rules.
 - The server reads the allowance and merchant accounts and checks their owners, discriminators and stored identities. An RPC failure returns an unsigned HTTP 503 and nothing is claimed.
 
 A decided-note replay still passes note, ACK and payer-binding validation, then reads the journal before the per-allowance limiter. It returns the existing decision without consuming upload quota. Pending and new submissions still count.
@@ -186,7 +186,35 @@ Phones use this to recover a confirmation after a dropped connection; the mercha
 
 `slot` is read live from the RPC on each call, so a judge can see the server is talking to devnet. `ok` is false (HTTP 503) when the RPC cannot be reached.
 
+The optional `phase3Routes` object reports `/api/volume`, `/trust`, `/v1/remittances` and `/api/reserves`. Each entry has `registered` and `reason`: null when registered, otherwise `missing_config`, `invalid_config` or `initialization_failed`. Missing optional configuration leaves that route unregistered and does not stop the core server.
+
 ## 7. Tests that hold both sides to this
 
 - Server (task 1.9): an integration test posts a vector note and checks the response shape above; a second post returns `replayed: true` with the same `conf`; a tampered note returns HTTP 422 named by the failed check with no `conf`; posting the same note first with a broken signature and then intact still settles it; two concurrent posts of one note produce exactly one transaction and the same `conf`.
 - iOS (task 1.10): the client decodes a recorded response from the deployed server and verifies `conf` and `allowance` with the pinned key.
+
+## 8. `GET /api/volume` (task 3.50)
+
+Reads the completed 20-redeem `measurements/redeem.json` for the configured pinned program. Missing, incomplete or wrong-deployment evidence returns HTTP 503 `measurements_unavailable`. Each row retains its transaction signature, slot, actual `meta.fee`, actual `meta.computeUnitsConsumed`, error and source. Only successful measurement rows count toward the headline; load_test rows never do. Optional `measurements/p256-verify.json` identifies local software verification, CPU model, nproc and Node version. It is not chain throughput.
+
+The SOL/USD spot quote comes from Coinbase's public price endpoint. `solPrice.observedAt` is our UTC fetch time, not a provider trading timestamp. Failure yields null dollar estimates. Dollar cost uses the mean fee of successful measured redeems only; failed attempt fees remain visible per row. Cost per payment and per 1000, and the compute-only block-capacity formula, carry ESTIMATE. Capacity requires an operator-supplied block compute limit and source; absent those, capacity is null. This formula does not claim Solana network throughput as LOKA's.
+
+## 9. `POST /v1/remittances` (task 3.3)
+
+Request: `{ "recipientAllowanceId": "<u64 decimal>", "amountUnits": "<positive decimal base units>" }`. No names, phone numbers, IPs or client wallet fields are stored. Earmarks, lifetime and daily budgets are operator configuration. The list must be the existing protocol's sorted merchant-hash list, nonempty and no more than 16 entries. The cap is one nominal sandbox USDC, 1000000 base units for this six-decimal mint. No fiat transfer or exchange-rate guarantee is claimed.
+
+The recipient's existing allowance PDA, owner, discriminator, id and immutable payer key are read before funding. A new random allowance id is chosen, checking at most eight candidates. The new allowance uses the same key, the configured earmarks and zero bond. Only the separate pinned send wallet is available to the gateway. Daily token units, rent and fees are admitted atomically per send-wallet address and UTC day before signing. Conservative reservations are never refunded automatically.
+
+HTTP 201 returns `recipientAllowanceId`, new `allowanceId`, signed `allow`, `earmarks`, confirmed `signature`, `explorer`, `sandbox: true`. HTTP 200 repeats the existing success. HTTP 202 returns `status: pending`, recipient allowance id, nullable saved signature and retryAfter. Unknown sends retain exactly that attempt. A proven confirmed failure returns HTTP 409 `remittance_failed`; no certificate is issued. Budget or burst denial is unsigned HTTP 429. A cap refusal is unsigned HTTP 422 `amount_cap`.
+
+One pending or unexpired successful funded allowance is permitted per recipient allowance. Repeats use the first accepted amount and terms. A completed funded allowance can be renewed only after expiry; it is not reclaimed by this endpoint. A claim with no saved attempt recovers after its fenced 30 second lease; an expired worker cannot save or broadcast. A saved attempt is never taken over by that unsigned lease. The burst guard holds only HMAC-SHA256 digests under a per-boot random secret, allows ten new operations per hour on a shared network, and is bounded in memory. The app owner must disable request/IP/body logging.
+
+## 10. `GET /trust` (task 3.45 server half)
+
+Returns devnet program id, ProgramData address, snapshot slot and UTC observation time. `live` and `recorded` each contain `upgradeAuthority` and `programHash`; the authority comes live from the loader header and recorded from pins. The hash is SHA-256 of all ProgramData payload bytes after its 45-byte header, including allocation padding. `config/pins.json` may publish `programDataSha256` with exactly this definition. Without that recorded pin, the recorded hash and hashMatches are null. This read is not a reproducible-build verdict or a claim that the authority is revoked.
+
+The program and ProgramData are reread together at one slot, constrained at or after pointer discovery. Loader ownership, executable state, discriminator and the loader-derived pointer must match. A bad or unavailable read returns HTTP 503 `trust_unavailable`, with no verdict.
+
+## 11. `GET /api/reserves` (read-only)
+
+Exposes the existing devnet same-slot reserves reader, with string base-unit assets and liabilities, allowance remainders, merchant balances, bonds, snapshot slot and its scope. Missing or invalid live evidence returns HTTP 503 `reserves_unavailable`, without a reserves verdict. No POST or other write method is defined.

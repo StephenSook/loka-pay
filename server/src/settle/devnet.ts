@@ -44,15 +44,16 @@ const database = new PGlite(values.journal!);
 try {
   const store = new SettlementStore(database);
   await store.migrate();
-  const service = new SettlementService({ deployment, store, feeBudget: { feePayer: feePayer.publicKey.toBase58(), dailyLamports: values['daily-fee-budget']! },
-    chain: new SolanaGateway(new Connection('https://api.devnet.solana.com', 'confirmed'), feePayer),
+  const makeService = (deliberateCheat = false) => new SettlementService({ deployment, store, feeBudget: { feePayer: feePayer.publicKey.toBase58(), dailyLamports: values['daily-fee-budget']! },
+    chain: new SolanaGateway(new Connection('https://api.devnet.solana.com', 'confirmed'), feePayer, { deliberateCheat }),
     signConfirmation: fields => P.signConfWire(fields, seed),
   });
-  const wait = async (outcome: Outcome) => {
+  const service = makeService();
+  const wait = async (outcome: Outcome, selected = service) => {
     for (let poll = 0; poll < 30 && outcome.statusCode === 202; poll++) {
       console.log(JSON.stringify(outcome.body));
       await new Promise(resolve => setTimeout(resolve, 2000));
-      outcome = await service.get(outcome.body.noteId);
+      outcome = await selected.get(outcome.body.noteId);
     }
     if (outcome.statusCode !== 200) throw new Error('Still pending. Keep this journal and investigate; at most one expired, missing attempt can be rebuilt.');
     P.verifyConfWire(P.base64urlDecode(outcome.body.conf), ed25519.getPublicKey(seed));
@@ -64,7 +65,8 @@ try {
   assert.equal(replay.statusCode, 200);
   assert.deepEqual(replay.body, { ...settled, replayed: true });
   console.log(JSON.stringify({ check: 'settled-and-replayed', ...settled }, null, 2));
-  const failed = await wait(await service.submit(cheatRequest));
+  const cheatService = makeService(true);
+  const failed = await wait(await cheatService.submit(cheatRequest), cheatService);
   assert.equal(failed.status, 'failed');
   assert.equal(failed.error, 'SerialUsed');
   assert.notEqual(failed.signature, settled.signature);
