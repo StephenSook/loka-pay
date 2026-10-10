@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T17:05:00+00:00"
+    "updated_at": "2026-10-10T17:40:00+00:00"
   },
   "facts": {
     "zero_bar_payments_settled": {
@@ -718,6 +718,19 @@
         "Devpost"
       ],
       "display": "67%"
+    },
+    "senegal_rural_mobile_money_adults_pct_2024": {
+      "value": 61.753023168443,
+      "unit": "% of rural adults",
+      "kind": "sourced",
+      "status": "sourced",
+      "source": "World Bank Global Findex (API source 28), indicator mobileaccount.t.d.9 \"Mobile money account, rural (% age 15+)\", Senegal 2024: https://api.worldbank.org/v2/country/SEN/indicator/mobileaccount.t.d.9?source=28&format=json (dataset last updated 2025-10-06)",
+      "as_of": "2026-10-10T17:40:00+00:00",
+      "surfaces": [
+        "slides",
+        "Devpost"
+      ],
+      "display": "62%"
     },
     "senegal_adults_15plus_2025": {
       "value": 11786511,
