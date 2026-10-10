@@ -5,6 +5,8 @@
 //     iPhone and refused at 4:31 PM ET (proof_pair_iphone_* in docs/FACTS.json);
 //   - PROOF_PAIR is the earlier pair, signed outside the iPhone app with a test key at 2:01 AM ET
 //     (proof_pair_settled_tx, proof_pair_refused_tx).
+// IPHONE_RUN2, the second iPhone run (5:05 PM settled, 5:09 PM refused), is linked from the home
+// page's status card (proof_pair_iphone_run2_*).
 // Every value comes from docs/FACTS.json, a static import bundled at build time like
 // config/pins.json in lib/pins.ts: an entry that is missing, not measured, or not a 64-byte
 // base58 signature (or a 32-byte hex note id) throws here, and the build fails instead of a page
@@ -83,6 +85,16 @@ export const IPHONE_PAIR = {
     ...recordedTx("proof_pair_iphone_refused_tx", facts.proof_pair_iphone_refused_tx),
     noteId: recordedNoteId("proof_pair_iphone_refused_note_id", facts.proof_pair_iphone_refused_note_id),
   },
+} as const;
+
+/**
+ * The second iPhone run, Sat Oct 10 5:05 PM ET (settled) and 5:09 PM ET (refused), also paid by
+ * camera QR (proof_pair_iphone_run2_* in docs/FACTS.json). The home page's status links it beside
+ * the first run.
+ */
+export const IPHONE_RUN2 = {
+  settled: recordedTx("proof_pair_iphone_run2_settled_tx", facts.proof_pair_iphone_run2_settled_tx),
+  refused: recordedTx("proof_pair_iphone_run2_refused_tx", facts.proof_pair_iphone_run2_refused_tx),
 } as const;
 
 /** The earlier pair, signed outside the iPhone app with a test key: shown below the iPhone pair. */

@@ -3,10 +3,14 @@ import { randomBytes } from 'node:crypto';
 import { expect, test, vi } from 'vitest';
 import * as anchor from '@anchor-lang/core';
 import * as P from '@lokapay/protocol';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { p256 } from '@noble/curves/nist.js';
 import { base58 } from '@scure/base';
-import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
-import { buildRedeemTransaction, decodeChainError, SolanaGateway } from './transaction.js';
+import { Connection, Keypair, PublicKey, SendTransactionError, Transaction } from '@solana/web3.js';
+import { SettlementService } from './service.js';
+import { SettlementStore } from './store.js';
+import { testDatabase } from './test-database.js';
+import { buildRedeemTransaction, decodeChainError, preflightProgramError, SolanaGateway } from './transaction.js';
 
 const vectors = JSON.parse(readFileSync(new URL('../../../protocol/vectors/payment-v1.json', import.meta.url), 'utf8'));
 const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.json', import.meta.url), 'utf8'));
@@ -108,6 +112,136 @@ test('only an explicitly selected deliberate devnet cheat skips preflight', asyn
   const gateway = new SolanaGateway(rpc as unknown as Connection, payer, { deliberateCheat: true });
   await gateway.send({ signature: 'saved', rawTransaction: 'AA==', blockhash: 'unused', lastValidBlockHeight: 1 });
   expect(rpc.sendRawTransaction).toHaveBeenCalledWith(Buffer.from('AA==', 'base64'), { skipPreflight: true, maxRetries: 0 });
+});
+
+// What web3.js throws when RPC preflight refuses a transaction: it keeps the RPC message as the RPC prints it.
+const preflight = (message: string) => new SendTransactionError({ action: 'simulate', signature: '', transactionMessage: message, logs: [] });
+const custom = (index: number, code: number) =>
+  preflight(`Transaction simulation failed: Error processing Instruction ${index}: custom program error: 0x${code.toString(16)}`);
+const signatureOf = (bytes: Buffer) => base58.encode(Transaction.from(bytes).signature!);
+
+async function signedAttempt(sendRawTransaction: (bytes: Buffer, options: { skipPreflight: boolean }) => Promise<string>,
+  options: { deliberateCheat?: boolean } = {}) {
+  const payer = Keypair.generate(); // Ephemeral local signing test only.
+  const connection = {
+    getFeeForMessage: vi.fn(async () => ({ value: 5000 })),
+    getLatestBlockhash: vi.fn(async () => ({ blockhash: base58.encode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 100 })),
+    sendRawTransaction: vi.fn(sendRawTransaction),
+  };
+  const chain = new SolanaGateway(connection as unknown as Connection, payer, options);
+  const attempt = await chain.prepare(validated, await chain.quoteFee(validated));
+  return { connection, chain, attempt, raw: Buffer.from(attempt.rawTransaction, 'base64') };
+}
+
+test.each([['SerialUsed', 6011], ['CapExceeded', 6012], ['EarmarkDenied', 6014]] as const)(
+  'a preflight refusal with loka_vault %s from redeem_note is resent once, same bytes, without preflight', async (name, code) => {
+    expect(idl.errors.find((entry: { code: number }) => entry.code === code)?.name).toBe(name);
+    const { connection, chain, attempt, raw } = await signedAttempt(async (bytes, options) => {
+      if (!options.skipPreflight) throw custom(1, code);
+      return signatureOf(bytes);
+    });
+    await chain.send(attempt);
+    expect(connection.sendRawTransaction).toHaveBeenCalledTimes(2);
+    expect(connection.sendRawTransaction).toHaveBeenNthCalledWith(1, raw, { skipPreflight: false, maxRetries: 0 });
+    expect(connection.sendRawTransaction).toHaveBeenNthCalledWith(2, raw, { skipPreflight: true, maxRetries: 0 });
+    expect(signatureOf(connection.sendRawTransaction.mock.calls[1][0])).toBe(attempt.signature);
+  });
+
+test.each([
+  ['blockhash not found', preflight('Transaction simulation failed: Blockhash not found')],
+  ['insufficient funds for the fee', preflight('Transaction simulation failed: Attempt to debit an account but found no record of a prior credit.')],
+  ['an account in use', preflight('Transaction simulation failed: Account in use')],
+  ['a precompile failure', custom(0, 2)],
+  ['a precompile failure carrying a loka_vault number', custom(0, 6011)],
+  ['an Anchor framework code outside the IDL', custom(1, 3012)],
+  ['a message that only contains a program code', preflight('Transaction simulation failed: Error processing Instruction 1: custom program error: 0x177b; retry')],
+  ['an RPC transport error', new Error('fetch failed')],
+] as const)('a preflight failure from %s is not resent and throws as before', async (_name, error) => {
+  const { connection, chain, attempt, raw } = await signedAttempt(async () => { throw error; });
+  await expect(chain.send(attempt)).rejects.toBe(error);
+  expect(connection.sendRawTransaction).toHaveBeenCalledExactlyOnceWith(raw, { skipPreflight: false, maxRetries: 0 });
+});
+
+test('a failed resend propagates without a third send, and the resend must return the saved signature', async () => {
+  const transport = new Error('fetch failed');
+  const lost = await signedAttempt(async (_bytes, options) => { throw options.skipPreflight ? transport : custom(1, 6011); });
+  await expect(lost.chain.send(lost.attempt)).rejects.toBe(transport);
+  expect(lost.connection.sendRawTransaction).toHaveBeenCalledTimes(2);
+  const refusedTwice = await signedAttempt(async () => { throw custom(1, 6011); });
+  await expect(refusedTwice.chain.send(refusedTwice.attempt)).rejects.toThrow(SendTransactionError);
+  expect(refusedTwice.connection.sendRawTransaction).toHaveBeenCalledTimes(2);
+  const renamed = await signedAttempt(async (_bytes, options) => { if (!options.skipPreflight) throw custom(1, 6011); return 'other'; });
+  await expect(renamed.chain.send(renamed.attempt)).rejects.toThrow('RPC returned a different transaction signature');
+});
+
+test('the deliberate cheat gateway already skips preflight and never resends a failure', async () => {
+  const refused = custom(1, 6011);
+  const { connection, chain, attempt, raw } = await signedAttempt(async () => { throw refused; }, { deliberateCheat: true });
+  await expect(chain.send(attempt)).rejects.toBe(refused);
+  expect(connection.sendRawTransaction).toHaveBeenCalledExactlyOnceWith(raw, { skipPreflight: true, maxRetries: 0 });
+});
+
+test('the refusing instruction must be the redeem_note in the signed bytes, not a compute-budget or precompile one', () => {
+  const transaction = buildRedeemTransaction(validated, { units: 110000, loadedBytes: 65536 });
+  transaction.feePayer = Keypair.generate().publicKey; transaction.recentBlockhash = base58.encode(new Uint8Array(32).fill(7));
+  const raw = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+  expect([0, 1, 2, 3].map(index => preflightProgramError(custom(index, 6012), raw))).toEqual([null, null, null, 6012]);
+  expect(preflightProgramError(custom(1, 6011), Buffer.from('AA==', 'base64'))).toBeNull();
+});
+
+test('a phone cheat refused by preflight lands on chain and resolves to a signed failed SerialUsed CONF', async () => {
+  const payer = Keypair.generate(); // Ephemeral local signing test only.
+  const program = new PublicKey(deployment.programId);
+  const coder = new anchor.BorshAccountsCoder(idl);
+  const id = Buffer.alloc(8); id.writeBigUInt64BE(validated.note.allowanceId);
+  const records = new Map([
+    [PublicKey.findProgramAddressSync([Buffer.from('allowance'), id], program)[0].toBase58(), { owner: program,
+      data: await coder.encode('Allowance', { id: new anchor.BN(validated.note.allowanceId.toString()), funder: Keypair.generate().publicKey,
+        payer_key: Array.from(validated.payerPublicKey), cap: new anchor.BN(0), redeemed: new anchor.BN(0), offline_limit: new anchor.BN(0),
+        expiry: new anchor.BN(0), bond: new anchor.BN(0), earmarks: [], used_serials: Array(32).fill(255), bump: 1 }) }],
+    [PublicKey.findProgramAddressSync([Buffer.from('merchant'), Buffer.from(validated.note.payeeKeyHash)], program)[0].toBase58(), { owner: program,
+      data: await coder.encode('Merchant', { public_key: Array.from(P.fromHex(vectors.keys.merchantA.publicKeyHex)),
+        key_hash: Array.from(validated.note.payeeKeyHash), balance: new anchor.BN(0), withdraw_counter: new anchor.BN(0), bump: 1 }) }],
+  ]);
+  let landed: string | null = null;
+  let confirmed = false;
+  const rpc = {
+    getAccountInfo: vi.fn(async (key: PublicKey) => records.get(key.toBase58()) ?? null),
+    getLatestBlockhash: vi.fn(async () => ({ blockhash: base58.encode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 100 })),
+    getFeeForMessage: vi.fn(async () => ({ value: 5000 })),
+    // As on devnet: preflight refuses the reused serial, and without preflight the transaction lands and fails.
+    sendRawTransaction: vi.fn(async (bytes: Buffer, options: { skipPreflight: boolean }) => {
+      if (!options.skipPreflight) throw custom(1, 6011);
+      landed = signatureOf(bytes);
+      return landed;
+    }),
+    getSignatureStatuses: vi.fn(async ([signature]: string[]) => ({ value: [confirmed && signature === landed
+      ? { slot: 77, confirmationStatus: 'confirmed', err: { InstructionError: [1, { Custom: 6011 }] } } : null] })),
+    getBlockTime: vi.fn(async () => 1800000005),
+    getBlockHeight: vi.fn(async () => 50),
+  };
+  const db = await testDatabase();
+  try {
+    const store = new SettlementStore(db, () => 1800000001);
+    await store.migrate();
+    const seed = randomBytes(32);
+    const service = new SettlementService({ deployment, store, now: () => 1800000001,
+      feeBudget: { feePayer: payer.publicKey.toBase58(), dailyLamports: '1000000' },
+      chain: new SolanaGateway(rpc as unknown as Connection, payer), signConfirmation: fields => P.signConfWire(fields, seed) });
+    const first = await service.submit({ note: P.base64urlEncode(P.fromHex(vectors.notes[0].wireHex)) });
+    expect(landed).not.toBeNull();
+    expect(first).toMatchObject({ statusCode: 202, body: { status: 'pending', signature: landed } });
+    confirmed = true;
+    const outcome = await service.get(first.body.noteId);
+    if (outcome.statusCode !== 200) throw new Error('The cheat stayed pending');
+    expect(outcome.body).toMatchObject({ status: 'failed', error: 'SerialUsed', errorCode: 6011, signature: landed, slot: 77,
+      explorer: `https://explorer.solana.com/tx/${landed}?cluster=devnet` });
+    const conf = P.verifyConfWire(P.base64urlDecode(outcome.body.conf), ed25519.getPublicKey(seed));
+    expect([conf.status, conf.errorCode, base58.encode(conf.txSignature)]).toEqual([2, 6011, landed]);
+    expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(2);
+    // The resend used the fee reserved for this one attempt. Nothing was reserved twice.
+    expect((await db.query<{ spent: string }>('SELECT spent::text AS spent FROM settlement_fee_budgets')).rows).toEqual([{ spent: '5000' }]);
+  } finally { await db.close(); }
 });
 
 test('measurement budgets preserve the adjacent precompile and redeem required by deployed code', () => {

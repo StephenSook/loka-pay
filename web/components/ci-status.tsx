@@ -3,6 +3,7 @@
 // sends nothing to GitHub. Replaces GitHub's hotlinked badge images. Server component.
 
 import type { Read } from "@/lib/cached-read";
+import { SETTLEMENT_HEALTH_URL } from "@/lib/settlement";
 import { REPO_URL } from "@/lib/site";
 import { WORKFLOWS, type CheckRun, type MainChecks } from "@/lib/github";
 import { OutlineChip, StateChip } from "./chips";
@@ -57,7 +58,12 @@ export function CiStatusList({ read }: { read: Read<MainChecks> }) {
       </ul>
       {serverRun && !(serverRun.status === "completed" && serverRun.conclusion === "success") ? (
         <p className="text-sm text-muted" data-testid="server-workflow-note">
-          The server workflow tests the settlement server in server/, so it does not pass until that code is merged into main.
+          The server workflow tests the settlement server code in server/ on main&apos;s latest commit. The server deployed at
+          api.zerobars.us reports the commit it runs on its health check:{" "}
+          <OutLink href={SETTLEMENT_HEALTH_URL} testId="server-health-link">
+            api.zerobars.us/api/health
+          </OutLink>
+          .
         </p>
       ) : null}
       {read.ok && read.staleBecause ? null : stamp}

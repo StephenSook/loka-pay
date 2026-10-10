@@ -14,9 +14,9 @@ export const INIT_TX_SIGNATURE =
  * The first real settled redeem_note on devnet, Sat Oct 10 2:01 AM ET: the "settled payment"
  * link in the repository README ("First real payment and refused cheat on devnet", commit
  * b8a79b0, PLAN.md 1.4). Checked against devnet with getTransaction: loka_vault logged
- * "Instruction: RedeemNote" and the transaction succeeded. /proof links it as the evidence
- * that a note has been redeemed, because a single transaction cannot scroll away the way
- * /live's newest rows do.
+ * "Instruction: RedeemNote" and the transaction succeeded. It was signed outside the iPhone
+ * app with a test key, so it now sits in the earlier test-key pair (lib/proof-pair.ts), and
+ * /proof's redeem evidence is the iPhone payment, IPHONE_SETTLED_TX_SIGNATURE.
  */
 export const FIRST_REDEEM_TX_SIGNATURE =
   "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
@@ -37,7 +37,9 @@ export const REFUSED_CHEAT_TX_SIGNATURE =
  * to the merchant iPhone while both were offline, settled when the merchant phone came online.
  * Checked against devnet with getTransaction: meta.err null, loka_vault logged
  * "Instruction: RedeemNote", and the precompile's 141-byte note hashes to IPHONE_SETTLED_NOTE_ID.
- * The proof pair (lib/proof-pair.ts) leads with it (PLAN.md 3.74).
+ * The proof pair (lib/proof-pair.ts) leads with it (PLAN.md 3.74), and /proof links it as the
+ * evidence that a note has been redeemed, because a single transaction cannot scroll away the
+ * way /live's newest rows do.
  */
 export const IPHONE_SETTLED_TX_SIGNATURE =
   "2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17";
@@ -53,9 +55,13 @@ export const IPHONE_REFUSED_TX_SIGNATURE =
   "3XtQtnHRKC3QvhBGye8gTMWimPg3iPXuBskf3LMsQEhJPdzeGiqEEjrmjFLqXFTJMQ9JFAitWoCbuEGFSLKjZc9n";
 export const IPHONE_REFUSED_NOTE_ID = "5ecdc8dc27d8ed9ecaf952efce6f6aedb206fd8c480d3f7b46fcb280d34ac0da";
 
-/** iOS status (PLAN.md 1.11): App Store Connect read betaReviewState WAITING_FOR_REVIEW, submitted 12:05:42 AM ET. */
+/**
+ * iOS status (PLAN.md 1.11), read from App Store Connect Sat Oct 10 6:15 PM ET: build 1's beta
+ * review is WAITING_FOR_REVIEW (submitted 12:05:42 AM ET); build 5 (the scanner fix, uploaded
+ * 5:56 PM ET) is processingState VALID and internalBuildState IN_BETA_TESTING.
+ */
 export const TESTFLIGHT_STATUS =
-  "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves";
+  "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight";
 export const TESTFLIGHT_STATUS_AS_OF = "2026-10-10";
 
 /** The hacking window opened Fri Oct 9 8:08 PM ET (organizers' announcement, PLAN.md). */
