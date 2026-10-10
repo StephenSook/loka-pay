@@ -1,0 +1,7 @@
+# pnpm settings for web/ (a standalone project, not a monorepo workspace).
+# Dependency install scripts are denied unless listed here with true.
+allowBuilds:
+  # Next.js ships prebuilt sharp binaries for every platform next-swc supports.
+  sharp: false
+  # Only needed by Yarn PnP; pnpm resolves without it.
+  unrs-resolver: false
