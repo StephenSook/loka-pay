@@ -39,7 +39,8 @@ class Chain implements ChainGateway {
   observe = vi.fn(async (_signature: string): Promise<ChainDecision | null> => this.decision);
 }
 
-async function fixture(options: { canaryKeyHashes?: string[]; listen?: boolean } = {}) {
+// Tests that call feed.tick() themselves get a poller that never fires first; only the /live test needs the timer.
+async function fixture(options: { canaryKeyHashes?: string[]; listen?: boolean; intervalMs?: number } = {}) {
   const db = await testDatabase();
   closers.push(() => db.close());
   const clock = () => 1800000001;
@@ -53,7 +54,7 @@ async function fixture(options: { canaryKeyHashes?: string[]; listen?: boolean }
     if (request.headers.origin === 'https://zerobars.us') reply.header('access-control-allow-origin', 'https://zerobars.us');
   });
   registerSettlementRoutes(app, service);
-  const events = await installEvents({ app, database: db, deployment, canaryKeyHashes: options.canaryKeyHashes, intervalMs: 50 });
+  const events = await installEvents({ app, database: db, deployment, canaryKeyHashes: options.canaryKeyHashes, intervalMs: options.intervalMs ?? 3_600_000 });
   closers.push(() => app.close());
   if (options.listen) await app.listen({ host: '127.0.0.1', port: 0 });
   const post = (body: object) => app.inject({ method: 'POST', url: '/v1/notes', payload: body });
@@ -166,7 +167,7 @@ async function readEvents(url: string, headers: Record<string, string>, until: (
 }
 
 test('/live streams a settlement within 2 s with CORS for our origin, and resumes after Last-Event-ID', async () => {
-  const f = await fixture({ listen: true });
+  const f = await fixture({ listen: true, intervalMs: 50 });
   const base = `http://127.0.0.1:${(f.app.server.address() as AddressInfo).port}`;
   const started = Date.now();
   const watching = readEvents(`${base}/live`, { origin: 'https://zerobars.us' }, events => events.length >= 1);
