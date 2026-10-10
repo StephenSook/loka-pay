@@ -280,7 +280,8 @@ public struct PayView: View {
                     .foregroundStyle(LokaColor.ink)
                     .textSelection(.enabled)
                     .accessibilityLabel("Allowance id " + String(id))
-                PaymentQRView(text: code, caption: "Allowance id code for zerobars.us/send")
+                // On Pay's first screen whenever the allowance can change: no full brightness there.
+                PaymentQRView(text: code, caption: "Allowance id code for zerobars.us/send", brightens: false)
             }
             Text("A sender's payment opens a new sandbox allowance for this phone. Scan the code their page shows; "
                  + "this phone checks the server's signature and that it names this phone's key before adding it.")

@@ -39,7 +39,7 @@ struct CodeEntryField: View {
 #if os(iOS)
 /// Camera QR scanner (task 3.70). Kept thin: it only turns QR codes into strings and reports each
 /// distinct string once; `ScanParser` and the models do every check. Needs a device camera and the
-/// app's NSCameraUsageDescription, so it is not unit-tested.
+/// app's NSCameraUsageDescription, so it is not unit-tested; its camera math, in `ScanGeometry`, is.
 public struct PaymentScannerView: UIViewControllerRepresentable {
     let onScan: (String) -> Void
 
@@ -60,7 +60,10 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "us.zerobars.lokapay.scanner")
     private let onScan: (String) -> Void
+    private let output = AVCaptureMetadataOutput()
     private var preview: AVCaptureVideoPreviewLayer?
+    private var scanArea = ScanArea()
+    private var formatObserver: NSObjectProtocol?
     private var lastValue: String?
     private let label = UILabel()
 
@@ -71,6 +74,10 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
 
     required init?(coder: NSCoder) { nil }
 
+    deinit {
+        if let formatObserver { NotificationCenter.default.removeObserver(formatObserver) }
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0x1F / 255, green: 0x1A / 255, blue: 0x15 / 255, alpha: 1)
@@ -80,6 +87,8 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         label.font = .preferredFont(forTextStyle: .headline)
         label.adjustsFontForContentSizeCategory = true
         label.text = "Point the camera at a LOKA payment code"
+        label.layer.cornerRadius = 12
+        label.layer.masksToBounds = true
         view.addSubview(label)
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
@@ -94,13 +103,12 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
     }
 
     private func configure() {
-        guard let camera = AVCaptureDevice.default(for: .video),
+        guard let camera = Self.codeCamera(),
               let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) else {
             return showUnavailable()
         }
         session.beginConfiguration()
         session.addInput(input)
-        let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else {
             session.commitConfiguration()
             return showUnavailable()
@@ -113,6 +121,8 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
         }
         output.metadataObjectTypes = [.qr]
         session.commitConfiguration()
+        // After the commit: the session preset has chosen the format the zoom limits come from.
+        Self.tuneForCodes(camera)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let layer = AVCaptureVideoPreviewLayer(session: self.session)
@@ -121,22 +131,88 @@ public final class PaymentScannerController: UIViewController, AVCaptureMetadata
             layer.masksToBounds = true
             self.view.layer.insertSublayer(layer, at: 0)
             self.preview = layer
+            // The layer converts the preview to a rect of interest only once the camera has a format.
+            self.formatObserver = NotificationCenter.default.addObserver(
+                forName: AVCaptureInput.Port.formatDescriptionDidChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.updateRectOfInterest() }
             self.view.setNeedsLayout()
         }
         session.startRunning()
+    }
+
+    /// The back camera that reads a code on another phone's screen best. A virtual device comes
+    /// first: it switches to its ultra wide camera (the macro lens on phones that have one) when the
+    /// code is nearer than the wide camera can focus. The plain wide camera, then the system
+    /// default, otherwise. The Simulator has none and gets nil. Runs on the session queue.
+    nonisolated static func codeCamera() -> AVCaptureDevice? {
+        let types: [AVCaptureDevice.DeviceType] = [.builtInTripleCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
+        let found = AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .back).devices
+        for type in types {
+            if let device = found.first(where: { $0.deviceType == type }) { return device }
+        }
+        return AVCaptureDevice.default(for: .video)
+    }
+
+    /// Zoom, focus mode and focus range for a code held a hand's length away. The zoom is Apple's
+    /// recommendation for codes (`ScanGeometry.recommendedZoom`), from the wide camera's minimum
+    /// focus distance, so the code fills the preview from a distance that camera can focus at.
+    /// Every setting is checked before it is set, so a camera without it keeps its default. Runs on
+    /// the session queue.
+    nonisolated static func tuneForCodes(_ camera: AVCaptureDevice) {
+        let constituents = camera.constituentDevices
+        let wideIndex = constituents.firstIndex { $0.deviceType == .builtInWideAngleCamera }
+        let zooms = ScanGeometry.wideCameraZooms(
+            wideIndex: wideIndex, switchOvers: camera.virtualDeviceSwitchOverVideoZoomFactors.map(\.doubleValue))
+        let focusing = wideIndex.map { constituents[$0] } ?? camera
+        let format = camera.activeFormat
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        let lower = Double(camera.minAvailableVideoZoomFactor)
+        var upper = min(Double(camera.maxAvailableVideoZoomFactor), Double(format.videoMaxZoomFactor))
+        // Stay below the telephoto's switch-over: it focuses farther away than the wide camera.
+        if let next = zooms.next { upper = min(upper, next * 0.95) }
+        let zoom = ScanGeometry.recommendedZoom(
+            fieldOfView: Double(format.videoFieldOfView), baseZoom: zooms.base,
+            minimumFocusDistance: Double(focusing.minimumFocusDistance),
+            fill: ScanGeometry.squareShare(width: Double(dimensions.width), height: Double(dimensions.height)),
+            range: lower...max(lower, upper))
+        guard (try? camera.lockForConfiguration()) != nil else { return }
+        defer { camera.unlockForConfiguration() }
+        camera.videoZoomFactor = CGFloat(zoom)
+        // The range applies on the next focus mode set, so it goes first.
+        if camera.isAutoFocusRangeRestrictionSupported { camera.autoFocusRangeRestriction = .near }
+        if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }
     }
 
     private func showUnavailable() {
         DispatchQueue.main.async { self.label.text = "Camera unavailable. Paste the code instead." }
     }
 
+    /// The preview fills the whole view (ScanSheet makes it a square across the sheet). Over the
+    /// camera the hint sits in a dark band at the bottom; with no camera the message is centered.
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let area = view.safeAreaLayoutGuide.layoutFrame
-        let side = min(area.width - 32, area.height * 0.7)
-        let frame = CGRect(x: area.midX - side / 2, y: area.minY + 16, width: side, height: side)
-        preview?.frame = frame
-        label.frame = CGRect(x: 16, y: frame.maxY + 12, width: area.width - 32, height: 72)
+        let bounds = view.bounds
+        if let preview {
+            preview.frame = bounds
+            label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            let width = bounds.width - 24
+            let height = label.sizeThatFits(CGSize(width: width - 16, height: .greatestFiniteMagnitude)).height + 16
+            label.frame = CGRect(x: 12, y: bounds.maxY - 12 - height, width: width, height: height)
+            updateRectOfInterest()
+        } else {
+            label.backgroundColor = .clear
+            label.frame = bounds.insetBy(dx: 16, dy: 16)
+        }
+    }
+
+    /// Reads codes only inside what the preview shows, the area the person aims with. The whole
+    /// frame whenever the layer does not give a usable rect, even after it gave one (`ScanArea`).
+    private func updateRectOfInterest() {
+        guard let preview else { return }
+        let converted = preview.bounds.isEmpty ? nil : preview.metadataOutputRectConverted(fromLayerRect: preview.bounds)
+        scanArea.update(converted: converted)
+        let output = self.output, rect = scanArea.rect
+        queue.async { output.rectOfInterest = rect }
     }
 
     public func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject],
@@ -174,8 +250,11 @@ struct ScanSheet: View {
                         .foregroundStyle(.tint)
                 }
                 #if os(iOS)
-                PaymentScannerView(onScan: onText)
-                    .frame(minHeight: 360)
+                // A square as wide as the sheet. The camera's framing is the zoom's job; a bigger
+                // preview shows the code larger, so it is easier to aim and to see when it is sharp.
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay { PaymentScannerView(onScan: onText) }
                     .clipShape(RoundedRectangle(cornerRadius: LokaStyle.cornerRadius, style: .continuous))
                 #endif
                 CodeEntryField(prompt: "Or paste a code (L1|P|1|...)", onSubmit: onText)
