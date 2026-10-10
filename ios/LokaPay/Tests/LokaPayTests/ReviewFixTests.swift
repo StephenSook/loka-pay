@@ -31,6 +31,31 @@ struct ReviewFixTests {
         #expect(try stores[0].remaining(allowanceId: 9) == 56)
     }
 
+    @Test("the lock is the same before and after the file exists (Codex round 2)")
+    func lockIdentityAcrossCreation() throws {
+        // Under /private/tmp, URL.resolvingSymlinksInPath returns "/private/tmp/..." while the
+        // file is missing and "/tmp/..." once it exists (measured on macOS), so the old key
+        // changed identity across creation. iOS app containers also live under /private/var.
+        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("lokapay-\(UUID().uuidString)").appendingPathComponent("serials.json")
+        let before = FileLocks.lock(for: url)
+        let first = SerialReservations(url: url)
+        #expect(try first.reserve(allowanceId: 5) == 0)  // creates the file
+        let after = FileLocks.lock(for: url)
+        #expect(before === after)
+        let second = SerialReservations(url: url)
+        let results = NSLock()
+        var serials: [UInt8] = []
+        DispatchQueue.concurrentPerform(iterations: 100) { i in
+            if let s = try? (i % 2 == 0 ? first : second).reserve(allowanceId: 5) {
+                results.lock(); serials.append(s); results.unlock()
+            }
+        }
+        #expect(serials.count == 100)
+        #expect(Set(serials).count == 100)
+        #expect(!serials.contains(0))
+    }
+
     @Test("a counter outside 0...256 in valid JSON is refused before anything changes")
     func corruptCounters() throws {
         for bad in [#"{"42": -5}"#, #"{"42": 300}"#, #"{"not-a-number": 1}"#] {
@@ -44,6 +69,12 @@ struct ReviewFixTests {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"42": 256}"#.utf8).write(to: url)
         #expect(throws: PaymentError.serialsExhausted) { try SerialReservations(url: url).reserve(allowanceId: 42) }
+    }
+
+    @Test("earmark hashes of mixed length throw instead of crashing (Greptile)")
+    func earmarkLengths() {
+        #expect(throws: PaymentError.earmarkList) { try Earmarks.encode([Data(repeating: 1, count: 31), Data(repeating: 2, count: 32)]) }
+        #expect(throws: PaymentError.earmarkList) { try Earmarks.encode(Array(repeating: Data(repeating: 3, count: 32), count: 17)) }
     }
 
     @Test("a server-signed merchant name that is not NFC is refused; the NFC spelling passes")

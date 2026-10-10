@@ -11,7 +11,7 @@ public final class SerialReservations: @unchecked Sendable {
     /// `url` is a JSON file owned by this store (for example in Application Support). Every
     /// instance on the same file shares one lock, so concurrent reservations never collide.
     public init(url: URL) {
-        self.url = url
+        self.url = FileLocks.canonical(url)
         self.lock = FileLocks.lock(for: url)
     }
 

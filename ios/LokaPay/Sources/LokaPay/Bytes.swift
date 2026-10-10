@@ -110,8 +110,21 @@ enum FileLocks {
     private static let registryLock = NSLock()
     private static var locks: [String: NSLock] = [:]
 
+    /// A file URL that names the same file before and after the file exists: the parent
+    /// folder is created if needed and resolved with realpath(3), then the file name is
+    /// appended. (URL.resolvingSymlinksInPath depends on whether the file exists, so it
+    /// cannot be a lock identity.) Stores use this URL for both locking and I/O.
+    static func canonical(_ url: URL) -> URL {
+        let dir = url.standardizedFileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let resolved = realpath(dir.path, nil) else { return url.standardizedFileURL }
+        defer { free(resolved) }
+        return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
+            .appendingPathComponent(url.lastPathComponent)
+    }
+
     static func lock(for url: URL) -> NSLock {
-        let key = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let key = canonical(url).path
         registryLock.lock()
         defer { registryLock.unlock() }
         if let existing = locks[key] { return existing }
