@@ -11,6 +11,7 @@ const app = await buildApp({
   database: pool, connection, pins: config.pins, wallets: config.wallets, certificateSeed: config.certificateSeed,
   teamKeys: config.teamKeys, policies: config.policies, noteFeeDailyLamports: config.noteFeeDailyLamports, commit: config.commit, origins: config.origins,
   trustProxy: config.trustProxy, logger: privateLogger(),
+  phase3: config.phase3,
 });
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => { void app.close().then(() => pool.end()).then(() => process.exit(0)); });

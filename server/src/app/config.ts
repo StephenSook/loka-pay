@@ -3,16 +3,19 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Keypair } from '@solana/web3.js';
 import type { RegistrationPins, Wallets, Policy, PoolName } from '../remit/index.js';
+import { phase3From, type Phase3Config } from './phase3.js';
 
 // Reads the VPS keys and public pins. Private key bytes stay in memory and are never logged.
 // Key files: docs/RUNBOOK-KEYS.md. Every variable here is listed in server/.env.example.
-export type ShellPins = RegistrationPins & { settlementNodeFingerprint?: string | null };
+export type ShellPins = RegistrationPins & { settlementNodeFingerprint?: string | null; upgradeAuthority?: string | null;
+  programDataSha256?: string | null; wallets: RegistrationPins['wallets'] & { send?: string } };
 export interface ShellConfig {
   port: number; databaseUrl: string; rpcUrl: string; commit: string; origins: string[];
   trustProxy: string[]; pins: ShellPins; wallets: Wallets; certificateSeed: Uint8Array;
   teamKeys: string[]; policies: Record<PoolName, Policy>;
   /** Most lamports the note fee payer spends on settlement fees per UTC day (PR #19 fee admission). */
   noteFeeDailyLamports: string;
+  phase3: Phase3Config;
 }
 
 const DEFAULT_PINS = new URL('../../../config/pins.json', import.meta.url);
@@ -83,5 +86,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ShellConfig {
     teamKeys: list(env.TEAM_KEY_HASHES, ''),
     policies: policiesFrom(env),
     noteFeeDailyLamports: units(env, 'NOTE_DAILY_FEE_LAMPORTS', '200000000'),
+    phase3: phase3From(env),
   };
 }
