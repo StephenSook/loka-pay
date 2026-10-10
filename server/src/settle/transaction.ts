@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { base58 } from '@scure/base';
+import { BorshAccountsCoder } from '@anchor-lang/core';
 import * as P from '@lokapay/protocol';
 import {
   Connection, PublicKey, Transaction, TransactionInstruction,
@@ -50,6 +51,19 @@ export function decodeChainError(error: TransactionError | null): { error: strin
 
 export class SolanaGateway implements ChainGateway {
   constructor(private readonly connection: Connection, private readonly feePayer: Signer) {}
+
+  async bindPayer(note: P.ValidatedNote): Promise<boolean> {
+    const program = new PublicKey(note.note.programId);
+    const id = Buffer.alloc(8); id.writeBigUInt64BE(note.note.allowanceId);
+    const address = PublicKey.findProgramAddressSync([Buffer.from('allowance'), id], program)[0];
+    const account = await this.connection.getAccountInfo(address, 'confirmed');
+    if (!account || !account.owner.equals(program)) return false;
+    try {
+      const allowance = new BorshAccountsCoder(idl).decode('Allowance', account.data);
+      return allowance.id.toString() === note.note.allowanceId.toString()
+        && P.equalBytes(Uint8Array.from(allowance.payer_key), note.payerPublicKey);
+    } catch { return false; }
+  }
 
   async prepare(note: P.ValidatedNote): Promise<PreparedAttempt> {
     const latest = await this.connection.getLatestBlockhash('confirmed');

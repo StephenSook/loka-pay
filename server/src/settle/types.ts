@@ -13,6 +13,7 @@ export interface ChainDecision {
   errorCode: number;
 }
 export interface ChainGateway {
+  bindPayer(note: ValidatedNote): Promise<boolean>;
   prepare(note: ValidatedNote): Promise<PreparedAttempt>;
   send(attempt: PreparedAttempt): Promise<void>;
   observe(signature: string): Promise<ChainDecision | null>;

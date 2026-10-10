@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import Fastify from 'fastify';
 import { PGlite } from '@electric-sql/pglite';
 import { ed25519 } from '@noble/curves/ed25519.js';
+import { p256 } from '@noble/curves/nist.js';
 import { base58 } from '@scure/base';
 import * as P from '@lokapay/protocol';
 import { SettlementStore } from './store.js';
@@ -27,6 +28,7 @@ const closers: (() => Promise<unknown>)[] = [];
 afterEach(async () => { while (closers.length) await closers.pop()!(); });
 
 class Chain implements ChainGateway {
+  bindPayer = vi.fn(async (_note: P.ValidatedNote) => true);
   prepare = vi.fn(async (validated: P.ValidatedNote): Promise<PreparedAttempt> => ({
     signature: base58.encode(new Uint8Array([...validated.noteId, ...validated.noteId])),
     rawTransaction: 'test-only', blockhash: base58.encode(new Uint8Array(32).fill(1)), lastValidBlockHeight: 100,
@@ -97,6 +99,23 @@ test('bad signature cannot poison the same note id, including after settlement',
   expect((await f.post()).statusCode).toBe(200);
   expect((await f.post(bad)).statusCode).toBe(422);
   expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a valid signature from an alternate payer cannot claim the real note id', async () => {
+  const f = await fixture(); const secret = randomBytes(32);
+  const real = P.validateNoteWire(P.base64urlDecode(note), deployment);
+  f.chain.bindPayer.mockImplementation(async upload => P.equalBytes(upload.payerPublicKey, real.payerPublicKey));
+  const forged = new Uint8Array(238); forged.set(real.noteBytes);
+  forged.set(p256.sign(real.noteBytes, secret, { lowS: true }), 141); forged.set(p256.getPublicKey(secret), 205);
+  expect((await f.post({ note: P.base64urlEncode(forged) })).json().error).toBe('payer_mismatch');
+  expect(await f.count()).toBe(0); expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.sign).not.toHaveBeenCalled();
+  expect((await f.post()).statusCode).toBe(200);
+});
+
+test('binding RPC failure signs nothing and leaves the note id unclaimed', async () => {
+  const f = await fixture(); f.chain.bindPayer.mockRejectedValue(new Error('RPC down'));
+  expect((await f.post()).statusCode).toBe(503); expect(await f.count()).toBe(0);
+  expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.sign).not.toHaveBeenCalled();
 });
 
 test('bad ACK is unsigned and unsaved; a later valid ACK preserves the original CONF', async () => {

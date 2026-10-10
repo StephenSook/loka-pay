@@ -20,6 +20,10 @@ export class SettlementService {
   async submit(input: unknown): Promise<Outcome> {
     // Revalidate even repeats before consulting the journal. A refusal is never stored or signed.
     const upload = validateUpload(input, this.options.deployment);
+    let bound: boolean;
+    try { bound = await this.options.chain.bindPayer(upload.validated); }
+    catch { throw new HttpError(503, 'chain_unavailable'); }
+    if (!bound) throw new HttpError(422, 'payer_mismatch');
     const uploadedAt = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
     const claim = { noteId: upload.noteId, note: upload.note, ack: upload.ack, uploadedAt };
     const won = await this.options.store.claim(claim);

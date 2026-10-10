@@ -11,6 +11,24 @@ const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.js
 const deployment = { programId: P.fromHex(vectors.constants.programIdHex), clusterId: 0, mint: P.fromHex(vectors.constants.mintHex) };
 const validated = P.validateNoteWire(P.fromHex(vectors.notes[0].wireHex), deployment);
 
+test('payer binding checks account identity without inspecting spend state', async () => {
+  const coder = new anchor.BorshAccountsCoder(idl);
+  const fields = { id: new anchor.BN(validated.note.allowanceId.toString()), funder: Keypair.generate().publicKey,
+    payer_key: Array.from(validated.payerPublicKey), cap: new anchor.BN(0), redeemed: new anchor.BN(999),
+    offline_limit: new anchor.BN(0), expiry: new anchor.BN(0), bond: new anchor.BN(0), earmarks: [], used_serials: Array(32).fill(255), bump: 1 };
+  const account = { owner: new PublicKey(deployment.programId), data: await coder.encode('Allowance', fields) };
+  const rpc = { getAccountInfo: vi.fn(async () => account) };
+  const gateway = new SolanaGateway(rpc as unknown as Connection, Keypair.generate());
+  expect(await gateway.bindPayer(validated)).toBe(true);
+  account.data = await coder.encode('Allowance', { ...fields, payer_key: Array(33).fill(2) });
+  expect(await gateway.bindPayer(validated)).toBe(false);
+  account.data = await coder.encode('Allowance', { ...fields, id: new anchor.BN(1) });
+  expect(await gateway.bindPayer(validated)).toBe(false);
+  account.data = Buffer.alloc(account.data.length); expect(await gateway.bindPayer(validated)).toBe(false);
+  account.data = await coder.encode('Allowance', fields); account.owner = Keypair.generate().publicKey;
+  expect(await gateway.bindPayer(validated)).toBe(false);
+});
+
 test.each(vectors.notes as { name: string; wireHex: string; precompileDataHex: string }[])('builds exact precompile bytes and Anchor ABI for $name', vector => {
   const note = P.validateNoteWire(P.fromHex(vector.wireHex), deployment);
   const transaction = buildRedeemTransaction(note);
