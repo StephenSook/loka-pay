@@ -27,11 +27,12 @@ Every error is `{ "error": "<name>", "message": "<plain English>" }`.
 | 400 | `bad_pubkey` | A public key is not a 33-byte compressed P-256 point |
 | 400 | `name_length` | Merchant name is not 1 to 64 bytes of UTF-8 after NFC |
 | 404 | `unknown_note` | `GET /v1/notes/{noteId}` for a note this server never saw |
+| 422 | a PAYMENT-V1 section 6 name, or `bad_ack` | The note or ack failed a stateless check (section 4) |
 | 429 | `rate_limited` | The in-memory burst guard tripped; retry after `Retry-After` seconds |
 | 429 | `budget_exhausted` | That wallet's daily budget is spent (team and public pools are separate) |
 | 503 | `chain_unavailable` | Devnet RPC failed after retries; nothing was signed; safe to retry |
 
-A note the server refuses for a protocol reason is **not** an HTTP error: it returns 200 with a signed confirmation whose status is 3 (section 4).
+**A refusal is never signed and never remembered.** The note id covers only the 141 note bytes, not the signature or the ack. If a refusal were signed or cached under that id, anyone who had seen a note (spend markers spread note bytes to nearby merchants) could upload it with a broken signature first and block the genuine upload. So a 422 carries no server signature, binds nothing, and a later upload of the same note is checked from scratch. API v1 never issues a CONF with status 3; that status stays defined in PAYMENT-V1 but unused.
 
 ## 2. `POST /v1/payers`: register a payer key and open its allowance
 
@@ -97,13 +98,19 @@ Request:
 ```
 
 - `ack` is what the merchant normally sends. It is optional so a payer phone (the Sat 3 AM checkpoint) or a stranger (task 3.29) can settle a note without one; the chain does not need it. Without it, no "held offline" time exists for that note.
-- When `ack` is present, the server checks it before anything else: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is a status 3 refusal with `error: "bad_ack"`.
+- The server runs the note through PAYMENT-V1 section 6 in order. A failure is HTTP 422 named by that check (`length`, `prefix`, `cluster`, `currency`, `amount_zero`, `wrong_program`, `wrong_mint`, `bad_pubkey`, `high_s`, `bad_signature`). A note shorter than 141 bytes has no note id, which is fine: a 422 does not need one.
+- When `ack` is present, the server then checks it: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is HTTP 422 `bad_ack`. A valid note with a bad ack is refused rather than settled without the ack, so the caller learns its ack is broken.
+- **The server does not pre-check state** (used serial, cap, expiry, earmark). Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
 
-The server runs the note through PAYMENT-V1 section 6 in order. A failure there is a status 3 refusal named by that check (`length`, `prefix`, `cluster`, `currency`, `amount_zero`, `wrong_program`, `wrong_mint`, `bad_pubkey`, `high_s`, `bad_signature`). **The server does not pre-check state** (used serial, cap, expiry, earmark). Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+Only an outcome on chain is final. Once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and it never changes the decision or the CONF.
 
-Idempotent by note id: a note the server has already decided returns the first decision with `replayed: true` and sends nothing new to the chain.
+**One attempt per note id.** The server holds at most one in-flight attempt for a note id (for example a lock or a unique row keyed by note id):
 
-Response, always HTTP 200 once the server has decided:
+- A second upload while the first is in flight does not build a second transaction. It answers HTTP 202 with the pending body in section 5, and the client polls `GET /v1/notes/{noteId}`.
+- The server records the transaction signature before sending it. If the send or the confirmation wait times out, the server resolves that same signature (`getSignatureStatuses`) until it is confirmed, failed, or its blockhash has expired. It builds a new transaction for that note id only after the old blockhash has expired with the signature unconfirmed, so one note can never produce two redeem attempts that both land.
+- Two gateways uploading the same note together therefore share one attempt and both end with the same CONF.
+
+Response, HTTP 200 once the chain has decided:
 
 ```json
 {
@@ -125,13 +132,22 @@ Response, always HTTP 200 once the server has decided:
 |---|---|---|---|
 | `settled` | 1 | the redeem transaction | `null` |
 | `failed` | 2 | the failed transaction (opens on the explorer) | the program's error name, `errorCode` its number |
-| `refused` | 3 | `null` | the check that failed |
 
 The phone shows a status only from the verified `conf` bytes, never from these JSON fields (PAYMENT-V1 4.9).
 
 ## 5. `GET /v1/notes/{noteId}`
 
-Returns the same body as section 4 for a note this server has decided, or 404 `unknown_note`. Phones use it to recover a confirmation after a dropped connection; the merchant can also read the redemption record straight from the chain (task 3.29).
+- HTTP 200 with the section 4 body once the chain has decided.
+- HTTP 202 while an attempt is in flight:
+
+  ```json
+  { "noteId": "<hex>", "status": "pending", "signature": "<base58 or null>", "retryAfter": 2 }
+  ```
+
+  `signature` is the in-flight transaction once it has been sent, so a judge can watch it on the explorer. Clients poll after `retryAfter` seconds, backing off to at most 10 seconds between polls.
+- HTTP 404 `unknown_note` for a note id this server has never attempted. A note that was only ever refused is unknown, by design (section 1).
+
+Phones use this to recover a confirmation after a dropped connection; the merchant can also read the redemption record straight from the chain (task 3.29).
 
 ## 6. `GET /api/health`
 
@@ -143,5 +159,5 @@ Returns the same body as section 4 for a note this server has decided, or 404 `u
 
 ## 7. Tests that hold both sides to this
 
-- Server (task 1.9): an integration test posts a vector note and checks the response shape above, a second post returns `replayed: true` with the same `conf`, and a tampered note returns status `refused` with the section 6 name.
+- Server (task 1.9): an integration test posts a vector note and checks the response shape above; a second post returns `replayed: true` with the same `conf`; a tampered note returns HTTP 422 named by the failed check with no `conf`; posting the same note first with a broken signature and then intact still settles it; two concurrent posts of one note produce exactly one transaction and the same `conf`.
 - iOS (task 1.10): the client decodes a recorded response from the deployed server and verifies `conf` and `allowance` with the pinned key.
