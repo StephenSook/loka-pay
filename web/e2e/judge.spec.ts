@@ -76,7 +76,8 @@ test("privacy: loads with no login and says what is true today", async ({
   const main = page.getByRole("main");
   await expect(main).toContainText("No sign-up");
   await expect(main).toContainText("Updated 2026-10-10");
-  await expect(main).toContainText("Two pages make your browser contact another website");
+  await expect(main).toContainText("Three pages make your browser contact another website");
+  await expect(main).toContainText("/watch connects to the same server to read the one allowance it shows and the transactions that touch it");
   await expect(main).toContainText("/call connects to the same server to watch for the next settled payment, only after you press");
   await expect(main).toContainText("keeps a keyed hash of the number (not the number) for up to 24 hours");
   await expect(main).toContainText("Your number is never sent to ElevenLabs.");

@@ -137,10 +137,11 @@ export default function PrivacyPage() {
           this site&apos;s own address.
         </p>
         <p>
-          Two pages make your browser contact another website, and only to read public data: /live
-          connects to {browserRpc} to read the program&apos;s transactions, and /call connects to the
-          same server to watch for the next settled payment, only after you press &quot;Call me when
-          the next payment settles&quot;. That site sees your browser&apos;s request, as any website
+          Three pages make your browser contact another website, and only to read public data: /live
+          connects to {browserRpc} to read the program&apos;s transactions, /watch connects to the same
+          server to read the one allowance it shows and the transactions that touch it, and /call
+          connects to the same server to watch for the next settled payment, only after you press
+          &quot;Call me when the next payment settles&quot;. That site sees your browser&apos;s request, as any website
           does; this site sends it nothing about you, and never your phone number. Every other page
           makes no request to any other website, except /send below.
         </p>
