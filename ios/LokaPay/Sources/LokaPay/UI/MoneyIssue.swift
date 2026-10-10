@@ -44,6 +44,15 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// decision in its offline ledger. `paid` is true for a settled CONF.
     case ledgerNotUpdated(paid: Bool)
 
+    /// A normal next step on the way to a payment, not a failure: the screen shows it in a neutral
+    /// banner instead of a red "Stopped" one.
+    public var isStep: Bool {
+        switch self {
+        case .allowanceNeeded, .alreadyReceived, .busy, .settlement(.stillPending): return true
+        default: return false
+        }
+    }
+
     public var name: String {
         switch self {
         case .payment(let e): return e.rawValue

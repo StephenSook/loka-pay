@@ -48,6 +48,7 @@ public struct PayView: View {
         }
         // A haptic when a verified ack or receipt lands (Received or Paid), not when this phone signs.
         .sensoryFeedback(.success, trigger: model.phase) { _, new in new == .receipt }
+        .announcesIssue(model.issue)
     }
 
     @ViewBuilder private var phaseContent: some View {

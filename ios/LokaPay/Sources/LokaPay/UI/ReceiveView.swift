@@ -50,6 +50,7 @@ public struct ReceiveView: View {
         // Bluetooth codes are taken only while this screen is shown; others wait in the inbox.
         .onAppear { model.startInbox() }
         .onDisappear { model.stopInbox() }
+        .announcesIssue(model.issue)
     }
 
     private func isGoodNews(_ phase: ReceiveModel.Phase) -> Bool {

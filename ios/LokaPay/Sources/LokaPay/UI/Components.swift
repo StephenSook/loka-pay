@@ -1,3 +1,4 @@
+import Accessibility
 import SwiftUI
 
 // MARK: - Money status
@@ -306,15 +307,27 @@ public struct LimitChip: View {
 
 // MARK: - Error state (task 2.12)
 
-/// Shows a named issue in plain words with the time it happened (phone clock).
+/// Shows a named issue in plain words with the time it happened (phone clock). A failure is a
+/// red "Stopped" card; a normal next step (`MoneyIssueKind.isStep`) is a neutral card.
 public struct IssueBanner: View {
     let issue: MoneyIssue
 
     public init(_ issue: MoneyIssue) { self.issue = issue }
 
+    /// The banner's heading.
+    public static func title(for issue: MoneyIssue) -> String {
+        issue.kind.isStep ? "Next step" : "Stopped: \(issue.name)"
+    }
+
+    /// What VoiceOver reads when the issue appears (plain words, no snake_case name).
+    public static func announcement(for issue: MoneyIssue) -> String {
+        (issue.kind.isStep ? "Next step. " : "Stopped. ") + issue.message
+    }
+
     public var body: some View {
+        let step = issue.kind.isStep
         VStack(alignment: .leading, spacing: 6) {
-            Label("Stopped: \(issue.name)", systemImage: "exclamationmark.octagon.fill")
+            Label(Self.title(for: issue), systemImage: step ? "arrow.right.circle.fill" : "exclamationmark.octagon.fill")
                 .font(LokaStyle.label)
             Text(issue.message)
                 .font(LokaStyle.body)
@@ -322,9 +335,20 @@ public struct IssueBanner: View {
             Text("At \(issue.at.formatted(date: .omitted, time: .standard)) (this phone's clock)")
                 .font(LokaStyle.caption)
         }
-        .foregroundStyle(LokaColor.inkFixed)
-        .lokaCard(fill: LokaColor.warningFill, border: LokaColor.warningBorder)
+        .foregroundStyle(step ? LokaColor.ink : LokaColor.inkFixed)
+        .lokaCard(fill: step ? LokaColor.card : LokaColor.warningFill, border: step ? LokaColor.ink : LokaColor.warningBorder)
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension View {
+    /// Reads each new issue aloud with VoiceOver. A banner appearing on screen is not announced
+    /// by itself, so without this a VoiceOver user would not hear that a step stopped.
+    func announcesIssue(_ issue: MoneyIssue?) -> some View {
+        onChange(of: issue) { (_: MoneyIssue?, new: MoneyIssue?) in
+            guard let new else { return }
+            AccessibilityNotification.Announcement(IssueBanner.announcement(for: new)).post()
+        }
     }
 }
 
@@ -364,6 +388,8 @@ private struct ComponentGallery: View {
                 ZeroBarsMeter(internet: .none)
                 ZeroBarsMeter(internet: .cellular)
                 IssueBanner(MoneyIssue(.payment(.offlineLimit), at: PreviewFixtures.now))
+                IssueBanner(MoneyIssue(.allowanceNeeded, at: PreviewFixtures.now))
+                Button("Disabled button") {}.buttonStyle(LokaButtonStyle()).disabled(true)
             }
             .padding(16)
         }

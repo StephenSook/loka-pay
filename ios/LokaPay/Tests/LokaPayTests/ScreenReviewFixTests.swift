@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import LokaPay
 
@@ -450,5 +451,53 @@ struct DecimalSeparatorTests {
         #expect(PayModel.normalizedAmount("1\u{066B}5", decimalSeparator: "\u{066B}") == "1.5")
         #expect(PayModel.normalizedAmount("1,5", decimalSeparator: ".") == "1,5")
         #expect(PayModel.normalizedAmount("1,5", decimalSeparator: "") == "1,5")
+    }
+}
+
+@Suite("disabled buttons, step banners and VoiceOver announcements (review 1, finding 6)")
+@MainActor
+struct ScreenFeedbackTests {
+    /// The rendered RGBA bytes of a view at a fixed size, for comparing two looks.
+    func pixels(_ view: some View) throws -> Data {
+        let renderer = ImageRenderer(content: view.frame(width: 240, height: 70).background(Color.white))
+        renderer.scale = 1
+        let image = try #require(renderer.cgImage)
+        let data = try #require(image.dataProvider?.data)
+        return data as Data
+    }
+
+    func button(enabled: Bool) -> some View {
+        Button("Sign and pay") {}.buttonStyle(LokaButtonStyle()).disabled(!enabled)
+    }
+
+    @Test("a disabled primary button renders differently from an enabled one")
+    func disabledButtonLooksDisabled() throws {
+        let enabled = try pixels(button(enabled: true))
+        #expect(try pixels(button(enabled: true)) == enabled, "rendering is deterministic")
+        #expect(try pixels(button(enabled: false)) != enabled)
+        #expect(LokaButtonStyle.disabledOpacity < 1)
+    }
+
+    @Test("normal steps are neutral; failures stay Stopped")
+    func steps() {
+        let pending = PendingSettlement(noteId: Data(repeating: 1, count: 32), signature: nil, explorer: nil, retryAfter: 2)
+        let steps: [MoneyIssueKind] = [.allowanceNeeded, .alreadyReceived, .busy, .settlement(.stillPending(pending))]
+        let stops: [MoneyIssueKind] = [
+            .payment(.payeeMismatch), .payment(.serialSeen), .payment(.storage), .serverNotConnected, .notPaymentCode,
+            .signing("x"), .ledgerNotUpdated(paid: true), .settlement(.http(status: 503, error: nil, message: nil)),
+        ]
+        for kind in steps { #expect(kind.isStep, "\(kind.name)") }
+        for kind in stops { #expect(!kind.isStep, "\(kind.name)") }
+    }
+
+    @Test("banner titles and VoiceOver announcements use plain words")
+    func titlesAndAnnouncements() {
+        let step = MoneyIssue(.allowanceNeeded, at: F.now)
+        #expect(IssueBanner.title(for: step) == "Next step")
+        #expect(IssueBanner.announcement(for: step) == "Next step. " + MoneyIssueKind.allowanceNeeded.message)
+        let stop = MoneyIssue(.payment(.payeeMismatch), at: F.now)
+        #expect(IssueBanner.title(for: stop) == "Stopped: payee_mismatch")
+        #expect(IssueBanner.announcement(for: stop) == "Stopped. This payment is addressed to a different merchant.")
+        #expect(!IssueBanner.announcement(for: stop).contains("_"))
     }
 }

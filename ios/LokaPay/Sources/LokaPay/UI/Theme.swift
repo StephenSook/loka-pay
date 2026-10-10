@@ -139,25 +139,44 @@ extension View {
     }
 }
 
-/// A full-width primary button in the card style.
+/// A full-width primary button in the card style. Disabled, it is flat (no offset shadow) and
+/// dimmed, so it never looks tappable.
 struct LokaButtonStyle: ButtonStyle {
     var fill: Color = LokaColor.ink
     var text: Color = LokaColor.paper
 
+    static let disabledOpacity = 0.4
+
     func makeBody(configuration: Configuration) -> some View {
+        LokaButtonBody(configuration: configuration, fill: fill, text: text)
+    }
+}
+
+/// The button body as a view of its own, so it can read `isEnabled` from the environment.
+private struct LokaButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let fill: Color
+    let text: Color
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        return configuration.label
+        let pressed = configuration.isPressed && isEnabled
+        configuration.label
             .font(LokaStyle.headline)
             .foregroundStyle(text)
             .frame(maxWidth: .infinity, minHeight: 50)
             .padding(.horizontal, 12)
             .background {
                 ZStack {
-                    shape.fill(LokaColor.shadow).offset(x: configuration.isPressed ? 1 : 3, y: configuration.isPressed ? 1 : 3)
+                    if isEnabled {
+                        shape.fill(LokaColor.shadow).offset(x: pressed ? 1 : 3, y: pressed ? 1 : 3)
+                    }
                     shape.fill(fill)
                 }
             }
             .overlay(shape.strokeBorder(LokaColor.ink, lineWidth: LokaStyle.borderWidth))
-            .offset(x: configuration.isPressed ? 2 : 0, y: configuration.isPressed ? 2 : 0)
+            .offset(x: pressed ? 2 : 0, y: pressed ? 2 : 0)
+            .opacity(isEnabled ? 1 : LokaButtonStyle.disabledOpacity)
     }
 }
