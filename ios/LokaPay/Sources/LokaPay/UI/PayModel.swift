@@ -109,6 +109,9 @@ public final class PayModel {
     public private(set) var cheatMerchant: MerchantCertificate?
     public private(set) var cheat: CheatNote?
     public private(set) var cheatCodeStep: CodeStep = .allowance
+    /// Counts signing attempts; each `signCheat` and each close of the control moves it on, so a
+    /// result from a superseded attempt is recognised and dropped.
+    @ObservationIgnored private var cheatAttempt: UInt64 = 0
 
     public let deployment: Deployment
     private let signer: (any PaymentSigner)?
@@ -402,8 +405,16 @@ public final class PayModel {
             return copy
         }()
         let deployment = deployment
+        cheatAttempt &+= 1
+        let attempt = cheatAttempt
         issue = nil
         cheatStep = .signing
+        // True only while this attempt is the control's current one. New payment, Change merchant
+        // or a newer attempt supersedes it, and its late result (success or failure) is dropped,
+        // so it can never touch a newer attempt's state.
+        func isCurrent() -> Bool {
+            cheatAttempt == attempt && cheatStep == .signing && cheatOriginal?.noteId == original.noteId
+        }
         let signed: SignedNote
         do {
             // Off the main actor: the Secure Enclave blocks while Face ID or the passcode sheet is up.
@@ -411,14 +422,12 @@ public final class PayModel {
             let checked = try SignedNote.validate(wire: signed.wire, deployment: deployment)
             guard checked.payerKeyHash == certificate.payerKeyHash else { throw PaymentError.payerMismatch }
         } catch {
-            // Closed while the signer was up (New payment, Change merchant): nothing to report on.
-            guard cheatStep == .signing else { return }
+            guard isCurrent() else { return }
             cheatStep = .confirm
             if let error = error as? PaymentError { return report(.payment(error)) }
             return report(.signing("no serial was reserved; \(error.localizedDescription)"))
         }
-        // New payment or Change merchant while the signer was up closes the control: show nothing.
-        guard cheatStep == .signing, cheatOriginal?.noteId == original.noteId else { return }
+        guard isCurrent() else { return }
         cheat = CheatNote(original: original, merchant: merchantB,
                           payment: SignedPayment(note: signed,
                                                  allowanceText: PaymentTransport.encode(.allowance, allowance.wire),
@@ -439,6 +448,8 @@ public final class PayModel {
     }
 
     private func clearCheat() {
+        // Supersedes any signing attempt still waiting for the signer.
+        cheatAttempt &+= 1
         cheatStep = .off
         cheatOriginal = nil
         cheatMerchant = nil

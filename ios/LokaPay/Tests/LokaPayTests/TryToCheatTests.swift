@@ -30,6 +30,49 @@ private final class SwitchableSigner: PaymentSigner, @unchecked Sendable {
     }
 }
 
+/// Holds the signature of chosen notes (payee `heldPayee`, by serial) until the test releases it,
+/// then fails it like a cancelled Face ID or signs it. Everything else signs at once. Lets a test
+/// make an old attempt's result arrive after a newer attempt started.
+private final class HeldSigner: PaymentSigner, @unchecked Sendable {
+    enum Outcome { case fail, pass }
+
+    let inner: SoftwareP256Signer
+    let heldPayee: Data
+    private let lock = NSLock()
+    private var gates: [UInt8: (gate: DispatchSemaphore, outcome: Outcome)] = [:]
+
+    init(inner: SoftwareP256Signer, heldPayee: Data) {
+        self.inner = inner
+        self.heldPayee = heldPayee
+    }
+
+    /// Holds the note to `heldPayee` with `serial` until the returned semaphore is signalled.
+    func hold(serial: UInt8, then outcome: Outcome) -> DispatchSemaphore {
+        let gate = DispatchSemaphore(value: 0)
+        lock.withLock { gates[serial] = (gate, outcome) }
+        return gate
+    }
+
+    var compressedPublicKey: Data { inner.compressedPublicKey }
+
+    func sign(_ message: Data) throws -> Data {
+        let start = message.startIndex
+        let payee = message.subdata(in: (start + 89)..<(start + 121))
+        let serial = message[start + 132]
+        if payee == heldPayee, let held = lock.withLock({ gates[serial] }) {
+            // Bounded, so a broken test fails instead of hanging.
+            guard held.gate.wait(timeout: .now() + 10) == .success else {
+                throw NSError(domain: "HeldSigner", code: 1, userInfo: [NSLocalizedDescriptionKey: "never released"])
+            }
+            if held.outcome == .fail {
+                throw NSError(domain: "com.apple.LocalAuthentication", code: -2,
+                              userInfo: [NSLocalizedDescriptionKey: "Authentication canceled."])
+            }
+        }
+        return try inner.sign(message)
+    }
+}
+
 /// A merchant certificate for another deployment's program id, signed by the real server key.
 private func merchantWire(merchant: Data, programId: Data) -> Data {
     let name = Data("Elsewhere".utf8)
@@ -277,6 +320,58 @@ struct TryToCheatPayerTests {
         #expect(model.issue?.message.contains("no serial was reserved") == true)
         #expect(try Data(contentsOf: url) == storeBefore)
         #expect(model.phase == .showNote)
+    }
+
+    /// Yields to the main actor until `condition` holds (bounded).
+    func waitUntil(_ condition: () -> Bool) async throws {
+        var turns = 0
+        while !condition(), turns < 10_000 {
+            await Task.yield()
+            turns += 1
+        }
+        try #require(condition())
+    }
+
+    @Test("a superseded attempt's late failure or success never touches the newer attempt (Codex round 1)")
+    func supersededAttemptIgnored() async throws {
+        for late in [HeldSigner.Outcome.fail, .pass] {
+            let serials = SerialReservations(url: F.tempURL("s.json"))
+            let signer = HeldSigner(inner: payer, heldPayee: merchantB.keyHash)
+            let model = try await paid(signer: signer, serials: serials, allowanceWire: F.allowanceWire(payer: payer.keyHash))
+            let firstGate = signer.hold(serial: 0, then: late)
+            let secondGate = signer.hold(serial: 1, then: .pass)
+
+            // Attempt 1 (serial 0) waits for the signer; New payment closes the control meanwhile.
+            model.startCheat()
+            model.acceptCheatMerchant(text: merchantBText)
+            let first = Task { await model.signCheat() }
+            try await waitUntil { model.cheatStep == .signing }
+            model.newPayment()
+            #expect(model.cheatStep == .off)
+
+            // Attempt 2 for the next payment (serial 1) is signing when attempt 1's result arrives.
+            model.amountText = "0.50"
+            await model.pay()
+            #expect(model.payment?.note.note.serial == 1)
+            model.startCheat()
+            model.acceptCheatMerchant(text: merchantBText)
+            let second = Task { await model.signCheat() }
+            try await waitUntil { model.cheatStep == .signing }
+            firstGate.signal()
+            await first.value
+            #expect(model.cheatStep == .signing, "late \(late)")
+            #expect(model.issue == nil, "late \(late)")
+            #expect(model.cheat == nil, "late \(late)")
+
+            // Attempt 2 finishes and is shown, bound to the payment on screen.
+            secondGate.signal()
+            await second.value
+            #expect(model.cheatStep == .showNote, "late \(late)")
+            #expect(model.issue == nil, "late \(late)")
+            #expect(model.cheat?.payment.note.note.serial == 1, "late \(late)")
+            #expect(model.cheat?.original == model.payment?.note, "late \(late)")
+            #expect(try serials.remaining(allowanceId: F.allowanceId) == 254)
+        }
     }
 }
 
