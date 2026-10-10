@@ -162,8 +162,14 @@ test("/judge: seven numbered stops, the program facts and each workflow's result
     await expect(line.getByTestId("ci-result")).toHaveText(EXPECTED.ci[file] === "success" ? "Passed" : "Failed");
     await expect(line.getByRole("link")).toHaveAttribute("href", /^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\/runs\/\d+\/job\/\d+$/);
   }
-  // The stand-in's server job failed, so the note about it is shown.
-  await expect(page.getByTestId("server-workflow-note")).toContainText("does not pass until that code is merged");
+  // The stand-in's server job failed, so the note about it is shown. The server code is merged,
+  // so the note points at the deployed server's own commit instead of saying it is unmerged.
+  const serverNote = page.getByTestId("server-workflow-note");
+  await expect(serverNote).toContainText(
+    "The server workflow tests the settlement server code in server/ on main's latest commit. The server deployed at api.zerobars.us reports the commit it runs on its health check:",
+  );
+  await expect(serverNote).not.toContainText("merged");
+  await expect(serverNote.getByTestId("server-health-link")).toHaveAttribute("href", "https://api.zerobars.us/api/health");
   // No image from GitHub: a hotlinked badge would send the visitor's GitHub cookies with it.
   await expect(page.locator("img")).toHaveCount(0);
   await page.waitForLoadState("networkidle");
