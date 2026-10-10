@@ -69,10 +69,15 @@ public enum ScanParser {
 }
 
 /// Shows one transport text as a QR code, with what it is underneath for VoiceOver and sighted
-/// readers. The code is drawn on white with a quiet zone so phone cameras read it in dark mode.
+/// readers. The code is drawn on white with a quiet zone so phone cameras read it in dark mode, and
+/// the screen goes to full brightness while it is shown (`ScreenBrightness`) unless `brightens` is
+/// false.
 struct PaymentQRView: View {
     let text: String
     let caption: String
+    /// False only for a code that sits on a resting screen, so that screen does not stay at full
+    /// brightness the whole time it is open.
+    var brightens = true
 
     var body: some View {
         VStack(spacing: 10) {
@@ -87,6 +92,7 @@ struct PaymentQRView: View {
                         .strokeBorder(LokaColor.ink, lineWidth: LokaStyle.borderWidth))
                     .frame(maxWidth: 320)
                     .accessibilityLabel(Text("QR code: \(caption)"))
+                    .raisesScreenBrightness(brightens)
             } else {
                 Text("This phone could not draw the QR code.")
                     .font(LokaStyle.body)
