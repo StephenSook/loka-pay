@@ -39,6 +39,10 @@ export interface ResolveInput<T> {
   maxAgeMs: number;
   /** The latest failure recorded for this key, for example by a background refresh. */
   lastFailure: () => FailedRead | null;
+  /** The latest successful read made now (readNow) for this key, kept in this server process. */
+  lastGoodRead: () => Stamped<T> | null;
+  /** Keeps a successful read made now, with its own read time, for the next page view. */
+  keepGoodRead: (entry: Stamped<T>) => void;
   now: () => number;
 }
 
@@ -50,10 +54,16 @@ export async function resolveRead<T>(input: ResolveInput<T>): Promise<Read<T>> {
   } catch (e) {
     failure = { reason: describeFailure(e), atMs: input.now() };
   }
+  // The cache cannot be written from here, and while its own background refresh keeps
+  // failing it keeps answering with its old entry. A read made now is kept beside it, so the
+  // next page view uses that read (it is newer) instead of reading devnet again.
+  const kept = input.lastGoodRead();
+  if (entry && kept && kept.readAtMs > entry.readAtMs) entry = kept;
   let staleBecause: FailedRead | null = null;
   if (entry && input.now() - entry.readAtMs > input.maxAgeMs) {
     try {
       entry = await input.readNow();
+      input.keepGoodRead(entry);
     } catch (e) {
       // The older entry is still the last good read; the page says this read failed.
       staleBecause = { reason: describeFailure(e), atMs: input.now() };

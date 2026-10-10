@@ -11,7 +11,7 @@
 // stale together with the failed read's reason and time (lib/read-state.ts), and says both.
 
 import { unstable_cache } from "next/cache";
-import { resolveRead, type FailedRead, type Read } from "./read-state";
+import { resolveRead, type FailedRead, type Read, type Stamped } from "./read-state";
 import { describeFailure } from "./solana";
 
 export type { FailedRead, Read } from "./read-state";
@@ -20,6 +20,12 @@ export type { FailedRead, Read } from "./read-state";
 // in the background after answering with it; when that refresh fails, the cache keeps the
 // old entry and says nothing, so the failure is recorded here for the next page to show.
 const lastFailures = new Map<string, FailedRead>();
+
+// The latest successful read made past the cache (readNow below) per key in this server
+// process, with its own read time. unstable_cache cannot be written to directly, so while its
+// background refresh keeps failing it would hand every page view its old entry and every view
+// would read devnet again; this keeps the newer read for the next views instead.
+const lastGoodReads = new Map<string, Stamped<unknown>>();
 
 export async function cachedRead<T>(key: string, revalidateSeconds: number, read: () => Promise<T>): Promise<Read<T>> {
   const stamped = async () => {
@@ -38,6 +44,10 @@ export async function cachedRead<T>(key: string, revalidateSeconds: number, read
     // judge arriving at an idle site does not see an old value.
     maxAgeMs: revalidateSeconds * 4 * 1000,
     lastFailure: () => lastFailures.get(key) ?? null,
+    lastGoodRead: () => (lastGoodReads.get(key) as Stamped<T> | undefined) ?? null,
+    keepGoodRead: (entry) => {
+      lastGoodReads.set(key, entry);
+    },
     now: Date.now,
   });
 }

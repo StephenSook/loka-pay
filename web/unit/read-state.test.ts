@@ -29,6 +29,8 @@ function input(options: {
       },
       maxAgeMs: MAX_AGE,
       lastFailure: () => options.lastFailure ?? null,
+      lastGoodRead: () => null,
+      keepGoodRead: () => {},
       now: () => NOW,
     },
   };
@@ -75,4 +77,57 @@ test("a background refresh that failed after the entry was read makes the entry 
 test("a failure older than the entry is history: the entry is current", async () => {
   const i = input({ cached: { data: "v1", readAtMs: NOW - 10_000 }, lastFailure: { reason: "earlier outage", atMs: NOW - 90_000 } });
   expect(await resolveRead(i.value)).toEqual({ ok: true, data: "v1", readAtMs: NOW - 10_000, staleBecause: null });
+});
+
+// The cache's background refresh keeps failing, so the cache keeps answering with its old
+// entry. A fake clock moves time; reads made now are counted.
+test.describe("a read made now is kept for the next page view", () => {
+  function setup(cachedEntry: () => Stamped<string>) {
+    const clock = { ms: NOW };
+    let reads = 0;
+    let kept: Stamped<string> | null = null;
+    const value = {
+      cached: async () => cachedEntry(),
+      readNow: async () => {
+        reads += 1;
+        return { data: `read-now-${reads}`, readAtMs: clock.ms };
+      },
+      maxAgeMs: MAX_AGE,
+      lastFailure: () => null,
+      lastGoodRead: () => kept,
+      keepGoodRead: (entry: Stamped<string>) => {
+        kept = entry;
+      },
+      now: () => clock.ms,
+    };
+    return { clock, value, reads: () => reads };
+  }
+
+  test("past the window, the next views use the kept read instead of reading devnet again", async () => {
+    const old = { data: "v1", readAtMs: NOW - 600_000 };
+    const s = setup(() => old);
+    expect(await resolveRead(s.value)).toEqual({ ok: true, data: "read-now-1", readAtMs: NOW, staleBecause: null });
+    expect(s.reads()).toBe(1);
+    // Thirty seconds later the cache still answers with its old entry.
+    s.clock.ms = NOW + 30_000;
+    expect(await resolveRead(s.value)).toEqual({ ok: true, data: "read-now-1", readAtMs: NOW, staleBecause: null });
+    s.clock.ms = NOW + MAX_AGE;
+    expect(await resolveRead(s.value)).toEqual({ ok: true, data: "read-now-1", readAtMs: NOW, staleBecause: null });
+    expect(s.reads()).toBe(1);
+    // Once the kept read is older than the window too, the next view reads again and keeps that.
+    s.clock.ms = NOW + MAX_AGE + 1;
+    expect(await resolveRead(s.value)).toEqual({ ok: true, data: "read-now-2", readAtMs: NOW + MAX_AGE + 1, staleBecause: null });
+    expect(s.reads()).toBe(2);
+  });
+
+  test("a newer cache entry (its refresh succeeded) wins over an older kept read", async () => {
+    let entry = { data: "v1", readAtMs: NOW - 600_000 };
+    const s = setup(() => entry);
+    await resolveRead(s.value);
+    expect(s.reads()).toBe(1);
+    s.clock.ms = NOW + 20_000;
+    entry = { data: "v2-from-cache", readAtMs: NOW + 10_000 };
+    expect(await resolveRead(s.value)).toEqual({ ok: true, data: "v2-from-cache", readAtMs: NOW + 10_000, staleBecause: null });
+    expect(s.reads()).toBe(1);
+  });
 });
