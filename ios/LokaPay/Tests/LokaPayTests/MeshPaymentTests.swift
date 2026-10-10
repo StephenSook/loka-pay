@@ -26,6 +26,28 @@ struct MeshPaymentTests {
 
     var allowanceText: String { PaymentTransport.encode(.allowance, allowanceWire) }
 
+    /// An allowance signed by the vector server key over the hash of `list`, whatever `list` holds.
+    func signedAllowance(list: Data) -> Data {
+        var w = ByteWriter()
+        w.ascii(AllowanceCertificate.prefix, count: 16)
+        w.bytes(F.deployment.programId, count: 32)
+        w.u8(F.deployment.clusterId)
+        w.bytes(F.deployment.mint, count: 32)
+        w.u64(F.allowanceId)
+        w.bytes(payer.keyHash, count: 32)
+        w.u64(5_000_000)
+        w.u64(3_000_000)
+        w.i64(F.expiry)
+        w.bytes(Earmarks.hash(list), count: 32)
+        w.u64(0)
+        return w.data + F.sign(w.data, nil) + list
+    }
+
+    /// `MeshPaymentText.route` with the test deployment and the pinned (vector) server key.
+    func route(_ text: String, fromContact: Bool, serverKey: Data? = F.serverKey) -> MeshPaymentText.Route {
+        MeshPaymentText.route(text, fromContact: fromContact, deployment: F.deployment, serverPublicKey: serverKey)
+    }
+
     func noteText(_ note: SignedNote) -> String { PaymentTransport.encode(.note, note.wire) }
 
     func ackText(_ note: SignedNote) throws -> String {
@@ -50,15 +72,15 @@ struct MeshPaymentTests {
     func routesPaymentContent() throws {
         let signed = try note()
         let ack = try Ack.sign(note: signed, receivedAt: 1_800_000_000, with: merchant)
-        #expect(MeshPaymentText.route(noteText(signed), fromContact: true) == .receive)
-        #expect(MeshPaymentText.route(allowanceText, fromContact: true) == .receive)
-        #expect(MeshPaymentText.route(PaymentTransport.encode(.ack, ack.wire), fromContact: true) == .pay)
+        #expect(route(noteText(signed), fromContact: true) == .receive)
+        #expect(route(allowanceText, fromContact: true) == .receive)
+        #expect(route(PaymentTransport.encode(.ack, ack.wire), fromContact: true) == .pay)
         let pending = Bundles.receipt(note: signed, ack: ack, confirmationWire: nil)
         let settled = Bundles.receipt(note: signed, ack: ack, confirmationWire: F.confWire(noteId: signed.noteId, status: 1))
-        #expect(MeshPaymentText.route(PaymentTransport.encode(.receipt, pending), fromContact: true) == .pay)
-        #expect(MeshPaymentText.route(PaymentTransport.encode(.receipt, settled), fromContact: true) == .pay)
+        #expect(route(PaymentTransport.encode(.receipt, pending), fromContact: true) == .pay)
+        #expect(route(PaymentTransport.encode(.receipt, settled), fromContact: true) == .pay)
         let earmarked = F.allowanceWire(payer: payer.keyHash, earmarks: [merchant.keyHash, SoftwareP256Signer().keyHash].sorted { $0.lexicographicallyPrecedes($1) })
-        #expect(MeshPaymentText.route(PaymentTransport.encode(.allowance, earmarked), fromContact: true) == .receive)
+        #expect(route(PaymentTransport.encode(.allowance, earmarked), fromContact: true) == .receive)
     }
 
     @Test("malformed texts and kinds no screen takes over the mesh are dropped before any inbox")
@@ -87,9 +109,9 @@ struct MeshPaymentTests {
             noteText(signed) + "=",
         ]
         for text in unused + malformed {
-            #expect(MeshPaymentText.route(text, fromContact: true) == .drop, "\(text.prefix(24))")
+            #expect(route(text, fromContact: true) == .drop, "\(text.prefix(24))")
         }
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         for (index, text) in (unused + malformed).enumerated() {
             #expect(router.receive(text, from: "contact", fromContact: true, packetID: "junk-\(index)"))
         }
@@ -98,12 +120,70 @@ struct MeshPaymentTests {
         #expect(router.payInbox.held.isEmpty)
     }
 
+    @Test("allowances and receipts are verified against the deployment and the pinned key before any inbox")
+    func verifiesServerSignedTexts() throws {
+        let signed = try note()
+        let ack = try Ack.sign(note: signed, receivedAt: 1_800_000_000, with: merchant)
+        let rogue = Curve25519.Signing.PrivateKey()
+        // Allowance: a stranger's signature, a list that does not match its hash, a list out of order.
+        let forgedAllowance = F.allowanceWire(payer: payer.keyHash, signedBy: rogue)
+        var wrongHash = Data(allowanceWire)
+        wrongHash.removeLast(2)
+        wrongHash.append(contentsOf: [0, 1] + Array(repeating: UInt8(7), count: 32))
+        // Server-signed, with the hash of their own list, but the list is out of order or repeats a key:
+        // only the canonical-list check refuses these.
+        let a = SoftwareP256Signer().keyHash, b = SoftwareP256Signer().keyHash
+        let sorted = [a, b].sorted { $0.lexicographicallyPrecedes($1) }
+        let unsorted = signedAllowance(list: Data([0, 2]) + sorted[1] + sorted[0])
+        let repeated = signedAllowance(list: Data([0, 2]) + a + a)
+        // The same fixture with a canonical list passes, so the refusals below are about the list.
+        #expect(route(PaymentTransport.encode(.allowance, signedAllowance(list: Data([0, 2]) + sorted[0] + sorted[1])),
+                      fromContact: true) == .receive)
+        // Receipt: an ack by a key that is not the payee's, and a CONF by a stranger or for another note.
+        let stranger = SoftwareP256Signer()
+        let body = Ack.encode(noteId: signed.noteId, receivedAt: 1_800_000_000)
+        let strangerAck = body + (try stranger.sign(body)) + stranger.compressedPublicKey
+        let otherNote = try note(serial: 4)
+        let refused = [
+            PaymentTransport.encode(.allowance, forgedAllowance),
+            PaymentTransport.encode(.allowance, wrongHash),
+            PaymentTransport.encode(.allowance, unsorted),
+            PaymentTransport.encode(.allowance, repeated),
+            PaymentTransport.encode(.receipt, signed.wire + strangerAck + Data([0])),
+            PaymentTransport.encode(.receipt, Bundles.receipt(note: signed, ack: ack,
+                confirmationWire: F.confWire(noteId: signed.noteId, status: 1, signedBy: rogue))),
+            PaymentTransport.encode(.receipt, Bundles.receipt(note: signed, ack: ack,
+                confirmationWire: F.confWire(noteId: otherNote.noteId, status: 1))),
+        ]
+        for text in refused { #expect(route(text, fromContact: true) == .drop, "\(text.prefix(30))") }
+        // A note for another deployment is refused too.
+        let elsewhere = Deployment(programId: Data(repeating: 9, count: 32), clusterId: 0, mint: F.deployment.mint)
+        #expect(MeshPaymentText.route(noteText(signed), fromContact: true, deployment: elsewhere,
+                                      serverPublicKey: F.serverKey) == .drop)
+
+        // No server key pinned: allowances and receipts cannot be checked and are never queued;
+        // notes and acks, which need no server key, still are.
+        let pending = PaymentTransport.encode(.receipt, Bundles.receipt(note: signed, ack: ack, confirmationWire: nil))
+        #expect(route(allowanceText, fromContact: true, serverKey: nil) == .unverifiable)
+        #expect(route(pending, fromContact: true, serverKey: nil) == .unverifiable)
+        #expect(route(noteText(signed), fromContact: true, serverKey: nil) == .receive)
+        #expect(route(PaymentTransport.encode(.ack, ack.wire), fromContact: true, serverKey: nil) == .pay)
+        let unpinned = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: nil)
+        unpinned.receive(allowanceText, from: "contact", fromContact: true, packetID: "a-1")
+        unpinned.receive(allowanceText, from: "contact", fromContact: true, packetID: "a-1")
+        unpinned.receive(pending, from: "contact", fromContact: true, packetID: "x-1")
+        unpinned.receive(noteText(signed), from: "contact", fromContact: true, packetID: "n-1")
+        #expect(unpinned.unverifiable == 2)
+        #expect(unpinned.receiveInbox.held == [noteText(signed)])
+        #expect(unpinned.payInbox.held.isEmpty)
+    }
+
     @Test("any other L1|P text, and L1|P from a non-contact, is dropped, never chat")
     func dropsOtherPaymentText() {
         for text in ["L1|P|2|N|AAAA", "L1|P|1", "L1|P", "L1|P|", "L1|Pay me back"] {
-            #expect(MeshPaymentText.route(text, fromContact: true) == .drop, "\(text)")
+            #expect(route(text, fromContact: true) == .drop, "\(text)")
         }
-        #expect(MeshPaymentText.route("L1|P|1|N|AAAA", fromContact: false) == .drop)
+        #expect(route("L1|P|1|N|AAAA", fromContact: false) == .drop)
     }
 
     @Test("games, chat content and plain text are untouched, from contacts and others alike")
@@ -111,8 +191,8 @@ struct MeshPaymentTests {
         let loka = ["L1|G|2|I|session", "L1|G|1|quiz", "L1|T|\(Self.chatUUID)|aGk=", "L1|A|\(Self.chatUUID)",
                     "L1|B|\(Self.chatUUID)|1800000000000", "L1|R|\(Self.chatUUID)|eA==", "hello", "", "L1|"]
         for text in loka {
-            #expect(MeshPaymentText.route(text, fromContact: true) == .loka, "\(text)")
-            #expect(MeshPaymentText.route(text, fromContact: false) == .loka, "\(text)")
+            #expect(route(text, fromContact: true) == .loka, "\(text)")
+            #expect(route(text, fromContact: false) == .loka, "\(text)")
         }
     }
 
@@ -120,7 +200,7 @@ struct MeshPaymentTests {
 
     @Test("a note from a contact lands in the Receive inbox only; chat and games are not taken")
     func noteReachesReceiveInboxOnly() throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let text = noteText(try note())
         #expect(router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1"))
         #expect(router.receiveInbox.held == [text])
@@ -136,7 +216,7 @@ struct MeshPaymentTests {
 
     @Test("LOKA's retry of a packet still waiting is not delivered twice; a resend (new packet) is")
     func retriedPacketDeliveredOnce() throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let text = noteText(try note())
         #expect(router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1"))
         #expect(router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1"))
@@ -150,7 +230,7 @@ struct MeshPaymentTests {
     func resendAfterDrop() throws {
         var clock = F.now
         let inbox = PaymentInbox(now: { clock })
-        let router = MeshPaymentRouter(receiveInbox: inbox, now: { clock })
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey, receiveInbox: inbox, now: { clock })
         let text = noteText(try note())
         router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1")
 
@@ -179,7 +259,7 @@ struct MeshPaymentTests {
 
     @Test("a drop is remembered for as long as its packet is, however many drops follow")
     func dropOutlivesLaterDrops() throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let text = noteText(try note())
         router.receive(text, from: "payer-phone", fromContact: true, packetID: "p1")
         // 100 more texts while no screen is attached: the note goes first, then 84 fillers.
@@ -196,7 +276,7 @@ struct MeshPaymentTests {
 
     @Test("acks and receipts land in the Pay inbox; non-contact and other-version texts are dropped, counted once each")
     func returnsAndDrops() throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let signed = try note()
         let ack = try ackText(signed)
         #expect(router.receive(ack, from: "merchant-phone", fromContact: true, packetID: "y1"))
@@ -215,7 +295,7 @@ struct MeshPaymentTests {
 
     @Test("the same note text from two contacts: each delivered once, and the reply goes to neither")
     func sameTextFromTwoContacts() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         let signed = try note()
         let text = noteText(signed)
@@ -239,7 +319,7 @@ struct MeshPaymentTests {
 
     @Test("two contacts with two notes: each reply goes to its own sender")
     func twoContactsTwoNotes() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         receive.startInbox()
         let first = try note(serial: 0), second = try note(serial: 1)
@@ -264,7 +344,7 @@ struct MeshPaymentTests {
 
     @Test("a note accepted by camera gets no Bluetooth reply, even after a contact sends a copy")
     func cameraNoteNeverRedirected() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         let signed = try note()
         await receive.accept(text: allowanceText)
@@ -280,7 +360,7 @@ struct MeshPaymentTests {
 
     @Test("a later text from another contact never redirects the reply: other notes leave it, a copy withholds it")
     func laterTextsNeverRedirect() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         receive.startInbox()
         let signed = try note()
@@ -313,7 +393,7 @@ struct MeshPaymentTests {
                          serverPublicKey: F.serverKey, inbox: router.receiveInbox, now: { F.now })
         }
         let signed = try note()
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let first = model(router)
         first.startInbox()
         router.receive(allowanceText, from: "contact-a", fromContact: true, packetID: "a-1")
@@ -331,7 +411,7 @@ struct MeshPaymentTests {
         first.stopInbox()
 
         // Relaunch: a new screen and a new router over the same ledger. B sends the identical note.
-        let relaunched = MeshPaymentRouter()
+        let relaunched = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let second = model(relaunched)
         second.startInbox()
         relaunched.receive(noteText(signed), from: "contact-b", fromContact: true, packetID: "n-1")
@@ -361,7 +441,7 @@ struct MeshPaymentTests {
 
     @Test("the sender's packets are released only by an ack that verifies for its note")
     func answeredOnlyByAVerifiedAck() throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let signed = try note()
         router.sent(noteText: noteText(signed), packetIDs: ["allowance-packet", "note-packet"])
 
@@ -389,7 +469,7 @@ struct MeshPaymentTests {
     @Test("resends keep a bounded, live list of packet ids per payment")
     func packetIdsStayBounded() throws {
         var clock = F.now
-        let router = MeshPaymentRouter(now: { clock })
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey, now: { clock })
         let signed = try note()
         let text = noteText(signed)
         for index in 0..<40 { router.sent(noteText: text, packetIDs: ["a-\(index)", "n-\(index)"]) }
@@ -408,7 +488,7 @@ struct MeshPaymentTests {
 
     @Test("the pick is for one payment: after New payment nothing old is sent and the payer picks again")
     func stalePickAfterNewPayment() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let pay = payModel(meshSend: { router.queueOutgoing($0) })
         pay.acceptMerchant(text: PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchant.keyHash)))
         pay.amountText = "1.00"
@@ -460,7 +540,7 @@ struct MeshPaymentTests {
 
     @Test("a resend that brings a payment back re-offers its stored ack to the first sender")
     func resendReoffersStoredAck() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         receive.startInbox()
         let signed = try note()
@@ -487,7 +567,7 @@ struct MeshPaymentTests {
 
     @Test("payer to merchant and back: the note is received, the ack returns to the payer, Pay shows it")
     func roundTrip() async throws {
-        let payerRouter = MeshPaymentRouter(), merchantRouter = MeshPaymentRouter()
+        let payerRouter = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey), merchantRouter = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let pay = payModel(meshSend: { payerRouter.queueOutgoing($0) })
         let merchantWire = F.merchantWire(merchant: merchant.keyHash)
         let receive = receiveModel(merchantRouter)
@@ -534,7 +614,7 @@ struct MeshPaymentTests {
 
     @Test("an ack for another note reaching Pay over Bluetooth is not this payment's and raises no error")
     func strayReturnIgnored() async throws {
-        let router = MeshPaymentRouter()
+        let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let pay = payModel(meshSend: { _ in })
         MeshReturns.attach(router.payInbox, to: pay)
         pay.acceptMerchant(text: PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchant.keyHash)))

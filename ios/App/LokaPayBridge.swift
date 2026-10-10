@@ -252,7 +252,7 @@ final class LokaPayStore: ObservableObject {
     /// Payment texts over LOKA's Bluetooth mesh (PAYMENT-V1 section 5): the Receive inbox, the Pay
     /// returns inbox, and which contact each note came from. One for the app's lifetime, so it
     /// outlives LOKA's view resets like this store.
-    let mesh = MeshPaymentRouter()
+    let mesh: MeshPaymentRouter
     /// The LOKA side of the glue, set by `LokaPayTab` when it appears (a LOKA reset rebuilds it).
     weak var meshChat: ChatStore?
     weak var meshContacts: ContactStore?
@@ -291,6 +291,13 @@ final class LokaPayStore: ObservableObject {
 
     init(bundle: Bundle = .main) {
         pins = Self.loadPins(bundle: bundle)
+        // Admission checks payment texts against the pinned deployment and server key. With no server
+        // key pinned, allowances and receipts are counted as unverifiable and never queued.
+        if case .ready(let deployment, let serverKey) = pins {
+            mesh = MeshPaymentRouter(deployment: deployment, serverPublicKey: serverKey)
+        } else {
+            mesh = MeshPaymentRouter(deployment: nil, serverPublicKey: nil)
+        }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("LokaPay", isDirectory: true)
         if case .ready(let deployment, let serverKey?) = pins {
@@ -1308,6 +1315,7 @@ final class LokaPayMeshNotes: ObservableObject {
     @Published var status: String?
     /// The router's drop count when the banner was last dismissed; it shows drops after that.
     @Published var droppedSeen = 0
+    @Published var unverifiableSeen = 0
 }
 
 /// What the Bluetooth glue last did (queued, not sent and why, an ack arrived) and how many payment
@@ -1320,9 +1328,10 @@ private struct LokaPayMeshBanner: View {
 
     var body: some View {
         let dropped = max(0, store.mesh.dropped - notes.droppedSeen)
+        let unverifiable = max(0, store.mesh.unverifiable - notes.unverifiableSeen)
         Group {
-            if notes.status != nil || dropped > 0 {
-                banner(dropped: dropped)
+            if notes.status != nil || dropped > 0 || unverifiable > 0 {
+                banner(dropped: dropped, unverifiable: unverifiable)
             } else {
                 Color.clear.frame(height: 0)
             }
@@ -1334,7 +1343,7 @@ private struct LokaPayMeshBanner: View {
         }
     }
 
-    private func banner(dropped: Int) -> some View {
+    private func banner(dropped: Int, unverifiable: Int) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .foregroundStyle(LokaColor.ink)
@@ -1342,7 +1351,11 @@ private struct LokaPayMeshBanner: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let status = notes.status { Text(status) }
                 if dropped > 0 {
-                    Text("Payment texts dropped (another version, or not from a contact): " + String(dropped) + ".")
+                    Text("Payment texts dropped (failed their checks, another version, or not from a contact): "
+                         + String(dropped) + ".")
+                }
+                if unverifiable > 0 {
+                    Text("Payment texts this phone cannot check yet (no server key pinned): " + String(unverifiable) + ".")
                 }
             }
             .font(LokaPay.LokaStyle.caption)
@@ -1352,6 +1365,7 @@ private struct LokaPayMeshBanner: View {
             Button("OK") {
                 notes.status = nil
                 notes.droppedSeen = store.mesh.dropped
+                notes.unverifiableSeen = store.mesh.unverifiable
             }
             .font(LokaPay.LokaStyle.label)
             .foregroundStyle(LokaColor.ink)

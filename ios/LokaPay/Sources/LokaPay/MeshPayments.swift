@@ -12,16 +12,20 @@ public enum MeshPaymentText {
         /// Not payment content. LOKA's own paths (chat, games, delivery and read receipts) take it
         /// unchanged.
         case loka
-        /// A well-formed allowance (`A`) or note (`N`) from a contact, for the Receive screen's inbox.
+        /// A verified allowance (`A`) or note (`N`) from a contact, for the Receive screen's inbox.
         case receive
-        /// A well-formed ack (`Y`) or receipt (`X`) from a contact, for the Pay screen.
+        /// A verified ack (`Y`) or receipt (`X`) from a contact, for the Pay screen.
         case pay
-        /// Payment family text that is not taken: malformed (`admittedKind`), a kind no screen takes
-        /// over the mesh in this build (spend markers, confirmations, merchant codes), another
-        /// version of `L1|P`, or a sender that is not a contact (the payment-only scope for
-        /// non-contacts is a follow-up of task 2.2). It is counted, never queued in an inbox, and
-        /// never shown, stored or notified as chat.
+        /// Payment family text that is not taken: it fails the same checks the screens run, is a kind
+        /// no screen takes over the mesh in this build (spend markers, confirmations, merchant
+        /// codes), is another version of `L1|P`, or comes from a sender that is not a contact (the
+        /// payment-only scope for non-contacts is a follow-up of task 2.2). It is counted, never
+        /// queued in an inbox, and never shown, stored or notified as chat.
         case drop
+        /// An allowance or receipt while no server key is pinned (or any payment text while the
+        /// deployment is unknown): this phone cannot check it, so it is counted and never queued,
+        /// and it can never take an inbox place from a checked one.
+        case unverifiable
     }
 
     /// The version 1 transport prefix.
@@ -30,43 +34,39 @@ public enum MeshPaymentText {
     /// True for every text of the payment family (`L1|P`). None of them ever reaches chat.
     public static func isPaymentFamily(_ text: String) -> Bool { text.hasPrefix("L1|P") }
 
-    /// Sorts a decrypted text. Only a well-formed version 1 allowance, note, ack or receipt from a
-    /// contact reaches an inbox, so junk can never take an inbox place from a real payment.
-    public static func route(_ text: String, fromContact: Bool) -> Route {
+    /// Sorts a decrypted text with the checks the screens themselves run, so nothing they would
+    /// refuse ever takes an inbox place from a real payment:
+    /// - note: PAYMENT-V1 section 6 against the deployment (`SignedNote.validate`);
+    /// - allowance: the server signature, the deployment, the earmark hash and a sorted, unique
+    ///   earmark list (`AllowanceCertificate.verify`);
+    /// - receipt: the note, its ack against that note's payee key hash, and an attached CONF against
+    ///   the pinned server key and that note id (`Receipts.verify`);
+    /// - ack: its signature with its own key (binding it to a note needs the note: Pay checks it
+    ///   against the note on screen).
+    /// Rule while no server key is pinned: allowances and receipts are `unverifiable` (counted, never
+    /// queued); notes and acks, which need no server key, are still checked and admitted.
+    public static func route(_ text: String, fromContact: Bool, deployment: Deployment?,
+                             serverPublicKey: Data?) -> Route {
         guard isPaymentFamily(text) else { return .loka }
-        guard fromContact, let kind = admittedKind(text) else { return .drop }
-        switch kind {
-        case .allowance, .note: return .receive
-        case .ack, .receipt: return .pay
-        case .marker, .confirmation, .merchant: return .drop
-        }
-    }
-
-    /// The kind of a version 1 text whose wrapper is canonical (`PaymentTransport.decode`: five
-    /// fields, a known kind, canonical base64url without padding) and whose payload has that kind's
-    /// exact structure: its length, its domain prefix, the earmark count of an allowance, and for a
-    /// note and an ack a P-256 signature that verifies over the signed bytes with the attached key.
-    /// nil otherwise. The deployment and the server key are not checked here; the screens check them.
-    static func admittedKind(_ text: String) -> PaymentTransport.Kind? {
-        guard text.hasPrefix(prefix), let decoded = try? PaymentTransport.decode(text) else { return nil }
+        guard fromContact, text.hasPrefix(prefix), let decoded = try? PaymentTransport.decode(text) else { return .drop }
         let bytes = Data(decoded.payload)
+        let key = serverPublicKey.flatMap { $0.count == 32 ? $0 : nil }
         switch decoded.kind {
         case .note:
-            return signedNoteId(bytes) != nil ? .note : nil
-        case .ack:
-            return signedAckNoteId(bytes) != nil ? .ack : nil
-        case .receipt:
-            guard let parts = try? Bundles.splitReceipt(bytes), let noteId = signedNoteId(Data(parts.note)),
-                  signedAckNoteId(Data(parts.ack)) == noteId else { return nil }
-            if let conf = parts.confirmation, Data(conf).prefix(16) != Data(Confirmation.prefix.utf8) { return nil }
-            return .receipt
+            guard let deployment else { return .unverifiable }
+            return (try? SignedNote.validate(wire: bytes, deployment: deployment)) != nil ? .receive : .drop
         case .allowance:
-            let fixed = AllowanceCertificate.size + 64
-            guard bytes.count >= fixed + 2, bytes.prefix(16) == Data(AllowanceCertificate.prefix.utf8) else { return nil }
-            let count = Int(bytes[fixed]) << 8 | Int(bytes[fixed + 1])
-            return count <= 16 && bytes.count == fixed + 2 + 32 * count ? .allowance : nil
+            guard let deployment, let key else { return .unverifiable }
+            return (try? AllowanceCertificate.verify(wire: bytes, deployment: deployment, serverPublicKey: key)) != nil
+                ? .receive : .drop
+        case .ack:
+            guard deployment != nil else { return .unverifiable }
+            return signedAckNoteId(bytes) != nil ? .pay : .drop
+        case .receipt:
+            guard let deployment, let key else { return .unverifiable }
+            return (try? Receipts.verify(bytes, deployment: deployment, serverPublicKey: key)) != nil ? .pay : .drop
         case .marker, .confirmation, .merchant:
-            return decoded.kind
+            return .drop
         }
     }
 
@@ -174,8 +174,15 @@ public final class MeshPaymentRouter {
     public let receiveInbox: PaymentInbox
     /// For the Pay screen (`LokaPayDependencies.meshReturns`): acks and receipts.
     public let payInbox: PaymentInbox
-    /// Payment family texts dropped here (another version, or not from a contact).
+    /// Payment family texts dropped here (failed the screens' checks, unused kind, another version,
+    /// or not from a contact).
     public private(set) var dropped = 0
+    /// Allowances and receipts that could not be checked because no server key is pinned (or any
+    /// payment text while the deployment is unknown). Counted, never queued.
+    public private(set) var unverifiable = 0
+    /// What admission checks against: the deployment and the pinned server key (config/pins.json).
+    public let deployment: Deployment?
+    public let serverPublicKey: Data?
     /// LOKA's automatic retries of a packet whose first copy is still waiting in the inbox or was
     /// already taken by a screen. Not delivered twice (it would crowd the inbox or bring a finished
     /// payment back); nothing is lost. A retry after the inbox dropped the first copy is delivered.
@@ -222,8 +229,10 @@ public final class MeshPaymentRouter {
     private let now: @MainActor () -> Date
 
     /// Builds its own two inboxes unless given them.
-    public init(receiveInbox: PaymentInbox? = nil, payInbox: PaymentInbox? = nil,
-                now: @escaping @MainActor () -> Date = { Date() }) {
+    public init(deployment: Deployment?, serverPublicKey: Data?, receiveInbox: PaymentInbox? = nil,
+                payInbox: PaymentInbox? = nil, now: @escaping @MainActor () -> Date = { Date() }) {
+        self.deployment = deployment
+        self.serverPublicKey = serverPublicKey
         self.receiveInbox = receiveInbox ?? PaymentInbox()
         self.payInbox = payInbox ?? PaymentInbox()
         self.now = now
@@ -248,7 +257,8 @@ public final class MeshPaymentRouter {
     /// another contact, or a resend (a new packet), is always delivered.
     @discardableResult
     public func receive(_ text: String, from peer: String, fromContact: Bool, packetID: String) -> Bool {
-        let route = MeshPaymentText.route(text, fromContact: fromContact)
+        let route = MeshPaymentText.route(text, fromContact: fromContact, deployment: deployment,
+                                          serverPublicKey: serverPublicKey)
         guard route != .loka else { return false }
         let clock = now()
         packets.removeAll { abs(clock.timeIntervalSince($0.at)) > Self.repeatWindow }
@@ -256,10 +266,10 @@ public final class MeshPaymentRouter {
         switch route {
         case .loka:
             return false
-        case .drop:
+        case .drop, .unverifiable:
             // One dropped packet counts once, however often LOKA retries it.
             if earlier == nil {
-                dropped += 1
+                if route == .drop { dropped += 1 } else { unverifiable += 1 }
                 remember(Packet(peer: peer, packetID: packetID, route: route, sequence: nil, at: clock))
             }
             return true
@@ -301,9 +311,8 @@ public final class MeshPaymentRouter {
 
     /// `replyTarget(origin:noteId:)` for an ack or receipt text.
     public func replyTarget(for text: String, origin: MeshOrigin) -> MeshReplyTarget {
-        guard MeshPaymentText.route(text, fromContact: true) == .pay, let id = MeshPaymentText.noteId(of: text) else {
-            return .unknown
-        }
+        guard text.hasPrefix(MeshPaymentText.prefix + "Y|") || text.hasPrefix(MeshPaymentText.prefix + "X|"),
+              let id = MeshPaymentText.noteId(of: text) else { return .unknown }
         return replyTarget(origin: origin, noteId: id)
     }
 
