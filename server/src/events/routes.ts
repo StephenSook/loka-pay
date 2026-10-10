@@ -1,5 +1,5 @@
 import type { ServerResponse } from 'node:http';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Database } from '../settle/store.js';
 import type { EventFeed } from './feed.js';
 import type { EventStore, PaymentEvent } from './store.js';
@@ -18,6 +18,7 @@ const DRAIN_TIMEOUT_MS = 10_000;
 
 export interface EventRouteOptions {
   database: Database; store: EventStore; feed: EventFeed; maxClients?: number; maxBufferedBytes?: number;
+  clientKey: (request: FastifyRequest) => string; maxStreamsPerClient?: number;
 }
 
 /**
@@ -38,6 +39,9 @@ const frame = (event: PaymentEvent) => `id: ${event.seq}\nevent: payment\ndata: 
 export function registerEventRoutes(app: FastifyInstance, options: EventRouteOptions): void {
   const maxClients = options.maxClients ?? 500;
   const maxBuffered = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES;
+  // One client holding streams open must not fill every slot (the judge desk shares the global cap).
+  const perClient = options.maxStreamsPerClient ?? 3;
+  const streams = new Map<string, number>();
   // Open streams are ended before Fastify waits for connections to drain, so SIGTERM is not held by viewers.
   const open = new Set<ServerResponse>();
   app.addHook('preClose', async () => { for (const raw of open) raw.end(); open.clear(); });
@@ -63,6 +67,18 @@ export function registerEventRoutes(app: FastifyInstance, options: EventRouteOpt
     if (options.feed.size >= maxClients) {
       return reply.code(503).header('retry-after', '30').send({ error: 'busy', message: 'Too many live viewers. Retry shortly.' });
     }
+    const client = options.clientKey(request);
+    if ((streams.get(client) ?? 0) >= perClient) {
+      return reply.code(429).header('retry-after', '30')
+        .send({ error: 'too_many_streams', message: 'This network already has the most live views open. Close one and retry.' });
+    }
+    streams.set(client, (streams.get(client) ?? 0) + 1);
+    const release = () => {
+      const left = (streams.get(client) ?? 1) - 1;
+      if (left > 0) streams.set(client, left); else streams.delete(client);
+    };
+    // Registered as soon as the slot is taken, so a viewer that leaves during setup still frees it.
+    reply.raw.once('close', release);
     const resumeHeader = request.headers['last-event-id'] ?? request.query.after;
     const resume = typeof resumeHeader === 'string' && /^[0-9]{1,15}$/.test(resumeHeader) ? Number(resumeHeader) : null;
 

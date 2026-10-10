@@ -1,9 +1,10 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test, vi } from 'vitest';
 import Fastify from 'fastify';
 import { base58 } from '@scure/base';
+import { p256 } from '@noble/curves/nist.js';
 import * as P from '@lokapay/protocol';
 import { SettlementStore } from '../settle/store.js';
 import { SettlementService } from '../settle/service.js';
@@ -282,4 +283,89 @@ test('a viewer whose queued live bytes pass the limit is dropped, and nothing mo
   expect(raw.destroyed).toBe(true);
   expect(writeCapped(stream, 'never', 10)).toBe(false);
   expect(raw.chunks).toEqual(['abcdef', 'ghij', 'k']);
+});
+
+/** Signs an ACK as the vector merchant A (secret derived as protocol/vectors documents), for any received-at. */
+function ackAt(receivedAt: bigint): string {
+  const label = vectors.keys.merchantA.label as string;
+  const n = p256.Point.Fn.ORDER;
+  const secret = (BigInt('0x' + createHash('sha256').update(label).digest('hex')) % (n - 1n)) + 1n;
+  const secretBytes = P.fromHex(secret.toString(16).padStart(64, '0'));
+  const message = P.encodeAck(P.fromHex(vectors.notes[0].noteIdHex), receivedAt);
+  const signature = p256.sign(message, secretBytes);
+  return P.base64urlEncode(new Uint8Array([...message, ...signature, ...p256.getPublicKey(secretBytes, true)]));
+}
+
+test('a validly signed ACK with an absurd received-at is stored as null, and the feed keeps moving', async () => {
+  expect(ackAt(BigInt(vectors.acks[0].fields.receivedAt))).toBe(ack0);
+  const f = await fixture();
+  await f.post({ note: wire(0), ack: ackAt((1n << 63n) - 1n) });
+  await f.post({ note: wire(1) });
+  const delivered = await f.events.feed.tick();
+  expect(delivered.map(e => [e.noteId, e.receivedAt])).toEqual(expect.arrayContaining([
+    [vectors.notes[0].noteIdHex, null], [vectors.notes[1].noteIdHex, null]]));
+  expect(delivered).toHaveLength(2);
+  const stats = (await f.app.inject({ url: '/api/stats' })).json();
+  expect(stats.totals).toMatchObject({ paymentsSettled: 2, heldOfflineSeconds: { n: 0 } });
+});
+
+test('a row that cannot be written is skipped and reported once; the rows behind it still project', async () => {
+  const f = await fixture();
+  await f.post({ note: wire(0) });
+  await f.post({ note: wire(1) });
+  const skipped: [string, string][] = [];
+  const store = new EventStore(f.db, deployment, () => 'phone_ble', (noteId, reason) => skipped.push([noteId, reason]));
+  const query = f.db.query.bind(f.db);
+  vi.spyOn(f.db, 'query').mockImplementation(async (sql: string, params?: unknown[]) => {
+    if (sql.includes('INSERT INTO payment_events') && params?.[0] === vectors.notes[0].noteIdHex) throw new Error('out of range');
+    return query(sql, params) as never;
+  });
+  expect(await store.project()).toBe(1);
+  expect(skipped).toEqual([[vectors.notes[0].noteIdHex, 'event_write_failed']]);
+  expect(await store.project()).toBe(0);
+  expect(skipped).toHaveLength(1);
+});
+
+test('/api/stats counts accepted and pending uploads, so a stuck payment stays in the denominator', async () => {
+  const f = await fixture({ canaryKeyHashes: [] });
+  f.chain.decision = null;
+  expect((await f.post({ note: wire(0) })).statusCode).toBe(202);
+  await f.events.feed.tick();
+  let stats = (await f.app.inject({ url: '/api/stats' })).json();
+  expect(stats.totals).toMatchObject({ paymentsAccepted: 1, paymentsPending: 1, paymentsSettled: 0 });
+  expect(stats.bySource.phone_ble).toMatchObject({ paymentsAccepted: 1, paymentsPending: 1 });
+  f.chain.decision = { slot: 20, blockTime: 1800000009, error: null, errorCode: 0 };
+  expect((await f.app.inject({ url: `/v1/notes/${vectors.notes[0].noteIdHex}` })).statusCode).toBe(200);
+  await f.events.feed.tick();
+  stats = (await f.app.inject({ url: '/api/stats' })).json();
+  expect(stats.totals).toMatchObject({ paymentsAccepted: 1, paymentsPending: 0, paymentsSettled: 1 });
+});
+
+test('pending counts follow the same source filter: canary uploads only appear with include=all', async () => {
+  const f = await fixture({ canaryKeyHashes: [payerKeyHash] });
+  f.chain.decision = null;
+  await f.post({ note: wire(0) });
+  await f.events.feed.tick();
+  expect((await f.app.inject({ url: '/api/stats' })).json().totals).toMatchObject({ paymentsAccepted: 0, paymentsPending: 0 });
+  expect((await f.app.inject({ url: '/api/stats?include=all' })).json().bySource.canary).toMatchObject({ paymentsAccepted: 1, paymentsPending: 1 });
+});
+
+test('one client gets at most 3 /live streams; closing one frees its slot', async () => {
+  const f = await fixture({ listen: true });
+  const url = `http://127.0.0.1:${(f.app.server.address() as AddressInfo).port}/live`;
+  const controllers = [new AbortController(), new AbortController(), new AbortController()];
+  closers.push(async () => controllers.forEach(c => c.abort()));
+  for (const controller of controllers) expect((await fetch(url, { signal: controller.signal })).status).toBe(200);
+  const fourth = await fetch(url);
+  expect([fourth.status, (await fourth.json()).error, fourth.headers.get('retry-after')]).toEqual([429, 'too_many_streams', '30']);
+  controllers[0].abort();
+  const deadline = Date.now() + 3000;
+  let again = await fetch(url);
+  while (again.status === 429 && Date.now() < deadline) {
+    await again.body?.cancel();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    again = await fetch(url);
+  }
+  expect(again.status).toBe(200);
+  await again.body?.cancel();
 });

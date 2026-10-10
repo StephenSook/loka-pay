@@ -10,6 +10,8 @@ import { EXCLUDED_BY_DEFAULT, SOURCES, type Source } from './store.js';
 
 export interface RunWindow { from: number; to: number }
 export interface Figures {
+  /** Uploads the server accepted (validated and claimed); paymentsSettled out of this is the headline ratio. */
+  paymentsAccepted: number; paymentsPending: number;
   paymentsSettled: number; settledVolumeUnits: string; settledVolumeSandboxUsd: string;
   doubleSpendsRefused: number; failedOnChain: number;
   settledAfterUploadSeconds: { p50: number | null; p95: number | null; n: number };
@@ -29,9 +31,10 @@ export function sandboxUsd(units: string): string {
 
 const seconds = (value: unknown) => (value === null || value === undefined ? null : Math.round(Number(value) * 1000) / 1000);
 
-function figures(row: Record<string, unknown> | undefined): Figures {
+function figures(row: Record<string, unknown> | undefined, uploads: Record<string, unknown> | undefined): Figures {
   const units = String(row?.volume ?? '0');
   return {
+    paymentsAccepted: Number(uploads?.accepted ?? 0), paymentsPending: Number(uploads?.pending ?? 0),
     paymentsSettled: Number(row?.settled ?? 0), settledVolumeUnits: units, settledVolumeSandboxUsd: sandboxUsd(units),
     doubleSpendsRefused: Number(row?.double_spends ?? 0), failedOnChain: Number(row?.failed ?? 0),
     settledAfterUploadSeconds: { p50: seconds(row?.settle_p50), p95: seconds(row?.settle_p95), n: Number(row?.settled ?? 0) },
@@ -58,9 +61,16 @@ export async function computeStats(db: Database, options: { includeAll?: boolean
     FROM payment_events
     WHERE source = ANY($1::text[]) AND ($2::bigint IS NULL OR uploaded_at >= $2) AND ($3::bigint IS NULL OR uploaded_at <= $3)
     GROUP BY ROLLUP(source)`, [sources, options.run?.from ?? null, options.run?.to ?? null]);
+  // Accepted counts every upload the settlement journal holds; pending is the part with no decided event yet.
+  const { rows: uploads } = await db.query<Record<string, unknown>>(`SELECT u.source,
+      COUNT(*) AS accepted, COUNT(*) FILTER (WHERE e.note_id IS NULL) AS pending
+    FROM payment_uploads u LEFT JOIN payment_events e ON e.note_id = u.note_id
+    WHERE u.source = ANY($1::text[]) AND ($2::bigint IS NULL OR u.uploaded_at >= $2) AND ($3::bigint IS NULL OR u.uploaded_at <= $3)
+    GROUP BY ROLLUP(u.source)`, [sources, options.run?.from ?? null, options.run?.to ?? null]);
+  const pick = (list: Record<string, unknown>[], source: string | null) => list.find(row => row.source === source);
   const bySource: Record<string, Figures> = {};
-  for (const source of sources) bySource[source] = figures(rows.find(row => row.source === source));
+  for (const source of sources) bySource[source] = figures(pick(rows, source), pick(uploads, source));
   // ROLLUP's grand-total row has a null source; with no rows at all there is no total row.
   return { asOf: new Date().toISOString(), run: options.run ?? null, sources, excluded,
-    totals: figures(rows.find(row => row.source === null)), bySource };
+    totals: figures(pick(rows, null), pick(uploads, null)), bySource };
 }

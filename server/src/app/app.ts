@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import Fastify, { LogController, type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import Fastify, { LogController, type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import type { Connection } from '@solana/web3.js';
 import type { Pool } from 'pg';
 import * as P from '@lokapay/protocol';
@@ -47,6 +47,7 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
 
   // Burst guard keyed by an HMAC of the client address with a per-boot secret, kept in memory only.
   const bootSecret = randomBytes(32);
+  const clientKey = (request: FastifyRequest) => createHmac('sha256', bootSecret).update(request.ip).digest('hex');
   const bursts = new Map<string, { count: number; expires: number }>();
   const limit = options.burstLimit ?? 120;
   app.addHook('onRequest', async (request, reply) => {
@@ -58,7 +59,7 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
     }
     if (request.method === 'OPTIONS') return reply.code(204).send();
     const now = Date.now();
-    const key = createHmac('sha256', bootSecret).update(request.ip).digest('hex');
+    const key = clientKey(request);
     const entry = bursts.get(key);
     if (entry && entry.expires > now) {
       if (++entry.count <= limit) return;
@@ -98,6 +99,6 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
     feePayer: options.wallets.team.feePayer, feeBudget: { dailyLamports: options.noteFeeDailyLamports }, pins: options.pins, confirmationSeed: seed });
   // Task 2.10: reads the settlement journal written above.
   await installEvents({ app, database: options.database, deployment, canaryKeyHashes: options.canaryKeyHashes,
-    intervalMs: options.eventIntervalMs });
+    intervalMs: options.eventIntervalMs, clientKey });
   return app;
 }

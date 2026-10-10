@@ -35,7 +35,7 @@ export class EventFeed {
     this.running = true;
     try {
       let failure: unknown = null;
-      try { await this.store.project(); } catch (error) { failure = error; }
+      try { await this.store.projectUploads(); await this.store.project(); } catch (error) { failure = error; }
       const delivered: PaymentEvent[] = [];
       for (let page = 0; page < MAX_PAGES_PER_TICK; page++) {
         const events = await this.store.since(this.position, PAGE);
