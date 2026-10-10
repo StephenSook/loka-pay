@@ -67,9 +67,14 @@ export function normalizeUsNumber(input: string): string | null {
   return isCallableUsNumber(e164) ? e164 : null;
 }
 
-export const CALL_LANGS = ["en", "fr"] as const;
+/**
+ * Every language the call knows. "wo" (Wolof, PLAN.md 3.89) is known but gated: the server takes
+ * it and the page shows it only as lib/call-wolof.ts allows (acceptedCallLangs, offeredCallLangs).
+ */
+export const CALL_LANGS = ["en", "fr", "wo"] as const;
 export type CallLang = (typeof CALL_LANGS)[number];
 
+/** A known language; whether it may be used right now is lib/call-wolof.ts's answer. */
 export function isCallLang(value: unknown): value is CallLang {
   return typeof value === "string" && (CALL_LANGS as readonly string[]).includes(value);
 }

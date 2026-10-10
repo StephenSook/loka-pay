@@ -33,8 +33,10 @@ import {
   isPlausibleSignature,
   type CallAnswer,
   type CallErrorCode,
+  type CallLang,
 } from "./call-shared";
 import { speechFor } from "./call-speech";
+import { WOLOF, acceptedCallLangs, type WolofSetup } from "./call-wolof";
 import { PINS } from "./pins";
 import { serverReadOptions } from "./server-rpc";
 import { describeFailure } from "./solana";
@@ -45,6 +47,16 @@ export const ELEVENLABS_API = "https://api.elevenlabs.io";
 /** ElevenLabs' premade voice "Sarah". LOKA_ELEVENLABS_VOICE_ID replaces it. */
 export const DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
 export const ELEVENLABS_MODEL = "eleven_v4";
+/**
+ * The language_code sent with the text, per language. ElevenLabs' text-to-speech API takes an
+ * optional ISO 639-1 code "to enforce a language for the model and text normalization"
+ * (elevenlabs.io/docs/api-reference/text-to-speech/convert), and its models page lists Wolof
+ * (wol) among eleven_v4's languages (elevenlabs.io/docs/overview/models); both read 2026-10-10.
+ * Wolof's ISO 639-1 code is "wo". Wolof is enforced because its text carries French and English
+ * names a detector could follow. English and French keep the request they were tested with,
+ * with no language_code.
+ */
+export const ELEVENLABS_LANGUAGE_CODE: Readonly<Partial<Record<CallLang, string>>> = { wo: "wo" };
 export const DEFAULT_PUBLIC_ORIGIN = "https://zerobars.us";
 /** Vonage and ElevenLabs each get this long to answer before the request gives up. */
 export const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -259,6 +271,8 @@ export interface CallDeps {
   clientSecret: string;
   chain: ChainMemo;
   audio: AudioCache;
+  /** The Wolof script and its gate (lib/call-wolof.ts): WOLOF unless a test passes its own. */
+  wolof?: WolofSetup;
 }
 
 /** One set per server process: the caps and caches live in memory only (see lib/call-limits.ts). */
@@ -361,7 +375,7 @@ async function placeVonageCall(config: CallConfig, to: string, audioUrl: string,
 
 interface CallRequest {
   to: string;
-  lang: "en" | "fr";
+  lang: CallLang;
   signature: string | null;
   code: string | null;
 }
@@ -381,8 +395,16 @@ export function callCodeRequired(): boolean {
   return config.ok && config.config.deskCode !== null;
 }
 
-/** The request body, checked; a refusal Response otherwise. The body is never echoed. */
-async function readCallRequest(request: Request): Promise<CallRequest | Response> {
+/** "en or fr", "en, fr or wo". */
+function orWords(items: readonly string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
+}
+
+/**
+ * The request body, checked; a refusal Response otherwise. The body is never echoed. A language
+ * is taken only if lib/call-wolof.ts accepts it now: "wo" is refused until the script is complete.
+ */
+async function readCallRequest(request: Request, wolof: WolofSetup): Promise<CallRequest | Response> {
   // A JSON content type means a cross-site page cannot send this without a CORS preflight,
   // which this route never answers.
   const type = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
@@ -398,7 +420,8 @@ async function readCallRequest(request: Request): Promise<CallRequest | Response
   if (typeof body !== "object" || body === null || Array.isArray(body)) return refuse(400, "bad_request", "the body is not a JSON object");
   const { to, lang, signature, code } = body as { to?: unknown; lang?: unknown; signature?: unknown; code?: unknown };
   if (!isCallableUsNumber(to)) return refuse(400, "bad_number", "a US geographic number in the form +1 and 10 digits");
-  if (!isCallLang(lang)) return refuse(400, "bad_lang", "lang is en or fr");
+  const accepted = acceptedCallLangs(wolof);
+  if (!isCallLang(lang) || !accepted.includes(lang)) return refuse(400, "bad_lang", `lang is ${orWords(accepted)}`);
   if (signature !== undefined && signature !== null && !isPlausibleSignature(signature)) {
     return refuse(400, "bad_signature", "a Solana transaction signature in base58");
   }
@@ -432,7 +455,7 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
  * 4. Only then is devnet read; then one call per number and payment; then Vonage is asked.
  */
 async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
-  const read = await readCallRequest(request);
+  const read = await readCallRequest(request, deps.wolof ?? WOLOF);
   if (read instanceof Response) return read;
   const { to, lang, signature, code } = read;
 
@@ -517,12 +540,13 @@ export async function handleCall(request: Request, deps: CallDeps = PROCESS_DEPS
   }
 }
 
-async function synthesize(config: CallConfig, text: string): Promise<Uint8Array> {
+async function synthesize(config: CallConfig, text: string, lang: CallLang): Promise<Uint8Array> {
   const url = `${config.elevenLabsBase}/v1/text-to-speech/${encodeURIComponent(config.voiceId)}?output_format=mp3_44100_128`;
+  const languageCode = ELEVENLABS_LANGUAGE_CODE[lang];
   const response = await fetch(url, {
     method: "POST",
     headers: { "xi-api-key": config.elevenLabsKey, "content-type": "application/json", accept: "audio/mpeg" },
-    body: JSON.stringify({ text, model_id: ELEVENLABS_MODEL }),
+    body: JSON.stringify(languageCode === undefined ? { text, model_id: ELEVENLABS_MODEL } : { text, model_id: ELEVENLABS_MODEL, language_code: languageCode }),
     cache: "no-store",
     signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
   });
@@ -546,8 +570,14 @@ async function audioFlow(request: Request, deps: CallDeps): Promise<Response> {
   const p = url.searchParams.get("p") as string;
   let bytes: Uint8Array;
   try {
-    bytes = await deps.audio.get(p, nowMs, params.exp * 1000, () =>
-      synthesize(config.config, speechFor({ amountUnits: params.amountUnits, blockTime: params.blockTime }, params.lang, nowMs)),
+    // speechFor throws for a Wolof link while the Wolof script is not complete, which ends here
+    // as voice_failed: an incomplete script is never read out.
+    bytes = await deps.audio.get(p, nowMs, params.exp * 1000, async () =>
+      synthesize(
+        config.config,
+        speechFor({ amountUnits: params.amountUnits, blockTime: params.blockTime }, params.lang, nowMs, deps.wolof ?? WOLOF),
+        params.lang,
+      ),
     );
   } catch {
     return Response.json({ error: "voice_failed" }, { status: 502, headers: NO_STORE });

@@ -21,6 +21,19 @@ import { latestSettlement, settlementBySignature, settlementOf } from "../lib/ca
 import { AudioCache, ChainMemo, callConfig, clientKey, handleAudio, handleCall, safeTitle, type CallDeps } from "../lib/call-server";
 import { isCallLang, isCallableUsNumber, isNewSettlement, isPlausibleSignature, normalizeUsNumber } from "../lib/call-shared";
 import { agoWords, speechFor } from "../lib/call-speech";
+import {
+  WOLOF,
+  WOLOF_REVIEWED_BY_NATIVE_SPEAKER,
+  WOLOF_SCRIPT,
+  acceptedCallLangs,
+  fillSlots,
+  offeredCallLangs,
+  wolofScriptProblems,
+  wolofScriptReady,
+  wolofScriptUntouched,
+  type WolofScript,
+  type WolofSetup,
+} from "../lib/call-wolof";
 import type { Row } from "../lib/program-feed";
 
 // "Call me when it settles" (PLAN.md 3.9). The transactions are real devnet transactions recorded
@@ -134,9 +147,10 @@ test.describe("number, language and signature checks", () => {
     }
   });
 
-  test("lang is en or fr; a signature is base58 of 64 bytes", () => {
+  test("lang is en, fr or wo (wo gated by lib/call-wolof.ts); a signature is base58 of 64 bytes", () => {
     expect(isCallLang("en")).toBe(true);
     expect(isCallLang("fr")).toBe(true);
+    expect(isCallLang("wo")).toBe(true);
     for (const bad of ["EN", "es", "", undefined, 1]) expect(isCallLang(bad), String(bad)).toBe(false);
     expect(isPlausibleSignature(REDEEM_SIG)).toBe(true);
     expect(isPlausibleSignature(P)).toBe(false); // 32 bytes: an address, not a signature
@@ -250,6 +264,234 @@ test.describe("speechFor", () => {
     expect(fr(14)).toBe("il y a 14 minutes");
     expect(fr(60 * 3)).toBe("il y a 3 heures");
     expect(fr(60 * 24 * 3)).toBe("il y a 3 jours");
+  });
+});
+
+// ---------- Wolof (PLAN.md 3.89) ----------
+
+// TEST FIXTURE: bracketed placeholder tokens in every slot. They are NOT Wolof: only a native
+// speaker (Khadim) writes the real script, in lib/call-wolof.ts. The tokens show which field and
+// slot each piece of the composed text came from.
+const TOKEN_SCRIPT: WolofScript = {
+  optionLabel: "[label]",
+  sentences: {
+    hello: "[hello]",
+    whoIsCalling: "[who]",
+    paymentSettled: "[paid {amount} / {ago}]",
+    signatureChecked: "[checked]",
+    testMoney: "[test money]",
+    goodbye: "[bye]",
+  },
+  amount: {
+    lessThanOneCent: "[under a cent]",
+    oneDollar: "[one dollar]",
+    dollars: "[{n} dollars]",
+    oneCent: "[one cent {n}]",
+    cents: "[{n} cents]",
+    dollarsAndCents: "{dollars} [plus] {cents}",
+    about: "[about] {amount}",
+  },
+  ago: {
+    lessThanAMinute: "[just now]",
+    oneMinute: "[one minute]",
+    minutes: "[{n} minutes]",
+    hours: "[{n} hours]",
+    days: "[{n} days]",
+  },
+  numberWords: {},
+};
+
+/** Every field of TOKEN_SCRIPT emptied: the state before Khadim writes anything. */
+const EMPTY_SCRIPT: WolofScript = {
+  optionLabel: "",
+  sentences: Object.fromEntries(Object.keys(TOKEN_SCRIPT.sentences).map((k) => [k, ""])) as WolofScript["sentences"],
+  amount: Object.fromEntries(Object.keys(TOKEN_SCRIPT.amount).map((k) => [k, ""])) as WolofScript["amount"],
+  ago: Object.fromEntries(Object.keys(TOKEN_SCRIPT.ago).map((k) => [k, ""])) as WolofScript["ago"],
+  numberWords: {},
+};
+const FIELD_COUNT = 1 + Object.keys(TOKEN_SCRIPT.sentences).length + Object.keys(TOKEN_SCRIPT.amount).length + Object.keys(TOKEN_SCRIPT.ago).length;
+
+const EMPTY_GATED: WolofSetup = { script: EMPTY_SCRIPT, reviewed: false };
+const FILLED_UNRATED: WolofSetup = { script: TOKEN_SCRIPT, reviewed: false };
+const FILLED_RATED: WolofSetup = { script: TOKEN_SCRIPT, reviewed: true };
+
+test.describe("Wolof: Khadim's script behind a native-speaker gate", () => {
+  const settled = REDEEM.blockTime as number;
+  const at = (minutes: number) => (settled + minutes * 60) * 1000;
+  const wo = (units: string, minutes: number, setup: WolofSetup = FILLED_RATED) => speechFor({ amountUnits: units, blockTime: settled }, "wo", at(minutes), setup);
+
+  test("an empty script: the page hides wo, the server refuses it, and speechFor('wo') throws, whatever the gate says", () => {
+    expect(FIELD_COUNT).toBe(19);
+    for (const setup of [EMPTY_GATED, { script: EMPTY_SCRIPT, reviewed: true }]) {
+      expect(offeredCallLangs(setup)).toEqual(["en", "fr"]);
+      expect(acceptedCallLangs(setup)).toEqual(["en", "fr"]);
+      expect(() => wo("2500000", 3, setup)).toThrow(/the Wolof script is not complete \(19 problems\)/);
+    }
+    expect(wolofScriptUntouched(EMPTY_SCRIPT)).toBe(true);
+    const problems = wolofScriptProblems(EMPTY_SCRIPT);
+    expect(problems).toHaveLength(FIELD_COUNT);
+    expect(problems).toContain("sentences.paymentSettled: empty");
+    expect(problems).toContain("amount.dollarsAndCents: empty");
+    expect(problems).toContain("ago.days: empty");
+  });
+
+  test("a complete script not yet rated: the server takes wo for one test call, and the page still hides it", () => {
+    expect(wolofScriptProblems(TOKEN_SCRIPT)).toEqual([]);
+    expect(wolofScriptReady(FILLED_UNRATED)).toBe(true);
+    expect(acceptedCallLangs(FILLED_UNRATED)).toEqual(["en", "fr", "wo"]);
+    expect(offeredCallLangs(FILLED_UNRATED)).toEqual(["en", "fr"]);
+    expect(wo("2500000", 3, FILLED_UNRATED)).toBe(wo("2500000", 3, FILLED_RATED));
+  });
+
+  test("complete and rated: the page offers wo, and speechFor('wo') is the script with every slot filled", () => {
+    expect(offeredCallLangs(FILLED_RATED)).toEqual(["en", "fr", "wo"]);
+    const text = wo("2500000", 3);
+    expect(text).toBe("[hello] [who] [paid [2 dollars] [plus] [50 cents] / [3 minutes]] [checked] [test money] [bye]");
+    expect(text).not.toContain(EM_DASH);
+    expect(text).not.toContain(EN_DASH);
+    // The amount phrases, chosen exactly as the English ones are.
+    expect(wo("100000", 5)).toContain("[paid [10 cents] / ");
+    expect(wo("1000000", 5)).toContain("[paid [one dollar] / ");
+    expect(wo("1010000", 5)).toContain("[paid [one dollar] [plus] [one cent 1] / ");
+    expect(wo("12000000", 5)).toContain("[paid [12 dollars] / ");
+    expect(wo("1234567", 5)).toContain("[paid [about] [one dollar] [plus] [23 cents] / ");
+    expect(wo("4", 5)).toContain("[paid [under a cent] / ");
+    // The time phrases, with the same thresholds as agoWords.
+    expect(wo("100000", 0)).toContain(" / [just now]]");
+    expect(wo("100000", 0.99)).toContain(" / [just now]]");
+    expect(wo("100000", 1)).toContain(" / [one minute]]");
+    expect(wo("100000", 119)).toContain(" / [119 minutes]]");
+    expect(wo("100000", 120)).toContain(" / [2 hours]]");
+    expect(wo("100000", 60 * 47)).toContain(" / [47 hours]]");
+    expect(wo("100000", 60 * 48)).toContain(" / [2 days]]");
+    // numberWords replaces the digits of the numbers it lists, and only those.
+    const worded: WolofSetup = { script: { ...TOKEN_SCRIPT, numberWords: { "2": "[two]", "50": "[fifty]" } }, reviewed: true };
+    expect(wo("2500000", 3, worded)).toContain("[paid [[two] dollars] [plus] [[fifty] cents] / [3 minutes]]");
+    expect(wo("2500000", 2, worded)).toContain(" / [[two] minutes]]");
+    // Spaces around a field are trimmed; the six sentences are joined with one space.
+    const padded: WolofSetup = { script: { ...TOKEN_SCRIPT, sentences: { ...TOKEN_SCRIPT.sentences, hello: "  [hello]  " } }, reviewed: true };
+    expect(wo("2500000", 3, padded)).toBe(text);
+  });
+
+  test("en and fr are the same text whatever the Wolof setup", () => {
+    for (const lang of ["en", "fr"] as const) {
+      const shipped = speechFor({ amountUnits: "2500000", blockTime: settled }, lang, at(3));
+      for (const setup of [WOLOF, EMPTY_GATED, FILLED_UNRATED, FILLED_RATED]) {
+        expect(speechFor({ amountUnits: "2500000", blockTime: settled }, lang, at(3), setup), lang).toBe(shipped);
+      }
+    }
+    expect(speechFor({ amountUnits: "2500000", blockTime: settled }, "en", at(3), FILLED_RATED)).toContain("A sandbox payment of 2 dollars and 50 cents");
+    expect(speechFor({ amountUnits: "2500000", blockTime: settled }, "fr", at(3), FILLED_RATED)).toContain("Un paiement en bac à sable de 2 dollars et 50 cents");
+  });
+
+  test("wolofScriptProblems names each slot that is missing, not allowed or broken", () => {
+    const withField = <K extends "sentences" | "amount" | "ago">(section: K, key: keyof WolofScript[K], value: string): WolofScript => ({
+      ...TOKEN_SCRIPT,
+      [section]: { ...TOKEN_SCRIPT[section], [key]: value },
+    });
+    expect(wolofScriptProblems(withField("sentences", "paymentSettled", "[paid {amount}]"))).toEqual(["sentences.paymentSettled: needs {ago}"]);
+    expect(wolofScriptProblems(withField("sentences", "hello", "[hello {amount}]"))).toEqual(["sentences.hello: {amount} is not a slot here"]);
+    expect(wolofScriptProblems(withField("amount", "dollars", "[dollars]"))).toEqual(["amount.dollars: needs {n}"]);
+    expect(wolofScriptProblems(withField("amount", "dollarsAndCents", "{dollars} {amount}"))).toEqual([
+      "amount.dollarsAndCents: needs {cents}",
+      "amount.dollarsAndCents: {amount} is not a slot here",
+    ]);
+    expect(wolofScriptProblems(withField("amount", "oneDollar", "[one {n}]"))).toEqual([]);
+    expect(wolofScriptProblems(withField("ago", "minutes", `[{n}${EM_DASH}minutes]`))).toEqual(["ago.minutes: has an em dash or en dash"]);
+    expect(wolofScriptProblems(withField("ago", "hours", `[{n}${EN_DASH}hours]`))).toEqual(["ago.hours: has an em dash or en dash"]);
+    expect(wolofScriptProblems(withField("ago", "days", "[{n days]"))).toEqual(["ago.days: has a brace that is not part of a {slot}", "ago.days: needs {n}"]);
+    expect(wolofScriptProblems(withField("sentences", "goodbye", "   "))).toEqual(["sentences.goodbye: empty"]);
+    expect(wolofScriptProblems({ ...TOKEN_SCRIPT, optionLabel: "" })).toEqual(["optionLabel: empty"]);
+    expect(wolofScriptProblems({ ...TOKEN_SCRIPT, numberWords: { "02": "[two]", "3": " ", "4": "{n}" } })).toEqual([
+      'numberWords["3"]: empty',
+      'numberWords["4"]: a number word takes no slots',
+      'numberWords["02"]: the key must be a number\'s digits, like "12"',
+    ]);
+    // A half-filled script is neither untouched nor complete.
+    const half = withField("sentences", "hello", "[hello]");
+    expect(wolofScriptUntouched({ ...EMPTY_SCRIPT, sentences: { ...EMPTY_SCRIPT.sentences, hello: "[hello]" } })).toBe(false);
+    expect(wolofScriptUntouched(half)).toBe(false);
+    // A slot with no value is never read out as its name.
+    expect(() => fillSlots("[paid {amount}]", {})).toThrow("no value for the slot {amount}");
+    expect(fillSlots(" [paid {amount}] ", { amount: "{ago}" })).toBe("[paid {ago}]");
+  });
+
+  test("the shipped script is untouched or complete, and wo stays off the page until a native speaker rated a test call", () => {
+    // Half a script fails here with the list of what is missing (docs/call-wolof-script.md, step 2).
+    expect(wolofScriptUntouched(WOLOF_SCRIPT) ? [] : wolofScriptProblems(WOLOF_SCRIPT)).toEqual([]);
+    // The gate cannot be set on an incomplete script.
+    expect(WOLOF_REVIEWED_BY_NATIVE_SPEAKER ? wolofScriptProblems(WOLOF_SCRIPT) : []).toEqual([]);
+    expect(WOLOF).toEqual({ script: WOLOF_SCRIPT, reviewed: WOLOF_REVIEWED_BY_NATIVE_SPEAKER });
+    // Whatever the script holds, the page offers wo only with the gate set.
+    expect(offeredCallLangs({ script: WOLOF_SCRIPT, reviewed: false })).toEqual(["en", "fr"]);
+    expect(offeredCallLangs()).toEqual(WOLOF_REVIEWED_BY_NATIVE_SPEAKER ? ["en", "fr", "wo"] : ["en", "fr"]);
+    expect(acceptedCallLangs()).toEqual(wolofScriptReady(WOLOF) ? ["en", "fr", "wo"] : ["en", "fr"]);
+  });
+
+  test("Wolof preview: the shipped script's text for sample payments, printed once it is complete", () => {
+    const samples: Array<[string, number]> = [
+      ["100000", 0],
+      ["1000000", 1],
+      ["1010000", 7],
+      ["2500000", 119],
+      ["1234567", 180],
+      ["4", 60 * 72],
+    ];
+    if (!wolofScriptReady(WOLOF)) {
+      // Still empty: nothing to preview, and nothing can be said.
+      expect(() => wo("100000", 0, WOLOF)).toThrow(/the Wolof script is not complete/);
+      return;
+    }
+    for (const [units, minutes] of samples) {
+      const text = wo(units, minutes, WOLOF);
+      expect(text).not.toMatch(/[{}]/);
+      expect(text).not.toContain(EM_DASH);
+      expect(text).not.toContain(EN_DASH);
+      console.log(`[Wolof preview] ${units} base units, ${minutes} minutes ago: ${text}`);
+    }
+  });
+
+  test("POST /api/call lang wo: refused while the script is empty; once complete, called and voiced with eleven_v4 and language_code wo", async () => {
+    await withStandIn({}, async (s) => {
+      const now = (REDEEM.blockTime + 7 * 60) * 1000;
+      await withEnv(callEnv(s.base), async () => {
+        // Empty script: refused before devnet, Vonage or ElevenLabs is asked.
+        const refused = await handleCall(callRequest({ to: NUMBER, lang: "wo" }), { ...deps(now), wolof: EMPTY_GATED });
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({ error: "bad_lang", reason: "lang is en or fr" });
+        expect(s.seen.rpc).toHaveLength(0);
+        expect(s.seen.vonage).toHaveLength(0);
+
+        // Complete, not yet rated: the hand-placed test call works.
+        const d = { ...deps(now), wolof: FILLED_UNRATED };
+        const r = await handleCall(callRequest({ to: NUMBER, lang: "wo" }), d);
+        expect(r.status).toBe(200);
+        expect(s.seen.vonage).toHaveLength(1);
+        const audioUrl = new URL((s.seen.vonage[0].body as { ncco: Array<{ streamUrl: string[] }> }).ncco[0].streamUrl[0]);
+        expect(verifyAudioParams(SECRET, audioUrl.searchParams.get("p"), audioUrl.searchParams.get("m"), now / 1000)).toMatchObject({ ok: true, params: { lang: "wo" } });
+        const audio = await handleAudio(new Request(audioUrl.href), d);
+        expect(audio.status).toBe(200);
+        expect(s.seen.speech).toHaveLength(1);
+        expect(s.seen.speech[0].body).toEqual({
+          text: "[hello] [who] [paid [10 cents] / [7 minutes]] [checked] [test money] [bye]",
+          model_id: "eleven_v4",
+          language_code: "wo",
+        });
+
+        // The same signed link, served where the script is empty: no voice, ElevenLabs not asked.
+        const empty = await handleAudio(new Request(audioUrl.href), { ...deps(now), wolof: EMPTY_GATED });
+        expect(empty.status).toBe(502);
+        expect(await empty.json()).toEqual({ error: "voice_failed" });
+        expect(s.seen.speech).toHaveLength(1);
+
+        // English (and French) send exactly the request they did before: no language_code.
+        const en = { ...deps(now), wolof: FILLED_RATED };
+        expect((await handleCall(callRequest({ to: OTHER_NUMBER, lang: "en" }), en)).status).toBe(200);
+        const enUrl = (s.seen.vonage[1].body as { ncco: Array<{ streamUrl: string[] }> }).ncco[0].streamUrl[0];
+        expect((await handleAudio(new Request(enUrl), en)).status).toBe(200);
+        expect(s.seen.speech[1].body).toEqual({ text: speechFor({ amountUnits: "100000", blockTime: REDEEM.blockTime }, "en", now), model_id: "eleven_v4" });
+      });
+    });
   });
 });
 
