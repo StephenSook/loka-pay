@@ -184,6 +184,8 @@ public struct ReceiveView: View {
                 Text("Bluetooth codes waiting for Next payment: " + String(model.inboxWaiting) + ".")
                     .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
             }
+            Text(ReceiveModel.unsettledNextPaymentText)
+                .font(LokaStyle.caption).foregroundStyle(LokaColor.ink)
             Button("Next payment") { model.nextPayment() }
                 .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
         }

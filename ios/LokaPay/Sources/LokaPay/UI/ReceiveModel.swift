@@ -483,6 +483,12 @@ public final class ReceiveModel {
         issue = nil
     }
 
+    /// Shown above Next payment while the note on screen is not settled: the ACK lives only on this
+    /// screen, so the note cannot be settled from here once it is cleared.
+    public static let unsettledNextPaymentText =
+        "Next payment leaves this note held in the offline ledger, unsettled. It cannot be settled from this "
+        + "screen afterwards, so settle first when there is signal."
+
     /// Clears the screen for the next payer. The ledger keeps every accepted note; Bluetooth codes
     /// that arrived during the payment are checked now, in arrival order.
     public func nextPayment() {

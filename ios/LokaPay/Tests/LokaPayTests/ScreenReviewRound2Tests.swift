@@ -381,3 +381,14 @@ struct InboxDropTests {
                 + "than 2 min). Ask the payer to send again. Bluetooth texts for other steps ignored: 5 (such as spend markers).")
     }
 }
+
+@Suite("Next payment on an unsettled note says what it costs (review 2, finding 7)")
+struct NextPaymentWarningTests {
+    @Test("the settle card warns that the note cannot be settled from this screen afterwards")
+    func warning() {
+        let text = ReceiveModel.unsettledNextPaymentText
+        #expect(text.contains("held in the offline ledger, unsettled"))
+        #expect(text.contains("cannot be settled from this screen afterwards"))
+        #expect(!text.contains("\u{2014}") && !text.contains("\u{2013}"))
+    }
+}
