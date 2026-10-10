@@ -99,12 +99,17 @@ public final class ReceiveModel {
     private struct QueuedText {
         let text: String
         let arrivedAt: Date
+        /// The attachment (`inboxGeneration`) the text arrived under.
+        let generation: UInt64
     }
     /// Inbox texts waiting for the single consumer, oldest first. Together with the inbox's held
     /// texts they never exceed `PaymentInbox.capacity`.
     @ObservationIgnored private var inboxQueue: [QueuedText] = []
     /// The one task that checks queued inbox texts, one after another, in arrival order.
     @ObservationIgnored private var inboxConsumer: Task<Void, Never>?
+    /// Counts this model's attachments to the inbox: `startInbox` and `stopInbox` each begin a new
+    /// one. A queued text is checked only while the attachment it arrived under still owns the inbox.
+    @ObservationIgnored private var inboxGeneration: UInt64 = 0
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
@@ -247,17 +252,27 @@ public final class ReceiveModel {
     /// is shown, so a code that lands on another tab waits in the inbox and is never accepted unseen.
     /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
-        guard phase != .unavailable else { return }
-        inbox?.attach(self) { [weak self] text, arrivedAt in
+        guard phase != .unavailable, let inbox else { return }
+        inboxGeneration &+= 1
+        let generation = inboxGeneration
+        inbox.attach(self) { [weak self] text, arrivedAt in
             guard let self else { return false }
-            self.takeFromInbox(text, arrivedAt: arrivedAt)
+            self.takeFromInbox(text, arrivedAt: arrivedAt, generation: generation)
             return true
         }
     }
 
     /// Stops taking inbox texts (a newer Receive model that already attached keeps the inbox).
+    /// Texts this screen queued and has not started checking go back to the inbox at once, with
+    /// their first arrival times, so nothing is validated, reserved or signed for a screen that is
+    /// not shown. A text already being checked when the screen goes finishes, like a scan would.
     public func stopInbox() {
-        inbox?.detach(self)
+        guard let inbox else { return }
+        inboxGeneration &+= 1
+        inbox.detach(self)
+        let queued = inboxQueue
+        inboxQueue = []
+        for item in queued { inbox.giveBack(item.text, arrivedAt: item.arrivedAt) }
     }
 
     /// What a Bluetooth text can become on this screen.
@@ -294,7 +309,7 @@ public final class ReceiveModel {
     /// when they would pass it, the oldest pending text is dropped and counted, as when the inbox
     /// holds too many. A text arriving while a signature is pending (Face ID) therefore waits in a
     /// bounded queue, never in an open-ended chain of tasks.
-    private func takeFromInbox(_ text: String, arrivedAt: Date) {
+    private func takeFromInbox(_ text: String, arrivedAt: Date, generation: UInt64) {
         guard let inbox, phase != .unavailable, merchant != nil else { return }
         switch triage(text) {
         case .ignored:
@@ -303,7 +318,7 @@ public final class ReceiveModel {
             inboxUnreadable += 1
         case .payment:
             if inbox.held.count + inboxQueue.count >= PaymentInbox.capacity { dropOldestPending(inbox) }
-            inboxQueue.append(QueuedText(text: text, arrivedAt: arrivedAt))
+            inboxQueue.append(QueuedText(text: text, arrivedAt: arrivedAt, generation: generation))
             if inboxConsumer == nil {
                 // Holds the model until the queue is empty, so a queued text is never lost with it.
                 inboxConsumer = Task { await self.drainInboxQueue() }
@@ -322,10 +337,16 @@ public final class ReceiveModel {
         }
     }
 
-    /// The single consumer: checks queued texts one at a time, in arrival order.
+    /// The single consumer: checks queued texts one at a time, in arrival order. A text whose
+    /// attachment lost the inbox (the screen went away, or a newer screen took over) is never
+    /// checked here: it goes back to the inbox with its first arrival time.
     private func drainInboxQueue() async {
         while !inboxQueue.isEmpty {
             let item = inboxQueue.removeFirst()
+            guard item.generation == inboxGeneration, let inbox, inbox.isListener(self) else {
+                inbox?.giveBack(item.text, arrivedAt: item.arrivedAt)
+                continue
+            }
             await acceptFromInbox(item.text, arrivedAt: item.arrivedAt)
         }
         inboxConsumer = nil

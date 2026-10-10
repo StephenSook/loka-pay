@@ -52,13 +52,32 @@ public final class PaymentInbox {
 
     /// Hands one received transport text to the attached Receive model, or holds it.
     public func deliver(_ text: String) {
-        let arrived = now()
+        offer(text, arrivedAt: now())
+    }
+
+    /// A text a screen took but never started checking (it went away, or a newer screen took
+    /// over): offered to the screen attached now, or held, always with its first arrival time.
+    /// One older than `maxAge` is dropped and counted, as `release()` would.
+    func giveBack(_ text: String, arrivedAt: Date) {
+        guard arrivedAt >= now().addingTimeInterval(-maxAge) else {
+            droppedWhileDetached += 1
+            return
+        }
+        offer(text, arrivedAt: arrivedAt)
+    }
+
+    private func offer(_ text: String, arrivedAt: Date) {
         if let handler {
-            if handler(text, arrived) { return }
+            if handler(text, arrivedAt) { return }
             listener = nil
             self.handler = nil
         }
-        hold(text, arrivedAt: arrived)
+        hold(text, arrivedAt: arrivedAt)
+    }
+
+    /// True while `owner` is the attached Receive screen.
+    func isListener(_ owner: AnyObject) -> Bool {
+        listener == ObjectIdentifier(owner)
     }
 
     /// Keeps `text` until a Receive screen can take it: none is attached, or the attached one is
