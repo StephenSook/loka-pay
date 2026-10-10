@@ -820,8 +820,9 @@ struct LokaPaySetupIssue: Equatable {
             return "The server's answer broke the API contract (\(detail)), so nothing was stored."
         case .stillPending:
             return "The server has not finished yet. Try again in a moment; registering again is safe."
-        @unknown default:
-            return "The settlement call stopped (\(e)). Nothing was stored."
+        case .afterUnansweredAttempt(let inner):
+            // Only note uploads are wrapped; registration never is. Word the inner error if it ever is.
+            return registrationMessage(inner)
         }
     }
 
