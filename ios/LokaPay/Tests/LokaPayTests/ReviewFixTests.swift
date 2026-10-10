@@ -38,10 +38,10 @@ struct ReviewFixTests {
         // changed identity across creation. iOS app containers also live under /private/var.
         let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("lokapay-\(UUID().uuidString)").appendingPathComponent("serials.json")
-        let before = FileLocks.lock(for: url)
+        let before = try FileLocks.resolve(url).lock
         let first = SerialReservations(url: url)
         #expect(try first.reserve(allowanceId: 5) == 0)  // creates the file
-        let after = FileLocks.lock(for: url)
+        let after = try FileLocks.resolve(url).lock
         #expect(before === after)
         let second = SerialReservations(url: url)
         let results = NSLock()
@@ -54,6 +54,14 @@ struct ReviewFixTests {
         #expect(serials.count == 100)
         #expect(Set(serials).count == 100)
         #expect(!serials.contains(0))
+    }
+
+    @Test("a path that cannot be canonicalized fails closed (Codex round 3)")
+    func uncreatableFolderFailsClosed() {
+        // A folder at the filesystem root cannot be created without root privileges.
+        let url = URL(fileURLWithPath: "/lokapay-no-permission-\(UUID().uuidString)/serials.json")
+        #expect(throws: PaymentError.storage) { try SerialReservations(url: url).reserve(allowanceId: 1) }
+        #expect(throws: PaymentError.storage) { try FileLocks.resolve(url) }
     }
 
     @Test("a counter outside 0...256 in valid JSON is refused before anything changes")
