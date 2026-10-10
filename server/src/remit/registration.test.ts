@@ -262,7 +262,7 @@ test('unsigned RPC failure is retryable; failure saving a signed attempt never b
   expect(f.chain.send).not.toHaveBeenCalled(); expect(f.chain.sign).toHaveBeenCalledTimes(1);
 });
 
-test('confirmed non-collision failure stays terminal and never signs a certificate', async () => {
+test('confirmed non-collision failure requires an explicit retry and never signs a certificate', async () => {
   const f = await fixture(); f.chain.outcome = 'failed'; const publicKey = key();
   const first = await f.post('payers', { publicKey }); expect(first.statusCode).toBe(409);
   expect(first.json().error).toBe('registration_failed');
@@ -382,4 +382,75 @@ test('an expired registration recovery lease cannot reserve or save its prepared
   expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
   expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
   expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
+});
+
+test('confirmed failure has one explicit repost and concurrent retries admit only one new attempt', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { retryable: true, reason: 'chain_failure' } });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(409);
+  f.chain.outcome = 'ok';
+  const input = { publicKey, retryOf: failed.body.retryOf };
+  const results = await Promise.all([f.service.submit('payer', input), f.service.submit('payer', input)]);
+  expect(results.some(r => r.statusCode === 201)).toBe(true);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  const saved = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(await f.store.history(saved)).toHaveLength(2);
+});
+
+test('a second confirmed failure reports the retry bound and signs no third transaction', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const first = await f.service.submit('payer', { publicKey });
+  const second = await f.service.submit('payer', { publicKey, retryOf: first.body.retryOf });
+  expect(second).toMatchObject({ statusCode: 409, body: { retryable: false } });
+  expect((await f.service.submit('payer', { publicKey, retryOf: second.body.retryOf })).statusCode).toBe(409);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.allow).not.toHaveBeenCalled();
+});
+
+test('confirmed collision with denied budget returns a repost signal and can recover after reset', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'collision';
+  f.options.policies.public = { ...policy, daily: { ...policy.daily, units: '105' } };
+  const service = new RegistrationService(f.options);
+  const failed = await service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { retryable: true, reason: 'collision_budget_exhausted' } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.allow).not.toHaveBeenCalled();
+  f.setNow(1800086400); f.chain.outcome = 'ok';
+  expect((await service.submit('payer', { publicKey, retryOf: failed.body.retryOf })).statusCode).toBe(201);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2);
+  const saved = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(saved.plan.expiry).toBeGreaterThan(f.options.now());
+});
+
+test('an uncertain registration send cannot use retryOf to create another signature', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  const pending = await f.service.submit('payer', { publicKey });
+  expect((await f.service.submit('payer', { publicKey, retryOf: pending.body.signature })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('unsigned retry budget denial restores the repost signal without consuming its retry slot', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  f.options.policies.public = { ...policy, daily: { ...policy.daily, units: '105' } };
+  const service = new RegistrationService(f.options);
+  const failed = await service.submit('payer', { publicKey });
+  const denied = await service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect(denied).toMatchObject({ statusCode: 409, body: { retryable: true, retryOf: failed.body.retryOf } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.setNow(1800086400); f.chain.outcome = 'ok';
+  expect((await service.submit('payer', { publicKey, retryOf: failed.body.retryOf })).statusCode).toBe(201);
+});
+
+test('a saved legacy failure gains a repost signal only after confirming its chain failure', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  await f.db.query('UPDATE registration_jobs SET result=$1::jsonb',
+    [JSON.stringify({ statusCode: 409, body: { error: 'registration_failed', signature: failed.body.signature } })]);
+  f.chain.outcome = null;
+  expect((await f.service.submit('payer', { publicKey })).body.retryable).toBeUndefined();
+  f.chain.outcome = 'failed';
+  const upgraded = await f.service.submit('payer', { publicKey });
+  expect(upgraded).toMatchObject({ statusCode: 409, body: { retryable: true, retryOf: failed.body.signature } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.chain.outcome = 'ok';
+  expect((await f.service.submit('payer', { publicKey, retryOf: upgraded.body.retryOf })).statusCode).toBe(201);
 });

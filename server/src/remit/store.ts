@@ -16,6 +16,8 @@ export class RegistrationStore {
       namespace text NOT NULL, kind text NOT NULL, key_hash text NOT NULL,
       id text NOT NULL UNIQUE, plan jsonb NOT NULL, attempt jsonb, result jsonb,
       PRIMARY KEY(namespace,kind,key_hash))`);
+    await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS retry_parent jsonb');
+    await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS explicit_retries integer NOT NULL DEFAULT 0');
     await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS recovery_used boolean NOT NULL DEFAULT false');
     await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS claim_token text');
     await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS lease_expires_at double precision');
@@ -36,7 +38,7 @@ export class RegistrationStore {
       ON CONFLICT(namespace,kind,key_hash) DO UPDATE
       SET id=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.id ELSE EXCLUDED.id END,
         plan=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.plan ELSE EXCLUDED.plan END,
-        attempt=NULL,result=NULL,recovery_used=false,claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at
+        attempt=NULL,result=NULL,recovery_used=false,explicit_retries=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.explicit_retries ELSE 0 END,claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at
       WHERE (registration_jobs.attempt IS NULL AND registration_jobs.result IS NULL
           AND COALESCE(registration_jobs.lease_expires_at,0)<=EXCLUDED.lease_expires_at-30)
         OR (registration_jobs.kind='payer' AND registration_jobs.result->>'statusCode' IN ('200','201')
@@ -45,14 +47,23 @@ export class RegistrationStore {
     return result.rows.length === 1 ? token : null;
   }
   async get(kind: Kind, keyHash: string): Promise<Job> {
-    const { rows } = await this.db.query('SELECT id,plan,attempt,result FROM registration_jobs WHERE namespace=$1 AND kind=$2 AND key_hash=$3',
+    const { rows } = await this.db.query('SELECT id,plan,attempt,result,explicit_retries AS "explicitRetries" FROM registration_jobs WHERE namespace=$1 AND kind=$2 AND key_hash=$3',
       [this.namespace, kind, keyHash]);
     if (!rows[0]) throw new Error('Registration claim missing');
     return rows[0] as unknown as Job;
   }
   async releaseUnsigned(id: string, token: string): Promise<boolean> {
     const { rows } = await this.db.query(`DELETE FROM registration_jobs
-      WHERE namespace=$1 AND id=$2 AND claim_token=$3 AND attempt IS NULL AND result IS NULL
+      WHERE namespace=$1 AND id=$2 AND claim_token=$3 AND attempt IS NULL AND result IS NULL AND retry_parent IS NULL
+        AND lease_expires_at>COALESCE($4::double precision,EXTRACT(EPOCH FROM clock_timestamp())) RETURNING id`,
+    [this.namespace, id, token, this.clock?.() ?? null]);
+    return rows.length === 1;
+  }
+  async cancelUnsignedRetry(id: string, token: string): Promise<boolean> {
+    const { rows } = await this.db.query(`UPDATE registration_jobs
+      SET attempt=retry_parent->'attempt',result=retry_parent->'result',
+        explicit_retries=explicit_retries-1,retry_parent=NULL
+      WHERE namespace=$1 AND id=$2 AND claim_token=$3 AND attempt IS NULL AND result IS NULL AND retry_parent IS NOT NULL
         AND lease_expires_at>COALESCE($4::double precision,EXTRACT(EPOCH FROM clock_timestamp())) RETURNING id`,
     [this.namespace, id, token, this.clock?.() ?? null]);
     return rows.length === 1;
@@ -91,7 +102,7 @@ export class RegistrationStore {
   }
   async saveAttempt(job: Job, plan: RegistrationPlan, attempt: PreparedAttempt, token: string): Promise<boolean> {
     const { rows } = await this.db.query(`WITH saved AS (
-      UPDATE registration_jobs SET plan=$3::jsonb,attempt=$4::jsonb
+      UPDATE registration_jobs SET plan=$3::jsonb,attempt=$4::jsonb,retry_parent=NULL
       WHERE namespace=$1 AND id=$2 AND result IS NULL AND claim_token=$7
         AND (attempt IS NOT NULL OR lease_expires_at>COALESCE($8::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
         AND (attempt->>'signature') IS NOT DISTINCT FROM $5
@@ -101,6 +112,19 @@ export class RegistrationStore {
     [this.namespace, job.id, JSON.stringify(plan), JSON.stringify(attempt), job.attempt?.signature ?? null, attempt.signature,
       token, this.clock?.() ?? null]);
     return rows.length === 1;
+  }
+  async claimFailedRetry(job: Job, signature: string): Promise<string | null> {
+    const token = randomUUID();
+    const { rows } = await this.db.query(`UPDATE registration_jobs SET attempt=NULL,result=NULL,
+      explicit_retries=explicit_retries+1,recovery_used=false,claim_token=$4,
+      retry_parent=jsonb_build_object('attempt',attempt,'result',result),
+      plan=CASE WHEN kind='payer' AND (plan->>'expiry')::bigint<$6
+        THEN jsonb_set(plan,'{expiry}',to_jsonb($6::bigint+(plan->'policy'->>'lifetimeSeconds')::bigint)) ELSE plan END,
+      lease_expires_at=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30
+      WHERE namespace=$1 AND id=$2 AND attempt->>'signature'=$3 AND result->'body'->>'retryOf'=$3
+        AND result->'body'->>'retryable'='true' AND explicit_retries<1 RETURNING id`,
+    [this.namespace, job.id, signature, token, this.clock?.() ?? null, Math.floor(this.clock?.() ?? Date.now()/1000)]);
+    return rows.length ? token : null;
   }
   async history(job: Job): Promise<{ plan: RegistrationPlan; attempt: PreparedAttempt }[]> {
     const { rows } = await this.db.query('SELECT plan,attempt FROM registration_attempts WHERE job_id=$1', [job.id]);
@@ -127,8 +151,11 @@ export class RegistrationStore {
     return rows.length === 1;
   }
   async finish(job: Job, result: Result): Promise<Result> {
-    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb WHERE namespace=$1 AND id=$2 AND result IS NULL`,
-      [this.namespace, job.id, JSON.stringify(result)]);
+    const legacyFailure = result.statusCode === 409 && job.result?.statusCode === 409 && !('retryable' in job.result.body);
+    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb WHERE namespace=$1 AND id=$2
+      AND (result IS NULL OR ($5::boolean AND result->>'statusCode'='409' AND NOT (result->'body' ? 'retryable')))
+      AND attempt->>'signature'=$4`,
+      [this.namespace, job.id, JSON.stringify(result), job.attempt?.signature ?? null, legacyFailure]);
     const saved = await this.get(job.plan.kind, job.plan.keyHash);
     if (saved.id !== job.id || !saved.result) throw new Error('Registration result was not saved');
     return saved.result;
