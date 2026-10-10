@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 // Typed out here on purpose, not imported from the app, so a copy change shows up
 // as a failing test instead of passing by construction.
 const SENTENCE =
-  "When the network or the bank goes down, LOKA Pay lets phones in airplane mode pay each other over Bluetooth, and the shop's phone settles on Solana's public test network the moment it finds signal.";
+  "When the network or the bank goes down, LOKA Pay lets a phone in airplane mode pay a shop's phone directly, in one hop over Bluetooth or a QR code, and the shop's phone settles the payment on Solana devnet when it finds signal.";
 const STATUS = "Built this weekend at Hacklanta II. The payment loop is being built now.";
 
 /** Records every request the page makes and which of them left our origin. */
