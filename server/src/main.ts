@@ -9,7 +9,8 @@ const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 5 });
 const connection = new Connection(config.rpcUrl, 'confirmed');
 const app = await buildApp({
   database: pool, connection, pins: config.pins, wallets: config.wallets, certificateSeed: config.certificateSeed,
-  teamKeys: config.teamKeys, policies: config.policies, noteFeeDailyLamports: config.noteFeeDailyLamports, commit: config.commit, origins: config.origins,
+  teamKeys: config.teamKeys, policies: config.policies, noteFeeDailyLamports: config.noteFeeDailyLamports,
+  canaryKeyHashes: config.canaryKeyHashes, commit: config.commit, origins: config.origins,
   trustProxy: config.trustProxy, logger: privateLogger(),
   phase3: config.phase3,
 });

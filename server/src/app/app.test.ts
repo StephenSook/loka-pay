@@ -65,13 +65,17 @@ describe('startup fails closed', () => {
 });
 
 describe('routing, CORS and the burst guard', () => {
-  test('mounts the registration and note routes, and names unknown routes', async () => {
+  test('mounts registration, notes and stats, and names unknown routes', async () => {
     const app = await buildApp(options());
     for (const url of ['/v1/payers', '/v1/merchants', '/v1/notes']) {
       const response = await app.inject({ method: 'POST', url, payload: {} });
       expect(response.statusCode, url).not.toBe(404);
       expect(response.statusCode, url).toBeLessThan(500);
     }
+    const stats = await app.inject({ url: '/api/stats', headers: { origin: 'https://zerobars.us' } });
+    expect(stats.statusCode).toBe(200);
+    expect(stats.headers['access-control-allow-origin']).toBe('https://zerobars.us');
+    expect(stats.json().totals.paymentsSettled).toBe(0);
     const missing = await app.inject({ url: '/nope' });
     expect(missing.statusCode).toBe(404);
     expect(missing.json().error).toBe('unknown_route');
