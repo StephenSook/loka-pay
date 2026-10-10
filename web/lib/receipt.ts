@@ -48,8 +48,14 @@ const PROGRAM_ID = { start: 16, end: 48 }; // NOTE_V1 offsets (section 4.1)
 
 // ---------- input ----------
 
+// The longest real input is a receipt link: about 30 characters of URL plus 794 base64url
+// characters for a 595-byte receipt. Anything far past that is refused before decoding, so a
+// huge paste or #r= link cannot make the tab decode and re-encode megabytes while rendering.
+const MAX_INPUT_CHARS = 4096;
+
 export type InputProblem =
   | { kind: "empty" }
+  | { kind: "too_long"; length: number }
   | { kind: "no_fragment" }
   | { kind: "not_payment" }
   | { kind: "wrong_kind"; found: string }
@@ -74,8 +80,11 @@ export function readFragment(hash: string): string | null {
  * removed first because none of these forms contain any, and pasted text often wraps.
  */
 export function parseReceiptText(input: string): ParsedInput {
+  // Checked on the raw input too, so the whitespace strip never runs over a huge string.
+  if (input.length > 4 * MAX_INPUT_CHARS) return { ok: false, problem: { kind: "too_long", length: input.length } };
   let text = input.replace(/\s+/g, "");
   if (text === "") return { ok: false, problem: { kind: "empty" } };
+  if (text.length > MAX_INPUT_CHARS) return { ok: false, problem: { kind: "too_long", length: text.length } };
 
   if (text.startsWith("L1|")) {
     try {
@@ -406,8 +415,9 @@ const MAX_DATE_SECONDS = BigInt(8_640_000_000_000); // the range of a JavaScript
 /** "2026-10-10 12:00:00 UTC". Out-of-range values (i64 allows them) come back as null. */
 export function formatUnixUtc(seconds: bigint): string | null {
   if (seconds > MAX_DATE_SECONDS || seconds < -MAX_DATE_SECONDS) return null;
-  const iso = new Date(Number(seconds) * 1000).toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+  // Split at "T" rather than slicing fixed offsets: years past 9999 print as "+010000-01-01".
+  const [date, time] = new Date(Number(seconds) * 1000).toISOString().split("T");
+  return `${date} ${time.slice(0, 8)} UTC`;
 }
 
 /** "1 h 2 min 5 s". Negative when the two clocks disagree. */

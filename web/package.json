@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "start:e2e": "next start -H 127.0.0.1 -p 3100",
-    "postinstall": "pnpm --dir ../protocol/lib install --frozen-lockfile --prod",
+    "postinstall": "pnpm --dir ../protocol/lib install --frozen-lockfile",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test:e2e": "playwright test"

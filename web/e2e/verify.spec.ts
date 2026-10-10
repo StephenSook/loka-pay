@@ -251,6 +251,19 @@ test("other payment content and bad text are refused by name", async ({ page }) 
   await expect(page.getByTestId("failure-code")).toHaveText("base64url");
 });
 
+test("an oversized paste or #r= link is refused before any decoding", async ({ page }) => {
+  // Alphabet-valid, so only the length guard can stop it; a 600 KB link must not stall the tab.
+  const huge = "A".repeat(600_000);
+  await open(page, `/verify#r=${huge}`);
+  await expect(page.getByTestId("receipt-status")).toHaveText("Not a receipt");
+  await expect(page.getByTestId("verify-result")).toContainText("A receipt is under 900");
+
+  const box = page.getByRole("textbox", { name: "Receipt" });
+  await box.fill("A".repeat(5_000));
+  await page.getByRole("button", { name: "Verify", exact: true }).click();
+  await expect(page.getByTestId("verify-result")).toContainText("5,000 characters");
+});
+
 test("keyboard only: reach the test receipt button and press Enter", async ({ page, browserName }) => {
   await open(page, "/verify");
   const tryButton = page.getByRole("button", { name: "Try the published test receipt" });

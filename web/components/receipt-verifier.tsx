@@ -231,6 +231,8 @@ function inputProblemWords(problem: InputProblem): string {
   switch (problem.kind) {
     case "empty":
       return "The text box is empty. Paste a receipt first.";
+    case "too_long":
+      return `That is ${problem.length.toLocaleString("en-US")} characters. A receipt is under 900, so this cannot be one.`;
     case "no_fragment":
       return "That link has no receipt in it. A receipt link carries the receipt after #r=.";
     case "not_payment":
