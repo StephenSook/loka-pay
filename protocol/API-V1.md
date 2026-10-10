@@ -58,6 +58,8 @@ A matching retryOf repost can take over its existing unsigned retry after the 30
 
 Saved registration history is resolved before the current replacement's terminal outcome or an explicit retryOf repost. A verified prior success uses its original plan and signature and supersedes a cached replacement failure. A found prior signature without final metadata remains pending.
 
+The historical successful plan, including expiry and allowance id, is persisted with its result in one write guarded by the current saved attempt signature. Team renewal uses that successful expiry rather than a failed retry's extended expiry. A stale signature cannot replace either the plan or result.
+
 Expiry controls team renewal: only a completed team allowance whose recorded expiry has passed may open a new allowance on a later call. Public onboarding is one completed allowance per key: active repeats return the original certificate without funding again; after expiry a new claim returns unsigned HTTP 409 onboarding_already_claimed. No separate /v1/allowances endpoint is defined. Pending registrations never renew. No cap, serial or redeemed-balance lookup triggers renewal. Daily budgets use UTC days and atomically reserve token deposits, funding-wallet rent and fee-payer lamports before signing. Every collision retry has a separate conservative reservation; reservations are never automatically refunded. Team membership, limits and certificate terms are server configuration.
 
 Response:
