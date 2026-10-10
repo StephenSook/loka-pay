@@ -8,10 +8,10 @@ import { ProgramFactsPanel } from "@/components/program-facts";
 import { ProofPair } from "@/components/proof-pair";
 import { QrCode } from "@/components/qr-code";
 import { readProgramFacts } from "@/lib/chain";
-import { DEMO_ALLOWANCE_ID, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF, WATCH_DEMO_URL } from "@/lib/facts";
+import { DEMO_ALLOWANCE_ID, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readMainChecks } from "@/lib/github";
 import { shownTogether } from "@/lib/read-state";
-import { REPO_URL } from "@/lib/site";
+import { REPO_URL, WATCH_DEMO_URL } from "@/lib/site";
 
 // The judge door (PLAN.md 3.2): a numbered three-minute route through everything a judge
 // can check without logging in. Rendered per request (connection()); the devnet reads
