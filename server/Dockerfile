@@ -9,7 +9,11 @@ WORKDIR /app/server
 RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY server/src ./src
 COPY server/tsconfig.json server/tsconfig.build.json ./
-RUN pnpm run build && pnpm prune --prod --ignore-scripts
+COPY server/scripts/check-esm.mjs ./scripts/
+# Public inputs only, read when the modules load. Private keys are mounted read-only at /run/keys at run time.
+COPY config/pins.json /app/config/pins.json
+COPY programs/idl/loka_vault.json /app/programs/idl/loka_vault.json
+RUN pnpm run check:esm && pnpm prune --prod --ignore-scripts
 
 FROM node:22.23.3-bookworm-slim
 WORKDIR /app/server
@@ -17,9 +21,8 @@ COPY --from=build /app/protocol/lib /app/protocol/lib
 COPY --from=build /app/server/node_modules ./node_modules
 COPY --from=build /app/server/dist ./dist
 COPY --from=build /app/server/package.json ./
-# Public inputs only. Private keys are mounted read-only at /run/keys at run time.
-COPY config/pins.json /app/config/pins.json
-COPY programs/idl/loka_vault.json /app/programs/idl/loka_vault.json
+COPY --from=build /app/config /app/config
+COPY --from=build /app/programs /app/programs
 ENV NODE_ENV=production
 # Runs as root because the mounted keys are root-owned mode 600 (docs/RUNBOOK-KEYS.md). compose.yaml drops
 # every capability, so root here cannot bypass file permissions, and the root filesystem is read-only.

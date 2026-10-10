@@ -2,5 +2,5 @@
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": false, "rootDir": "src", "outDir": "dist" },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/settle/test-database.ts", "src/settle/devnet.ts"]
+  "exclude": ["src/**/*.test.ts", "src/settle/test-database.ts", "src/settle/devnet.ts", "src/remit/devnet.ts"]
 }
