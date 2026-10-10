@@ -149,8 +149,26 @@ function rpcAnswer(state: { slot: number; accounts: Map<string, Account> }, meth
   }
 }
 
-/** TEST FIXTURE: the settlement API's health answer (API-V1 section 6), as the stand-in sends it. */
-export const HEALTH = { ok: true, commit: MAIN_SHA, cluster: "devnet", programId: pins.programId as string, slot: 600_123_456 };
+/**
+ * TEST FIXTURE: the settlement API's health answer (API-V1 section 6), as the stand-in sends it,
+ * with the phase3Routes object of server/src/app/phase3.ts reporting
+ * POST /v1/remittances as registered, so /send's form is on for the healthy e2e server. (The
+ * server deployed before the Phase 3 routes sends no phase3Routes; unit/send-server.test.ts covers
+ * that off state.)
+ */
+export const HEALTH = {
+  ok: true,
+  commit: MAIN_SHA,
+  cluster: "devnet",
+  programId: pins.programId as string,
+  slot: 600_123_456,
+  phase3Routes: {
+    "/api/volume": { registered: false, reason: "missing_config" },
+    "/trust": { registered: false, reason: "missing_config" },
+    "/v1/remittances": { registered: true, reason: null },
+    "/api/reserves": { registered: false, reason: "missing_config" },
+  },
+};
 
 const JOB_NAMES: Record<string, string> = {
   ios: "ios (package tests, app build, release checks)",

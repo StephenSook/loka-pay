@@ -85,7 +85,7 @@ const failed = <T>(reason: string): Read<T> => ({ ok: false, reason, atMs: NOW }
 
 /** TEST FIXTURE: a health answer in the shape server/src/app/app.ts sends (API-V1 section 6). */
 function health(over: Partial<ServerHealth> = {}): ServerHealth {
-  return { ok: true, commit: MAIN_SHA, cluster: "devnet", programId: PINS.programId, slot: 600_000_123, ...over };
+  return { ok: true, commit: MAIN_SHA, cluster: "devnet", programId: PINS.programId, slot: 600_000_123, remittances: null, ...over };
 }
 
 /** The claims, with a current health read unless a test passes its own. */

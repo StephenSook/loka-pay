@@ -89,7 +89,8 @@ test("privacy: loads with no login and says what is true today", async ({
   await expect(main).toContainText(
     "All but the last two rows of the table below are what it stores, read from its code (server/ in the repository); the last two are what the /call page handles.",
   );
-  await expect(main).toContainText("The /proof page reads its public health check (api.zerobars.us/api/health) from our web server");
+  await expect(main).toContainText("The /proof and /send pages read its public health check (api.zerobars.us/api/health) from our web server");
+  await expect(main).toContainText("/send makes your browser contact our settlement server at api.zerobars.us only after you press its Send button");
   const addressRow = main.getByRole("row", { name: /A keyed hash of your network address/ });
   await expect(addressRow).toContainText("never written to its database or logs");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();

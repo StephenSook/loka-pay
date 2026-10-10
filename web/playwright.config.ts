@@ -5,6 +5,7 @@ import {
   E2E_ELEVENLABS_KEY,
   E2E_FROM_NUMBER,
   E2E_GITHUB_TOKEN,
+  E2E_SERVER_KEY_HEX,
   E2E_VONAGE_APP_ID,
   FAILING_PORT,
   UPSTREAM,
@@ -68,6 +69,8 @@ export default defineConfig({
         LOKA_E2E_UPSTREAM: "1",
         SOLANA_RPC_URL: `${UPSTREAM}/rpc`,
         SETTLEMENT_API_URL: `${UPSTREAM}/settlement`,
+        // /send checks certificates against the published test vector key here (test mode only).
+        SETTLEMENT_TEST_SERVER_KEY: E2E_SERVER_KEY_HEX,
         GITHUB_API_URL: `${UPSTREAM}/github`,
         GITHUB_TOKEN: E2E_GITHUB_TOKEN,
         // /call places its calls through the stand-in's Vonage and ElevenLabs (test mode only).
@@ -97,6 +100,7 @@ export default defineConfig({
         LOKA_E2E_UPSTREAM: "1",
         SOLANA_RPC_URL: closed,
         SETTLEMENT_API_URL: `${closed}/settlement`,
+        SETTLEMENT_TEST_SERVER_KEY: "",
         GITHUB_API_URL: `${closed}/github`,
         GITHUB_TOKEN: "",
         ...CALLS_OFF,

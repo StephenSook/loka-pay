@@ -2,6 +2,8 @@
 // apart from upstream.ts so playwright.config.ts loads nothing from the app.
 
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 /** The stand-in for devnet's JSON-RPC (/rpc) and GitHub's API (/github), e2e/fixtures/upstream.ts. */
 export const UPSTREAM_PORT = 3190;
@@ -13,6 +15,18 @@ export const FAILING_PORT = 3101;
 export const FAILING_URL = `http://127.0.0.1:${FAILING_PORT}`;
 /** Sent by the healthy e2e server as GITHUB_TOKEN; the stand-in records the Authorization it receives. */
 export const E2E_GITHUB_TOKEN = "e2e-stand-in-token-not-a-secret";
+
+/**
+ * /send (PLAN.md 3.3): the key the healthy e2e server checks allowance certificates against
+ * (SETTLEMENT_TEST_SERVER_KEY). It is the PUBLISHED test vector server key in
+ * protocol/vectors/payment-v1.json (keys.serverEd25519; its seed is sha256 of the label, so it is
+ * public, never a secret), so e2e/fixtures/remittance.ts can sign certificates for the tests.
+ * Both are read from the vectors file, so they cannot drift from it.
+ */
+const vectorServerKey = JSON.parse(readFileSync(path.join(__dirname, "..", "..", "..", "protocol", "vectors", "payment-v1.json"), "utf8")).keys
+  .serverEd25519 as { label: string; publicKeyHex: string };
+export const E2E_SERVER_KEY_LABEL: string = vectorServerKey.label;
+export const E2E_SERVER_KEY_HEX: string = vectorServerKey.publicKeyHex;
 
 // ---------- /call (PLAN.md 3.9): TEST FIXTURE settings for the healthy e2e server ----------
 
