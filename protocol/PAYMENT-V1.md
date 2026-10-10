@@ -91,7 +91,7 @@ Units: devnet USDC has 6 decimals, so $1.00 is 1,000,000 base units. Screens con
 | 120 | 8 | block time | `i64` unix seconds of that slot; 0 when status is 3 |
 | 128 | 8 | uploaded at | `i64` unix seconds when the server received the upload (server clock) |
 | 136 | 1 | status | 1 settled, 2 failed on chain, 3 refused before reaching the chain |
-| 137 | 2 | error code | `u16`; the program's error code when status is 2, otherwise 0 |
+| 137 | 2 | error code | `u16`; the redeem_note Custom code when representable at status 2; 0 means no representable code, or any other status |
 
 **Conf wire (203 bytes):** `CONF_V1 (139) || Ed25519 signature (64)`.
 

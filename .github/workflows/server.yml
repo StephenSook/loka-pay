@@ -47,17 +47,16 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          # TODO(1.9): match "packageManager" in server/package.json.
-          version: 10
+          version: 12.3.4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.3
           cache: pnpm
           cache-dependency-path: server/pnpm-lock.yaml
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Typecheck
         # TODO(1.9): script names come from server/package.json.
