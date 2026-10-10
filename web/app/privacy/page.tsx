@@ -45,7 +45,18 @@ export default function PrivacyPage() {
       </p>
 
       <Section title="The iPhone app">
-        <p>The iPhone app keeps its keys on the phone.</p>
+        <p>
+          The iPhone app keeps its keys on the phone. Messages, photos and voice notes travel
+          end-to-end encrypted to the person you send them to, over Bluetooth or a local Wi-Fi
+          network, and are stored on the phones involved. The app does not send them to us.
+        </p>
+        <p>
+          The app asks for these permissions, each only for the feature named: Bluetooth (to reach
+          nearby phones), camera (to scan codes and take photos for messages), microphone (to record
+          voice notes), contacts (to find a name for a phone number you type; contacts stay on the
+          phone and are never uploaded), local network (to reach nearby phones on Wi-Fi) and Face ID
+          (to approve each payment).
+        </p>
       </Section>
 
       <Section title="This website">
