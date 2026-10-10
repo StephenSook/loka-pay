@@ -102,9 +102,10 @@ public enum SettlementError: Error, Equatable, Sendable {
     case badPubkey(message: String)
     case nameLength(message: String)
     case unknownNote(message: String)
-    /// HTTP 422: the note or ack failed a stateless check. `check` is a PAYMENT-V1 section 6
-    /// name (`PaymentError(rawValue:)` maps it) or `bad_ack`. Unsigned and not remembered by the
-    /// server: a corrected upload of the same note is checked from scratch.
+    /// HTTP 422: the note or ack failed a stateless or identity check. `check` is a PAYMENT-V1
+    /// section 6 name (`PaymentError(rawValue:)` maps it), `bad_ack`, `unknown_allowance`,
+    /// `unknown_merchant` or `payer_mismatch`. Unsigned and not remembered by the server: a
+    /// corrected upload of the same note is checked from scratch.
     case refused(check: String, message: String)
     /// `retryAfter` is the Retry-After header in seconds; nil when absent or not an integer.
     case rateLimited(retryAfter: Int?, message: String)
@@ -155,6 +156,35 @@ extension SettlementError {
         .timedOut, .networkConnectionLost, .notConnectedToInternet,
         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
+
+    /// True when a note upload or read got no answer this phone can trust: the request may have
+    /// reached the server, which may have settled the note before the answer was lost (or sent one
+    /// that did not verify). Only a verified CONF says what happened, so the note stays reserved and
+    /// the screen offers Check again (`GET /v1/notes/{noteId}`). False for the answers API v1
+    /// defines as reaching no decision for this request: a 422 refusal, the 400 errors,
+    /// `unknown_note`, the 429s and `chain_unavailable` (nothing was signed), and for `stillPending`
+    /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` speaks for earlier uploads.
+    public var leavesOutcomeUnknown: Bool {
+        switch self {
+        case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
+             .payerMismatch, .merchantMismatch, .protocolViolation:
+            return true
+        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
+             .budgetExhausted, .chainUnavailable, .stillPending:
+            return false
+        }
+    }
+
+    /// True for an answer about the note id itself that settles what an earlier lost answer left
+    /// open: only `unknown_note` from the note-id lookup (the server never attempted this note id).
+    /// A verified CONF and a 202 also settle it; they are not errors. Everything else describes only
+    /// the latest request: a 422 is unsigned, remembered by nobody and binds nothing (API-V1
+    /// section 1), so it says nothing about an earlier upload, and nor do the 400s, the 429s or
+    /// `chain_unavailable`.
+    public var resolvesUnknownOutcome: Bool {
+        if case .unknownNote = self { return true }
+        return false
+    }
 }
 
 /// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`.
@@ -529,10 +559,12 @@ public struct SettlementClient: Sendable {
         "unknown_note": 404, "rate_limited": 429, "budget_exhausted": 429, "chain_unavailable": 503,
     ]
 
-    /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, and `bad_ack`.
+    /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, `bad_ack`, and the identity
+    /// checks of API-V1 section 4 (`unknown_allowance`, `unknown_merchant`, `payer_mismatch`).
     static let refusalChecks: Set<String> = [
         "length", "prefix", "cluster", "currency", "amount_zero", "wrong_program", "wrong_mint",
         "bad_pubkey", "high_s", "bad_signature", "bad_ack",
+        "unknown_allowance", "unknown_merchant", "payer_mismatch",
     ]
 
     static func apiError(status: Int, data: Data, response: HTTPURLResponse) -> SettlementError {

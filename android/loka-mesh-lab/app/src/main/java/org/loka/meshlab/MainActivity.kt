@@ -5,7 +5,7 @@ import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Base64
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.SideEffect
@@ -30,7 +30,8 @@ import org.loka.core.LabCrypto
 import org.loka.core.fingerprint
 import org.loka.core.transport.TransportCapability
 
-class MainActivity : ComponentActivity() {
+// FragmentActivity (a ComponentActivity) so the pay screen can show androidx BiometricPrompt.
+class MainActivity : FragmentActivity() {
     private var labModel: LabViewModel? = null
     private var incomingFriend by mutableStateOf<String?>(null)
     private var incomingContact by mutableStateOf<String?>(null)

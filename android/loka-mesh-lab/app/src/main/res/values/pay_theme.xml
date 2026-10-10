@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MainActivity keeps the application's platform theme and adds one attribute. On Android 8.x,
+         androidx.biometric 1.1.0 shows its fingerprint prompt as an AppCompat AlertDialog, which needs an
+         AppCompat dialog theme; this attribute is read only by AppCompat dialogs, so nothing else changes. -->
+    <style name="Theme.Loka.Main" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="alertDialogTheme">@style/Theme.AppCompat.Light.Dialog.Alert</item>
+    </style>
+</resources>

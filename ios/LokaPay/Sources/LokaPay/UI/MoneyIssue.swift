@@ -36,8 +36,13 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     case busy
     /// A different note arrived while one note already waits for its allowance; it was not taken.
     case otherNoteWaiting
-    /// This exact note is already in the merchant's offline ledger.
+    /// This exact note is already in the merchant's offline ledger with nothing to settle here: the
+    /// chain decided it (an unsettled one that can be read back comes on screen to settle instead).
     case alreadyReceived
+    /// A held note's saved record on this phone does not verify (its stored ACK or certificate was
+    /// changed, or another entry holds its serial), so it is not shown as received and nothing is
+    /// signed for it.
+    case damagedRecord
     /// No settlement client is connected in this build.
     case serverNotConnected
     /// The settlement call failed; the note stays held on this phone.
@@ -74,6 +79,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .busy: return "busy"
         case .otherNoteWaiting: return "other_note_waiting"
         case .alreadyReceived: return "already_received"
+        case .damagedRecord: return "damaged_record"
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
         case .ledgerNotUpdated: return "ledger_not_updated"
@@ -107,7 +113,12 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .otherNoteWaiting:
             return "Another payment note is already waiting for its allowance (code 1 of 2), so this note was not taken. "
                 + "Scan that allowance, or tap Clear the waiting note, then send this note again."
-        case .alreadyReceived: return "This exact note was already received on this phone. It is held in the ledger; nothing new was accepted."
+        case .alreadyReceived:
+            return "This exact note was already received on this phone and is recorded in its ledger, so nothing new was accepted."
+        case .damagedRecord:
+            return "This note's saved record on this phone does not verify (a stored receipt or certificate does not "
+                + "match, or another record holds its serial), so it was not shown as received and nothing was signed. "
+                + "It stays reserved in the ledger."
         case .serverNotConnected: return "No settlement server is connected in this build. The note stays held on this phone."
         case .settlement(let e): return Self.settlementMessage(e)
         case .ledgerNotUpdated(let paid):
@@ -190,13 +201,19 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         }
     }
 
+    /// An answer API v1 defines as reaching no decision speaks only for the request it answers, so it
+    /// says that request decided nothing, never that the note was never decided (an earlier upload's
+    /// answer may have been lost). Where no answer this phone can trust came back
+    /// (`SettlementError.leavesOutcomeUnknown`), the outcome is unknown.
     static func settlementMessage(_ e: SettlementError) -> String {
-        let held = "Nothing was decided on chain; the note stays held on this phone."
+        let held = "That request decided nothing on chain; the note stays held on this phone."
+        let unknown = "The note stays held on this phone; Check again asks the server by note id."
         switch e {
         case .refused(let check, _):
-            return "The server refused this note before it reached the chain (check: \(check)). \(held)"
+            return "The server refused this upload before it reached the chain (check: \(check)). \(held)"
         case .network(let code):
-            return "Could not reach the settlement server (\(networkWords(code))). \(held) Try again with signal."
+            return "The connection to the settlement server failed (\(networkWords(code))). The server may have "
+                + "settled the note before the answer was lost, so the outcome is unknown. \(unknown)"
         case .chainUnavailable:
             return "The server could not reach Solana devnet and signed nothing. Try again."
         case .rateLimited(let retryAfter, _):
@@ -204,13 +221,19 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 ?? "The server asked to wait before trying again."
         case .budgetExhausted: return "Today's sandbox budget on the server is spent. \(held)"
         case .http(let status, _, _):
-            return "The settlement server answered HTTP \(status). It may not be running yet. \(held)"
-        case .transport: return "A network error stopped the upload. \(held)"
+            return "The settlement server answered HTTP \(status). It may not be running yet; this phone cannot "
+                + "tell whether it settled the note, so the outcome is unknown. \(unknown)"
+        case .transport:
+            return "A network error stopped the exchange with the settlement server. The server may have settled "
+                + "the note before the answer was lost, so the outcome is unknown. \(unknown)"
         case .invalidResponse, .verification, .confirmationMismatch, .payerMismatch, .merchantMismatch,
              .protocolViolation:
-            return "The server's answer did not verify, so it was not trusted. \(held)"
+            return "The server's answer did not verify, so it was not trusted and the outcome is unknown. \(unknown)"
         case .stillPending: return "The chain has not decided yet. Check again in a moment."
-        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote:
+        case .unknownNote:
+            return "The server has no record of this note, so nothing was decided on chain. Settle it again to "
+                + "upload it; the note stays held on this phone."
+        case .badJSON, .badBase64url, .badPubkey, .nameLength:
             return "The server rejected the request (\(settlementName(e))). \(held)"
         }
     }

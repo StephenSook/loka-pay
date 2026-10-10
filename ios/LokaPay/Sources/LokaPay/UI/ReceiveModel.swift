@@ -29,6 +29,29 @@ public struct SettledPayment: Equatable, Sendable {
     public var status: MoneyStatus { MoneyStatus(receipt: receipt) }
 }
 
+/// A note this phone accepted offline that no verified CONF has decided yet, read back from the
+/// offline ledger with what settling it needs. Listed under "Unsettled on this phone".
+public struct UnsettledPayment: Equatable, Sendable, Identifiable {
+    /// From the ledger's stored wire: the original note bytes, which are the ones uploaded.
+    public let note: SignedNote
+    /// The stored ACK's signed received-at time. Without an ACK it is the time the ledger recorded,
+    /// for display only: nothing signs it and no check relies on it.
+    public let receivedAt: Date
+    /// The phone's report at receipt that it had no internet path. Never signed.
+    public let receivedWithZeroBars: Bool
+    /// The allowance certificate it was accepted against, verified again with the pinned key; nil
+    /// when the ledger entry was written before certificates were kept.
+    public let certificate: AllowanceCertificate?
+    /// The ACK this phone signed for it, verified again with this merchant's key and bound to this
+    /// note; nil when none was stored (settling then checks the note as if accepted now and signs one).
+    public let ack: Ack?
+    /// A stored ACK or certificate is present but does not verify: the record is damaged, so the
+    /// note is never shown as received from it and nothing is signed for it.
+    public let damaged: Bool
+
+    public var id: Data { note.noteId }
+}
+
 /// The Receive screen (tasks 3.71, 3.70, 3.27, 2.1 package side). The merchant shows its own
 /// certificate as a code; the payer's allowance (A) and note (N) arrive in either order by camera,
 /// as pasted text, or over Bluetooth when the app supplies a `PaymentInbox` that the mesh glue
@@ -64,6 +87,10 @@ public final class ReceiveModel {
     public private(set) var settlement: SettledPayment?
     /// The last HTTP 202 for this note: the chain has not decided yet. Unsigned.
     public private(set) var pendingSettlement: PendingSettlement?
+    /// The last settlement call for the note on screen got no answer this phone can trust
+    /// (`SettlementError.leavesOutcomeUnknown`): the server may have settled it, so the note stays
+    /// reserved and Check again is offered.
+    public private(set) var settlementOutcomeUnknown = false
     public private(set) var issue: MoneyIssue?
     /// The allowance a proven conflicting spend was seen for (a second valid note from that
     /// certificate's payer on a serial already in the ledger). Read it through `conflictingSpend`,
@@ -86,6 +113,15 @@ public final class ReceiveModel {
     public private(set) var unsettledTotal: UInt64?
     /// The allowance `unsettledTotal` was read for.
     public private(set) var unsettledAllowanceId: UInt64?
+    /// "Unsettled on this phone": notes accepted offline that no verified CONF has decided yet,
+    /// oldest first, read from the offline ledger when the screen is ready for a payer (set up, and
+    /// at each Next payment). They survive Next payment and a relaunch, and each can be settled.
+    public private(set) var unsettledPayments: [UnsettledPayment] = []
+    /// True when the ledger could not be read, so the list is unknown (never shown as empty).
+    public private(set) var unsettledPaymentsUnreadable = false
+    /// Pending ledger notes that could not be read back as notes to this merchant. The ledger still
+    /// counts them; the list says how many it could not show.
+    public private(set) var unsettledPaymentsUnlisted = 0
 
     public let deployment: Deployment
     private let signer: (any PaymentSigner)?
@@ -95,8 +131,14 @@ public final class ReceiveModel {
     private let internetState: (@MainActor () -> InternetState?)?
     private let now: @Sendable () -> Date
     private let inbox: PaymentInbox?
-    /// Inbox texts are checked one after another, in arrival order.
-    @ObservationIgnored private var inboxTail: Task<Void, Never>?
+    /// The verified wire of each certificate in `allowances`, kept with every note accepted against it.
+    @ObservationIgnored private var allowanceWires: [UInt64: Data] = [:]
+    /// The one task that checks the inbox's queued texts for this screen, one after another, in
+    /// arrival order. The queue and its bound live in the shared `PaymentInbox`.
+    @ObservationIgnored private var inboxConsumer: Task<Void, Never>?
+    /// The attachment `PaymentInbox.attach` returned; nil while this screen is not attached. The
+    /// consumer takes queued texts only with it, so it stops when the screen goes or is replaced.
+    @ObservationIgnored private var inboxAttachment: UInt64?
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
@@ -117,6 +159,7 @@ public final class ReceiveModel {
         self.inbox = inbox
         self.now = now
         if let problem = setUp(merchantWire: merchantWire) { report(problem) }
+        loadUnsettled()
     }
 
     private func setUp(merchantWire: Data?) -> MoneyIssueKind? {
@@ -239,25 +282,88 @@ public final class ReceiveModel {
     /// is shown, so a code that lands on another tab waits in the inbox and is never accepted unseen.
     /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
-        guard phase != .unavailable else { return }
-        inbox?.attach(self) { [weak self] text, arrivedAt in
+        guard phase != .unavailable, let inbox else { return }
+        inboxAttachment = inbox.attach(self) { [weak self] item in
             guard let self else { return false }
-            self.enqueueFromInbox(text, arrivedAt: arrivedAt)
+            self.takeFromInbox(item)
             return true
         }
+        // Texts a screen this one replaced had queued are this screen's now, in arrival order.
+        if inbox.hasQueued { startInboxConsumer() }
     }
 
     /// Stops taking inbox texts (a newer Receive model that already attached keeps the inbox).
+    /// Queued texts nobody started go back to the inbox's held list at once, with their first
+    /// arrival times (`PaymentInbox.detach`), so nothing is validated, reserved or signed for a
+    /// screen that is not shown. A text already being checked when the screen goes finishes, like
+    /// a scan would.
     public func stopInbox() {
         inbox?.detach(self)
+        inboxAttachment = nil
     }
 
-    private func enqueueFromInbox(_ text: String, arrivedAt: Date) {
-        let previous = inboxTail
-        inboxTail = Task { [weak self] in
-            await previous?.value
-            await self?.acceptFromInbox(text, arrivedAt: arrivedAt)
+    /// What a Bluetooth text can become on this screen.
+    private enum InboxTriage {
+        /// A payment code for another step (spend marker, receipt, confirmation): counted.
+        case ignored
+        /// Not a valid payment code, now or ever: counted.
+        case unreadable
+        /// An allowance or note this screen may accept.
+        case payment((kind: PaymentTransport.Kind, payload: Data))
+    }
+
+    /// Sorts a Bluetooth text without accepting anything. Parsing depends only on the text, and a
+    /// structure check only on the bytes, the deployment and the pinned server key, so a text that
+    /// fails either fails forever. During a payment the structure check runs here, because the text
+    /// can only wait; while ready, `accept` runs the same checks and reports a failure by name.
+    private func triage(_ text: String) -> InboxTriage {
+        switch ScanParser.parse(text, accepting: [.allowance, .note]) {
+        case .failure(.wrongKind):
+            // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
+            // confirmations are for payers. None of them is a step on this screen.
+            return .ignored
+        case .failure:
+            // Not a payment code, too long, or damaged text: the same text can never parse later.
+            return .unreadable
+        case .success(let decoded):
+            if phase != .ready, !passesStructureChecks(decoded) { return .unreadable }
+            return .payment(decoded)
         }
+    }
+
+    /// The inbox handler: counts junk at once, so it never takes a place, and queues the rest in the
+    /// inbox's one FIFO for the single consumer. The inbox keeps held and queued texts together
+    /// within `PaymentInbox.capacity` (the oldest goes first, counted), whichever screen queued
+    /// them. A text arriving while a signature is pending (Face ID) therefore waits in a bounded
+    /// queue, never in an open-ended chain of tasks, and a newer screen takes that queue over.
+    private func takeFromInbox(_ item: InboxText) {
+        guard let inbox, phase != .unavailable, merchant != nil else { return }
+        switch triage(item.text) {
+        case .ignored:
+            inboxIgnored += 1
+        case .unreadable:
+            inboxUnreadable += 1
+        case .payment:
+            inbox.enqueue(item)
+            startInboxConsumer()
+        }
+    }
+
+    private func startInboxConsumer() {
+        guard inboxConsumer == nil else { return }
+        // Weak: queued texts live in the inbox, so a model that goes away loses none of them.
+        inboxConsumer = Task { [weak self] in await self?.drainInbox() }
+    }
+
+    /// The single consumer: takes the inbox's queued texts one at a time, in arrival order, only
+    /// while this screen's attachment owns the inbox. Once the screen goes away or a newer screen
+    /// takes over, it stops; the queue stays in the inbox for whoever is attached.
+    private func drainInbox() async {
+        while let inbox, let attachment = inboxAttachment,
+              let item = inbox.takeNext(for: self, attachment: attachment) {
+            await acceptFromInbox(item)
+        }
+        inboxConsumer = nil
     }
 
     /// A Bluetooth text. Nobody at the till chose to scan it, so it is checked only while the screen
@@ -266,34 +372,22 @@ public final class ReceiveModel {
     /// never be accepted here are counted, not reported or held: protocol texts for other steps, and
     /// texts that are not valid payment codes. Only an allowance or note that passes its own checks
     /// goes back to the inbox, so junk takes no inbox place and never shows as Stopped later.
-    private func acceptFromInbox(_ text: String, arrivedAt: Date) async {
+    private func acceptFromInbox(_ item: InboxText) async {
         guard phase != .unavailable, merchant != nil else { return }
-        let decoded: (kind: PaymentTransport.Kind, payload: Data)
-        switch ScanParser.parse(text, accepting: [.allowance, .note]) {
-        case .failure(.wrongKind):
-            // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
-            // confirmations are for payers. None of them is a step on this screen.
+        switch triage(item.text) {
+        case .ignored:
             inboxIgnored += 1
-            return
-        case .failure:
-            // Not a payment code, too long, or damaged text: the same text can never parse later.
+        case .unreadable:
             inboxUnreadable += 1
-            return
-        case .success(let parsed):
-            decoded = parsed
-        }
-        guard phase == .ready else {
-            // A structure check that fails now fails forever (it depends only on the bytes, the
-            // deployment and the pinned server key).
-            guard passesStructureChecks(decoded) else {
-                inboxUnreadable += 1
+        case .payment(let decoded):
+            guard phase == .ready else {
+                // Back with its first arrival time and place in line, so the age limit still counts
+                // from then and no later text gets ahead of it.
+                inbox?.hold(item)
                 return
             }
-            // Back with its first arrival time, so the inbox age limit still counts from then.
-            inbox?.hold(text, arrivedAt: arrivedAt)
-            return
+            await accept(decoded)
         }
-        await accept(decoded)
     }
 
     /// True when the allowance verifies, or the note passes PAYMENT-V1 section 6, on their own.
@@ -312,7 +406,7 @@ public final class ReceiveModel {
 
     /// Waits until every inbox text handed over so far has been checked (for tests).
     func inboxDrained() async {
-        await inboxTail?.value
+        await inboxConsumer?.value
     }
 
     /// Scanned or received `L1|P|1|A|...` or `L1|P|1|N|...`. Nothing is dropped silently: an
@@ -343,6 +437,7 @@ public final class ReceiveModel {
             let certificate = try AllowanceCertificate.verify(wire: wire, deployment: deployment,
                                                               serverPublicKey: serverPublicKey)
             allowances[certificate.allowanceId] = certificate
+            allowanceWires[certificate.allowanceId] = wire
             // During a payment the screen shows that payment's allowance and its issues; leave
             // them. The certificate is kept, so the next payer's note still finds it.
             guard phase == .ready else { return }
@@ -371,6 +466,14 @@ public final class ReceiveModel {
             // The same note scanned again is not a second payment.
             if let current = payment, current.note.noteId == note.noteId { return }
             guard phase == .ready else { return report(.busy) }
+            // A note this phone already holds unsettled comes back on screen to settle, from the
+            // ledger's own copy and only after `recheck`, never reserved again. Without a certificate
+            // it takes the allowance path below, and `process` brings it back once the allowance arrives.
+            if let held = heldPayment(noteId: note.noteId),
+               held.damaged || held.certificate != nil || boundCertificate(for: held.note) != nil {
+                await bringBack(held)
+                return
+            }
             guard let certificate = allowances[note.note.allowanceId] else {
                 // One note waits at a time. A different one is refused by name, never swapped in.
                 if let waiting = waitingNote, waiting.noteId != note.noteId { return report(.otherNoteWaiting) }
@@ -389,14 +492,22 @@ public final class ReceiveModel {
         // allowance this note is checked against, whatever happens below.
         show(certificate)
         let seconds = Int64(now().timeIntervalSince1970)
+        let zeroBars = internetState?().map { $0 == InternetState.none } ?? false
         do {
             try Acceptance.check(note: note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash, now: seconds)
-            try ledger.accept(note: note, certificate: certificate, now: seconds)
+            // The certificate wire goes into the ledger with the note, so it can be settled later.
+            try ledger.accept(note: note, certificate: certificate, now: seconds,
+                              allowanceWire: allowanceWires[certificate.allowanceId], receivedWithZeroBars: zeroBars)
         } catch PaymentError.serialSeen {
             refreshUnsettled(certificate.allowanceId)
-            // The identical note again is not a reuse: it is already in the ledger.
-            if let entries = try? ledger.entries(), entries.contains(where: { $0.noteIdHex == note.noteId.hex }) {
+            // The identical note again is not a reuse: it is already in the ledger. Still pending, it
+            // comes back on screen to settle (not reserved again); decided, there is nothing to do.
+            if let entries = try? ledger.entries(), let entry = entries.first(where: { $0.noteIdHex == note.noteId.hex }) {
                 conflictAllowanceId = nil
+                if entry.state == .pending, let held = unsettledPayment(from: entry) {
+                    await bringBack(held)
+                    return
+                }
                 return report(.alreadyReceived)
             }
             conflictAllowanceId = isEquivocation(note, certificate: certificate) ? certificate.allowanceId : nil
@@ -408,7 +519,6 @@ public final class ReceiveModel {
         conflictAllowanceId = nil
         // Only this note stops waiting. Another payer's waiting note is kept for after this payment.
         if waitingNote?.noteId == note.noteId { waitingNote = nil }
-        let zeroBars = internetState?().map { $0 == InternetState.none } ?? false
         payment = ReceivedPayment(note: note, certificate: certificate,
                                   receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
                                   receivedWithZeroBars: zeroBars, ack: nil)
@@ -453,6 +563,10 @@ public final class ReceiveModel {
                 try Ack.sign(note: note, receivedAt: receivedAt, with: signer)
             }.value
             let checked = try Ack.verify(wire: ack.wire, for: note)
+            // Kept with the note in the ledger, so settling it after Next payment or a relaunch needs
+            // no new signature. If this write fails the note is still held and listed; settling it
+            // later signs the ACK again, so nothing is lost.
+            try? ledger.attachAck(noteId: note.noteId, ackWire: checked.wire)
             guard var latest = payment, latest.note.noteId == note.noteId else { return }
             latest.ack = checked
             payment = latest
@@ -481,7 +595,20 @@ public final class ReceiveModel {
         }
     }
 
-    /// Asks the server again after a pending answer (`GET /v1/notes/{noteId}`).
+    /// True while the note on screen has a pending answer, or a call whose outcome is unknown: Check
+    /// again then asks the server by note id.
+    public var offersCheckAgain: Bool {
+        phase == .received && (pendingSettlement != nil || settlementOutcomeUnknown)
+    }
+
+    /// Shown with Check again when the outcome is unknown. A constant string, so it is readable from
+    /// any isolation domain.
+    public nonisolated static let outcomeUnknownText =
+        "No answer this phone can trust came back, so whether the server settled this note is unknown. "
+        + "Check again asks the server by note id; Settle again sends the same note."
+
+    /// Asks the server by note id (`GET /v1/notes/{noteId}`) after a pending answer or a call whose
+    /// outcome is unknown. The CONF it returns is verified exactly as for an upload.
     public func checkAgain() async {
         guard phase == .received, let current = payment, let ack = current.ack, !isWorking else { return }
         guard let client = settlementClient else { return report(.serverNotConnected) }
@@ -499,6 +626,7 @@ public final class ReceiveModel {
         switch outcome {
         case .pending(let pending):
             pendingSettlement = pending
+            settlementOutcomeUnknown = false
             issue = nil
         case .decided(let decision):
             let bytes = Bundles.receipt(note: current.note, ack: ack, confirmationWire: decision.confirmationWire)
@@ -506,13 +634,14 @@ public final class ReceiveModel {
             do {
                 receipt = try Receipts.verify(bytes, deployment: deployment, serverPublicKey: serverPublicKey)
             } catch let error as PaymentError {
-                return report(.settlement(.verification(error)))
+                return reportSettlement(SettlementError.verification(error))
             } catch {
-                return report(.settlement(.verification(.transport)))
+                return reportSettlement(SettlementError.verification(.transport))
             }
             settlement = SettledPayment(receipt: receipt, receiptText: PaymentTransport.encode(.receipt, bytes),
                                         replayed: decision.replayed, reasonUnsigned: decision.reason)
             pendingSettlement = nil
+            settlementOutcomeUnknown = false
             issue = nil
             phase = .settled
             do {
@@ -525,13 +654,27 @@ public final class ReceiveModel {
         }
     }
 
+    /// Shows a failed settlement call. The ledger is never touched here, so the note stays reserved
+    /// whatever went wrong. A failure with no answer this phone can trust makes the note's outcome
+    /// unknown and offers Check again. Only an answer about the note id clears that: here
+    /// `unknown_note` from the lookup; in `handle`, a verified CONF or a 202. An error about only the
+    /// latest request (a 422, which is unsigned and binds nothing, a 429, the 400s,
+    /// `chain_unavailable`) keeps an earlier unknown outcome.
     private func reportSettlement(_ error: Error) {
         if error is CancellationError { return }
-        if let settlement = error as? SettlementError {
-            if case .stillPending(let pending) = settlement { pendingSettlement = pending }
-            return report(.settlement(settlement))
+        let settlement = (error as? SettlementError) ?? .transport(String(describing: error))
+        switch settlement {
+        case .stillPending(let pending): pendingSettlement = pending
+        // The server never attempted this note id, so no attempt is in flight: Settle uploads it.
+        case .unknownNote: pendingSettlement = nil
+        default: break
         }
-        report(.settlement(.transport(String(describing: error))))
+        if settlement.leavesOutcomeUnknown {
+            settlementOutcomeUnknown = true
+        } else if settlement.resolvesUnknownOutcome {
+            settlementOutcomeUnknown = false
+        }
+        report(.settlement(settlement))
     }
 
     /// Drops the note waiting for its allowance (the payer left, or sent the wrong note). Only the
@@ -542,22 +685,23 @@ public final class ReceiveModel {
         issue = nil
     }
 
-    /// Shown above Next payment while the note on screen is not settled: the ACK lives only on this
-    /// screen, so the note cannot be settled from here once it is cleared. A constant string, so it
-    /// is readable from any isolation domain.
+    /// Shown above Next payment while the note on screen is not settled: the ledger keeps the note
+    /// with its certificate and signed receipt, so it stays settleable from the Receive screen. A
+    /// constant string, so it is readable from any isolation domain.
     public nonisolated static let unsettledNextPaymentText =
-        "Next payment leaves this note held in the offline ledger, unsettled. It cannot be settled from this "
-        + "screen afterwards, so settle first when there is signal."
+        "Next payment keeps this note in the offline ledger with its signed receipt. It stays under Unsettled on "
+        + "this phone on the Receive screen, even after a restart, so it can be settled when there is signal."
 
-    /// Clears the screen for the next payer. The ledger keeps every accepted note; Bluetooth codes
-    /// that arrived during the payment are checked now, in arrival order. A note still waiting for
-    /// its allowance belongs to a payer who has not paid yet, so it stays and its next step shows
-    /// again (Clear the waiting note drops it).
+    /// Clears the screen for the next payer. The ledger keeps every accepted note, and the unsettled
+    /// ones are listed again; Bluetooth codes that arrived during the payment are checked now, in
+    /// arrival order. A note still waiting for its allowance belongs to a payer who has not paid yet,
+    /// so it stays and its next step shows again (Clear the waiting note drops it).
     public func nextPayment() {
         guard phase != .unavailable, !isWorking else { return }
         payment = nil
         settlement = nil
         pendingSettlement = nil
+        settlementOutcomeUnknown = false
         issue = nil
         conflictAllowanceId = nil
         // The previous payer's allowance is not progress for the next one.
@@ -565,6 +709,7 @@ public final class ReceiveModel {
         unsettledTotal = nil
         unsettledAllowanceId = nil
         phase = .ready
+        loadUnsettled()
         if waitingNote != nil { report(.allowanceNeeded) }
         // Drops, ignored and unreadable texts so far were shown during that payment; the next
         // payer's counts start here. Taken before release(), so a held code that expires now counts for them.
@@ -572,6 +717,240 @@ public final class ReceiveModel {
         inboxIgnored = 0
         inboxUnreadable = 0
         inbox?.release()
+    }
+
+    // MARK: - Unsettled on this phone
+
+    /// Settle on a row of "Unsettled on this phone". The note is read fresh from the ledger and comes
+    /// back on screen only after `recheck`, never reserved again; then it uploads like Settle: Paid
+    /// or Failed only from a verified CONF, which also releases it from the ledger. Every other
+    /// outcome leaves it reserved and listed.
+    public func settleUnsettled(noteId: Data) async {
+        guard phase == .ready, !isWorking else { return }
+        guard settlementClient != nil else { return report(.serverNotConnected) }
+        // No longer pending (another screen decided it) or no longer readable: list again.
+        guard let held = heldPayment(noteId: noteId) else { return loadUnsettled() }
+        guard await bringBack(held) else { return }
+        await settle()
+    }
+
+    /// What a row of "Unsettled on this phone" can do now.
+    public enum UnsettledState: Equatable, Sendable {
+        /// Settle can bring it back (`recheck` still runs first).
+        case settleable
+        /// Stored without its certificate: its allowance code must be scanned on this screen first.
+        case needsAllowance
+        /// A stored part does not verify, or another entry holds its serial: never settled from here.
+        case damaged
+        /// No usable ACK was kept, and a new one cannot be signed because the note has expired, so it
+        /// cannot be settled from this phone. Its amount stays reserved: nothing proves the payer's
+        /// serial was not spent, and the ledger releases a note only on a verified CONF.
+        case expiredWithoutReceipt
+
+        /// True for the states Settle cannot leave.
+        public var isBlocked: Bool { self == .damaged || self == .expiredWithoutReceipt }
+    }
+
+    /// The state of `held` at the phone's time now.
+    public func state(of held: UnsettledPayment) -> UnsettledState {
+        if held.damaged { return .damaged }
+        // Without an ACK the note is checked as if received now, which an expired note fails.
+        if held.ack == nil, Int64(now().timeIntervalSince1970) > held.note.note.expiry { return .expiredWithoutReceipt }
+        if held.certificate == nil, boundCertificate(for: held.note) == nil { return .needsAllowance }
+        return .settleable
+    }
+
+    /// True only for `.settleable`; even then `recheck` runs before the note shows as Received.
+    public func canSettle(_ held: UnsettledPayment) -> Bool {
+        state(of: held) == .settleable
+    }
+
+    /// The line above the list. `blocked` counts the rows that cannot be settled from this phone.
+    public nonisolated static func unsettledSummary(count: Int, total: UInt64, unlisted: Int, unreadable: Bool,
+                                                    blocked: Int = 0) -> String {
+        if unreadable {
+            return "This phone could not read its offline ledger, so its unsettled notes cannot be listed. "
+                + "Nothing was released; they stay reserved."
+        }
+        var line = (count == 1 ? "1 note" : String(count) + " notes") + ", $" + Money.display(baseUnits: total)
+            + " sandbox, accepted offline and not settled yet. Settling needs internet."
+        if blocked > 0 {
+            line += " " + String(blocked) + " of them cannot be settled from this phone (see below); "
+                + (blocked == 1 ? "its amount stays" : "their amounts stay") + " reserved."
+        }
+        if unlisted > 0 {
+            line += " " + String(unlisted) + " more held " + (unlisted == 1 ? "note" : "notes")
+                + " could not be read back to settle here; the ledger still counts them."
+        }
+        return line
+    }
+
+    /// The caption under one row.
+    public nonisolated static func unsettledRowText(_ held: UnsettledPayment, state: UnsettledState) -> String {
+        // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
+        var line = "Allowance #" + String(held.note.note.allowanceId) + ", received "
+            + held.receivedAt.formatted(date: .abbreviated, time: .shortened) + " (this phone's clock)."
+        switch state {
+        case .damaged:
+            line += " Its saved record on this phone does not verify, so it cannot be settled from here. "
+                + "Its amount stays reserved."
+        case .expiredWithoutReceipt:
+            let expiry = Date(timeIntervalSince1970: TimeInterval(held.note.note.expiry))
+            line += " No signed receipt was kept for it, and a new one cannot be signed because the note expired "
+                + expiry.formatted(date: .abbreviated, time: .shortened)
+                + ", so it cannot be settled from this phone. Its amount stays reserved against this allowance's "
+                + "offline limit."
+        case .needsAllowance:
+            line += " Scan its allowance code (code 1 of 2) to settle it."
+        case .settleable:
+            if held.ack == nil { line += " Settling checks it again as if received now and signs its receipt first." }
+        }
+        return line
+    }
+
+    /// Reads "Unsettled on this phone" from the offline ledger. A ledger that cannot be read is
+    /// reported as such, never as an empty list.
+    private func loadUnsettled() {
+        guard merchant != nil, phase != .unavailable else { return }
+        do {
+            let entries = try ledger.pending()
+            let payments = entries.compactMap(unsettledPayment(from:))
+            unsettledPayments = payments
+            unsettledPaymentsUnlisted = entries.count - payments.count
+            unsettledPaymentsUnreadable = false
+        } catch {
+            unsettledPayments = []
+            unsettledPaymentsUnlisted = 0
+            unsettledPaymentsUnreadable = true
+        }
+    }
+
+    /// A pending ledger entry read back: the stored note must pass PAYMENT-V1 section 6 and be
+    /// addressed to this merchant. A stored certificate must verify with the pinned key and name the
+    /// note's allowance and payer; a stored ACK must verify with this merchant's key and bind this
+    /// note id. A part that is present but fails marks the record damaged, and so does another entry
+    /// on the same allowance and serial; nothing stored is trusted as stored. Nothing here is a
+    /// merchant check: `recheck` runs those before the note is shown.
+    private func unsettledPayment(from entry: OfflineLedger.Entry) -> UnsettledPayment? {
+        guard let merchant, let serverPublicKey, let wire = Data(hex: entry.wireHex),
+              let note = try? SignedNote.validate(wire: wire, deployment: deployment),
+              note.note.payeeKeyHash == merchant.merchantKeyHash else { return nil }
+        var damaged = entry.sharesSerial
+        var certificate: AllowanceCertificate?
+        if let hex = entry.allowanceWireHex {
+            if let wire = Data(hex: hex),
+               let verified = try? AllowanceCertificate.verify(wire: wire, deployment: deployment,
+                                                               serverPublicKey: serverPublicKey),
+               verified.allowanceId == note.note.allowanceId, verified.payerKeyHash == note.payerKeyHash {
+                certificate = verified
+            } else {
+                damaged = true
+            }
+        }
+        var ack: Ack?
+        if let hex = entry.ackWireHex {
+            if let wire = Data(hex: hex), let verified = try? Ack.verify(wire: wire, for: note),
+               P256Rules.keyHash(verified.merchantPublicKey) == merchant.merchantKeyHash {
+                ack = verified
+            } else {
+                damaged = true
+            }
+        }
+        let seconds = ack?.receivedAt ?? entry.acceptedAt
+        return UnsettledPayment(note: note, receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
+                                receivedWithZeroBars: entry.receivedWithZeroBars ?? false,
+                                certificate: certificate, ack: ack, damaged: damaged)
+    }
+
+    /// Checks a held note again, as an acceptance, before it may show as Received.
+    ///
+    /// The stored ACK is this merchant's own signature over the note id and the time the note was
+    /// received, so it authenticates the ledger record: with one, the merchant checks run at that
+    /// signed time and the ACK is reused (no new signature). With no ACK stored (an older entry, or
+    /// a signature that never finished), the note is treated as received now, like a fresh scan:
+    /// the checks run at the phone's time now and the owner signs a new ACK for that time. A
+    /// damaged record is refused and nothing is signed. Either way the note was reserved when it
+    /// was accepted, so it is not reserved again: the ledger must hold exactly one reservation for
+    /// its allowance and serial, this note's, and the allowance's reserved total must still be
+    /// within the certificate's offline limit.
+    private func recheck(_ held: UnsettledPayment) -> Result<ReceivedPayment, MoneyIssueKind> {
+        guard let merchant else { return .failure(.noMerchantCertificate) }
+        guard !held.damaged else { return .failure(.damagedRecord) }
+        guard let certificate = held.certificate ?? boundCertificate(for: held.note) else {
+            return .failure(.allowanceNeeded)
+        }
+        let receivedAt: Int64
+        let zeroBars: Bool
+        if let ack = held.ack {
+            receivedAt = ack.receivedAt
+            zeroBars = held.receivedWithZeroBars
+        } else {
+            receivedAt = Int64(now().timeIntervalSince1970)
+            zeroBars = internetState?().map { $0 == InternetState.none } ?? false
+        }
+        do {
+            // Merchant check 6, read again now: the one reservation on this serial is this note's.
+            // Two on one serial is a damaged ledger; both stay reserved and neither is shown or signed.
+            guard try ledger.holdsSoleReservation(noteId: held.note.noteId) else { return .failure(.damagedRecord) }
+            // PAYMENT-V1 section 6 merchant checks 2 to 5: allowance, payer, payee and earmarks, expiry.
+            try Acceptance.check(note: held.note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash,
+                                 now: receivedAt)
+            // Checks 6 and 7 held when it was reserved; the reserved total, this note included, must
+            // still be within the offline limit of the certificate it is shown against.
+            guard try ledger.unsettledTotal(allowanceId: certificate.allowanceId) <= certificate.offlineLimit else {
+                throw PaymentError.offlineLimit
+            }
+        } catch let error as PaymentError {
+            return .failure(.payment(error))
+        } catch {
+            return .failure(.payment(.storage))
+        }
+        return .success(ReceivedPayment(note: held.note, certificate: certificate,
+                                        receivedAt: Date(timeIntervalSince1970: TimeInterval(receivedAt)),
+                                        receivedWithZeroBars: zeroBars, ack: held.ack))
+    }
+
+    /// Brings a held note back on screen after `recheck`, or shows the named reason it cannot come back.
+    @discardableResult
+    private func bringBack(_ held: UnsettledPayment) async -> Bool {
+        switch recheck(held) {
+        case .failure(let kind):
+            report(kind)
+            return false
+        case .success(let received):
+            await restore(received)
+            return true
+        }
+    }
+
+    /// The pending ledger entry for `noteId`, read fresh, as a settleable payment.
+    private func heldPayment(noteId: Data) -> UnsettledPayment? {
+        guard let entry = (try? ledger.pending())?.first(where: { $0.noteIdHex == noteId.hex }) else { return nil }
+        return unsettledPayment(from: entry)
+    }
+
+    /// A certificate seen on this screen that binds `note`: same allowance id and payer key.
+    private func boundCertificate(for note: SignedNote) -> AllowanceCertificate? {
+        guard let certificate = allowances[note.note.allowanceId],
+              certificate.payerKeyHash == note.payerKeyHash else { return nil }
+        return certificate
+    }
+
+    /// Puts a rechecked held note back on screen to settle. It was reserved when it was accepted, so
+    /// the ledger is not touched here; a stored ACK is reused, so there is no new Face ID prompt.
+    /// Without one, the owner signs an ACK for the time `recheck` used, as after a fresh scan.
+    private func restore(_ received: ReceivedPayment) async {
+        show(received.certificate)
+        conflictAllowanceId = nil
+        if waitingNote?.noteId == received.note.noteId { waitingNote = nil }
+        payment = received
+        settlement = nil
+        pendingSettlement = nil
+        settlementOutcomeUnknown = false
+        issue = nil
+        phase = .received
+        refreshUnsettled(received.certificate.allowanceId)
+        if received.ack == nil { await signAck() }
     }
 
     // MARK: - Helpers
@@ -598,6 +977,7 @@ extension ReceiveModel {
     static func preview(_ phase: Phase, payment: ReceivedPayment? = nil, settlement: SettledPayment? = nil,
                         pending: PendingSettlement? = nil, issue: MoneyIssueKind? = nil, conflict: Bool = false,
                         unsettled: UInt64? = nil, waitingNote: SignedNote? = nil, bluetoothInbox: Bool = false,
+                        outcomeUnknown: Bool = false, held: [UnsettledPayment] = [],
                         serverKey: Data? = PreviewFixtures.serverKey) -> ReceiveModel {
         let model = ReceiveModel(merchantWire: PreviewFixtures.merchantWire, signer: PreviewFixtures.merchantSigner,
                                  ledger: OfflineLedger(url: PreviewFixtures.scratchURL("preview-ledger.json")),
@@ -609,6 +989,10 @@ extension ReceiveModel {
         model.payment = payment
         model.settlement = settlement
         model.pendingSettlement = pending
+        model.settlementOutcomeUnknown = outcomeUnknown
+        model.unsettledPayments = held
+        model.unsettledPaymentsUnreadable = false
+        model.unsettledPaymentsUnlisted = 0
         model.waitingNote = waitingNote
         // A ready screen with an unsettled figure has seen the payer's allowance; a bare ready
         // screen has seen nothing yet.

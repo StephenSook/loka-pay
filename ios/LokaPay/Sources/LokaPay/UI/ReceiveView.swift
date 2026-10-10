@@ -74,6 +74,7 @@ public struct ReceiveView: View {
             .lokaCard()
         case .ready:
             readyCard
+            unsettledCard
         case .received:
             receivedSection
         case .settled:
@@ -112,6 +113,53 @@ public struct ReceiveView: View {
             CodeEntryField(prompt: "Or paste a payer code") { text in Task { await model.accept(text: text) } }
         }
         .lokaCard()
+    }
+
+    /// "Unsettled on this phone": notes accepted offline that no verified CONF has decided yet. They
+    /// stay reserved against each allowance's offline limit until one does.
+    @ViewBuilder private var unsettledCard: some View {
+        let held = model.unsettledPayments
+        if !held.isEmpty || model.unsettledPaymentsUnreadable || model.unsettledPaymentsUnlisted > 0 {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Unsettled on this phone").font(LokaStyle.title).foregroundStyle(LokaColor.ink)
+                Text(ReceiveModel.unsettledSummary(
+                    count: held.count,
+                    total: held.reduce(UInt64(0)) { sum, p in
+                        let (next, overflow) = sum.addingReportingOverflow(p.note.note.amount)
+                        return overflow ? .max : next
+                    },
+                    unlisted: model.unsettledPaymentsUnlisted, unreadable: model.unsettledPaymentsUnreadable,
+                    blocked: held.filter { model.state(of: $0).isBlocked }.count))
+                    .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+                ForEach(held) { payment in
+                    let amount = "$" + Money.display(baseUnits: payment.note.note.amount)
+                    let state = model.state(of: payment)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(amount).font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+                            Text("sandbox").font(LokaStyle.label).foregroundStyle(LokaColor.muted)
+                            if state.isBlocked {
+                                Label("Cannot settle here", systemImage: "lock.fill")
+                                    .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                            }
+                        }
+                        Text(ReceiveModel.unsettledRowText(payment, state: state))
+                            .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+                        // A blocked row offers no Settle: the caption says why, and the amount stays reserved.
+                        if !state.isBlocked {
+                            Button("Settle " + amount) {
+                                Task { await model.settleUnsettled(noteId: payment.note.noteId) }
+                            }
+                            .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+                            .disabled(model.isWorking)
+                            .accessibilityLabel("Settle " + amount + " sandbox from allowance "
+                                                + String(payment.note.note.allowanceId))
+                        }
+                    }
+                }
+            }
+            .lokaCard()
+        }
     }
 
     @ViewBuilder private func limitBlock(_ certificate: AllowanceCertificate?) -> some View {
@@ -173,11 +221,13 @@ public struct ReceiveView: View {
             .buttonStyle(LokaButtonStyle())
             .disabled(payment.ack == nil || model.isWorking)
             if model.isWorking, payment.ack != nil { ProgressView() }
-            if model.pendingSettlement != nil {
-                Text("The server has the note; the chain has not decided yet.")
+            if model.offersCheckAgain {
+                Text(model.settlementOutcomeUnknown ? ReceiveModel.outcomeUnknownText
+                                                    : "The server has the note; the chain has not decided yet.")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
                 Button("Check again") { Task { await model.checkAgain() } }
                     .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+                    .disabled(model.isWorking)
             }
             Text("Settling needs internet. The status changes only when a server-signed confirmation verifies on this phone.")
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
@@ -246,6 +296,12 @@ public struct ReceiveView: View {
     ReceiveView(model: .preview(.ready), connectivity: ConnectivityMonitor())
 }
 
+#Preview("Receive: ready, unsettled on this phone") {
+    ReceiveView(model: .preview(.ready, held: [PreviewFixtures.unsettled(),
+                                               PreviewFixtures.unsettled(withAck: false, withCertificate: false)]),
+                connectivity: ConnectivityMonitor())
+}
+
 #Preview("Receive: note before allowance") {
     ReceiveView(model: .preview(.ready, issue: .allowanceNeeded, waitingNote: PreviewFixtures.note0),
                 connectivity: ConnectivityMonitor())
@@ -289,6 +345,12 @@ public struct ReceiveView: View {
                                 pending: PendingSettlement(noteId: PreviewFixtures.note0.noteId, signature: nil,
                                                            explorer: nil, retryAfter: 2),
                                 unsettled: 1_000_000),
+                connectivity: ConnectivityMonitor())
+}
+
+#Preview("Receive: answer lost, outcome unknown") {
+    ReceiveView(model: .preview(.received, payment: PreviewFixtures.received(),
+                                issue: .settlement(.network(.timedOut)), unsettled: 1_000_000, outcomeUnknown: true),
                 connectivity: ConnectivityMonitor())
 }
 
