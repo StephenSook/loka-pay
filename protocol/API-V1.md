@@ -56,6 +56,8 @@ Confirmed registration failures are recoverable through one explicit repost per 
 
 A matching retryOf repost can take over its existing unsigned retry after the 30 second claim lease expires. The parent signature must match, the ownership token changes, and the stored retry plan and consumed retry count remain unchanged. A mismatched retryOf or a saved attempt cannot use this takeover.
 
+A payer retryOf repost, including recovery of its unsigned claim, retains the saved allowance id and never selects another id on a collision. A late original success makes this retry collide on the same allowance, and saved history resolves the original success. Initial registration's proven-collision allocation loop and completed team renewal keep their existing behavior.
+
 Saved registration history is resolved before the current replacement's terminal outcome or an explicit retryOf repost. A verified prior success uses its original plan and signature and supersedes a cached replacement failure. A found prior signature without final metadata remains pending.
 
 The historical successful plan, including expiry and allowance id, is persisted with its result in one write guarded by the current saved attempt signature. Team renewal uses that successful expiry rather than a failed retry's extended expiry. A stale signature cannot replace either the plan or result.

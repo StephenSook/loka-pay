@@ -341,6 +341,8 @@ One owner per module; cross-module changes go by PR, reviewed by that owner. If 
 
 ## Shared Contracts
 
+⚠️ CONTRACT: A payer retryOf repost and any takeover of that unsigned explicit retry retain the saved allowance id. They never choose a fresh id or enter the fresh-id collision retry loop. A late original success therefore makes the retry collide on the same allowance; saved history still resolves that original success. Initial registration's proven-collision allocation loop and completed team renewal remain unchanged.
+
 ⚠️ CONTRACT: When a verified historical registration success wins, its original plan, including expiry and allowance id, is stored alongside the success result in the same write guarded by the current saved attempt signature. Team renewal uses that successful plan's expiry, not a failed retry's extended expiry. A stale signature cannot replace either the plan or result.
 
 ⚠️ CONTRACT: A repost with matching retryOf may atomically take over its existing unsigned registration retry after the 30 second claim lease. The parent signature must match, the ownership token changes, and the original retry plan and consumed explicit retry count remain unchanged. A mismatched retryOf or a saved attempt cannot use this takeover.
