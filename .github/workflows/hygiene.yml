@@ -93,12 +93,14 @@ jobs:
           pnpm --dir protocol/lib typecheck
 
       - name: FACTS equality (every judge-facing number equals docs/FACTS.json)
-        # TODO(3.6, 4.2): write tools/facts/check_facts.py. Until it exists this step warns
-        # instead of passing silently; task 4.2 is not done while the warning shows.
+        # Task 4.2: schema, web/lib/facts.ts and README.md against docs/FACTS.json. It runs
+        # unconditionally: a missing checker fails here instead of skipping. Slides, video and
+        # Devpost live outside the repo. Run it with --strict before submission.
         run: |
           set -euo pipefail
-          if [ -f tools/facts/check_facts.py ]; then
-            python3 tools/facts/check_facts.py
-          else
-            echo "::warning::FACTS equality check is not wired yet (task 4.2 needs it before submission)"
-          fi
+          python3 tools/facts/check_facts.py
+
+      - name: FACTS check tests (each planted drift turns the check red)
+        run: |
+          set -euo pipefail
+          python3 -m unittest tools/facts/test_check_facts.py -v
