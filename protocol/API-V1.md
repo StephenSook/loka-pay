@@ -113,6 +113,8 @@ Request:
 - **The server does not pre-check spend state** (used serial, cap, expiry, earmark). The identity checks above are not spend state: the genuine payer's reused serial still reaches the chain. Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
 - The server reads the allowance and merchant accounts and checks their owners, discriminators and stored identities. An RPC failure returns an unsigned HTTP 503 and nothing is claimed.
 
+A decided-note replay still passes note, ACK and payer-binding validation, then reads the journal before the per-allowance limiter. It returns the existing decision without consuming upload quota. Pending and new submissions still count.
+
 Only an outcome on chain is final. Except for the late original-signature rule below, once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and attaching an ack never changes the decision or the CONF.
 
 **One attempt per note id.** The server holds at most one in-flight attempt for a note id (for example a lock or a unique row keyed by note id):
