@@ -95,8 +95,16 @@ public final class ReceiveModel {
     private let internetState: (@MainActor () -> InternetState?)?
     private let now: @Sendable () -> Date
     private let inbox: PaymentInbox?
-    /// Inbox texts are checked one after another, in arrival order.
-    @ObservationIgnored private var inboxTail: Task<Void, Never>?
+    /// A Bluetooth text this screen took from the inbox and has not started checking yet.
+    private struct QueuedText {
+        let text: String
+        let arrivedAt: Date
+    }
+    /// Inbox texts waiting for the single consumer, oldest first. Together with the inbox's held
+    /// texts they never exceed `PaymentInbox.capacity`.
+    @ObservationIgnored private var inboxQueue: [QueuedText] = []
+    /// The one task that checks queued inbox texts, one after another, in arrival order.
+    @ObservationIgnored private var inboxConsumer: Task<Void, Never>?
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
@@ -242,7 +250,7 @@ public final class ReceiveModel {
         guard phase != .unavailable else { return }
         inbox?.attach(self) { [weak self] text, arrivedAt in
             guard let self else { return false }
-            self.enqueueFromInbox(text, arrivedAt: arrivedAt)
+            self.takeFromInbox(text, arrivedAt: arrivedAt)
             return true
         }
     }
@@ -252,12 +260,75 @@ public final class ReceiveModel {
         inbox?.detach(self)
     }
 
-    private func enqueueFromInbox(_ text: String, arrivedAt: Date) {
-        let previous = inboxTail
-        inboxTail = Task { [weak self] in
-            await previous?.value
-            await self?.acceptFromInbox(text, arrivedAt: arrivedAt)
+    /// What a Bluetooth text can become on this screen.
+    private enum InboxTriage {
+        /// A payment code for another step (spend marker, receipt, confirmation): counted.
+        case ignored
+        /// Not a valid payment code, now or ever: counted.
+        case unreadable
+        /// An allowance or note this screen may accept.
+        case payment((kind: PaymentTransport.Kind, payload: Data))
+    }
+
+    /// Sorts a Bluetooth text without accepting anything. Parsing depends only on the text, and a
+    /// structure check only on the bytes, the deployment and the pinned server key, so a text that
+    /// fails either fails forever. During a payment the structure check runs here, because the text
+    /// can only wait; while ready, `accept` runs the same checks and reports a failure by name.
+    private func triage(_ text: String) -> InboxTriage {
+        switch ScanParser.parse(text, accepting: [.allowance, .note]) {
+        case .failure(.wrongKind):
+            // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
+            // confirmations are for payers. None of them is a step on this screen.
+            return .ignored
+        case .failure:
+            // Not a payment code, too long, or damaged text: the same text can never parse later.
+            return .unreadable
+        case .success(let decoded):
+            if phase != .ready, !passesStructureChecks(decoded) { return .unreadable }
+            return .payment(decoded)
         }
+    }
+
+    /// The inbox handler: counts junk at once, so it never takes a place, and queues the rest for
+    /// the single consumer. Queued texts count toward `PaymentInbox.capacity` with the held ones;
+    /// when they would pass it, the oldest pending text is dropped and counted, as when the inbox
+    /// holds too many. A text arriving while a signature is pending (Face ID) therefore waits in a
+    /// bounded queue, never in an open-ended chain of tasks.
+    private func takeFromInbox(_ text: String, arrivedAt: Date) {
+        guard let inbox, phase != .unavailable, merchant != nil else { return }
+        switch triage(text) {
+        case .ignored:
+            inboxIgnored += 1
+        case .unreadable:
+            inboxUnreadable += 1
+        case .payment:
+            if inbox.held.count + inboxQueue.count >= PaymentInbox.capacity { dropOldestPending(inbox) }
+            inboxQueue.append(QueuedText(text: text, arrivedAt: arrivedAt))
+            if inboxConsumer == nil {
+                // Holds the model until the queue is empty, so a queued text is never lost with it.
+                inboxConsumer = Task { await self.drainInboxQueue() }
+            }
+        }
+    }
+
+    /// Makes room for one text: drops and counts the one that arrived first, held or queued.
+    private func dropOldestPending(_ inbox: PaymentInbox) {
+        let queued = inboxQueue.indices.min { inboxQueue[$0].arrivedAt < inboxQueue[$1].arrivedAt }
+        if let heldAt = inbox.oldestHeldArrival, queued.map({ heldAt <= inboxQueue[$0].arrivedAt }) ?? true {
+            inbox.dropOldestHeld()
+        } else if let queued {
+            inboxQueue.remove(at: queued)
+            inbox.recordDrop()
+        }
+    }
+
+    /// The single consumer: checks queued texts one at a time, in arrival order.
+    private func drainInboxQueue() async {
+        while !inboxQueue.isEmpty {
+            let item = inboxQueue.removeFirst()
+            await acceptFromInbox(item.text, arrivedAt: item.arrivedAt)
+        }
+        inboxConsumer = nil
     }
 
     /// A Bluetooth text. Nobody at the till chose to scan it, so it is checked only while the screen
@@ -268,32 +339,19 @@ public final class ReceiveModel {
     /// goes back to the inbox, so junk takes no inbox place and never shows as Stopped later.
     private func acceptFromInbox(_ text: String, arrivedAt: Date) async {
         guard phase != .unavailable, merchant != nil else { return }
-        let decoded: (kind: PaymentTransport.Kind, payload: Data)
-        switch ScanParser.parse(text, accepting: [.allowance, .note]) {
-        case .failure(.wrongKind):
-            // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
-            // confirmations are for payers. None of them is a step on this screen.
+        switch triage(text) {
+        case .ignored:
             inboxIgnored += 1
-            return
-        case .failure:
-            // Not a payment code, too long, or damaged text: the same text can never parse later.
+        case .unreadable:
             inboxUnreadable += 1
-            return
-        case .success(let parsed):
-            decoded = parsed
-        }
-        guard phase == .ready else {
-            // A structure check that fails now fails forever (it depends only on the bytes, the
-            // deployment and the pinned server key).
-            guard passesStructureChecks(decoded) else {
-                inboxUnreadable += 1
+        case .payment(let decoded):
+            guard phase == .ready else {
+                // Back with its first arrival time, so the inbox age limit still counts from then.
+                inbox?.hold(text, arrivedAt: arrivedAt)
                 return
             }
-            // Back with its first arrival time, so the inbox age limit still counts from then.
-            inbox?.hold(text, arrivedAt: arrivedAt)
-            return
+            await accept(decoded)
         }
-        await accept(decoded)
     }
 
     /// True when the allowance verifies, or the note passes PAYMENT-V1 section 6, on their own.
@@ -312,7 +370,7 @@ public final class ReceiveModel {
 
     /// Waits until every inbox text handed over so far has been checked (for tests).
     func inboxDrained() async {
-        await inboxTail?.value
+        await inboxConsumer?.value
     }
 
     /// Scanned or received `L1|P|1|A|...` or `L1|P|1|N|...`. Nothing is dropped silently: an

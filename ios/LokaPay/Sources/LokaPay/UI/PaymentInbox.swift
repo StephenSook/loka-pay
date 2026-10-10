@@ -14,8 +14,9 @@ import Observation
 @Observable
 public final class PaymentInbox {
     /// Texts held while no Receive screen can take them (oldest first), so a payment that arrives
-    /// before the screen appears, or during another payment, is not lost. Bounded, so a radio peer
-    /// cannot grow it without limit.
+    /// before the screen appears, or during another payment, is not lost. The bound also covers
+    /// texts the attached screen has queued and not started checking yet: held and queued together
+    /// stay at or under it, so a radio peer cannot grow either without limit.
     public static let capacity = 16
     /// A held text older than this is dropped (and counted) instead of being handed over: a payer
     /// who sent it has likely left the till.
@@ -29,8 +30,9 @@ public final class PaymentInbox {
     private var waiting: [Held] = []
     /// Held texts, oldest first.
     public var held: [String] { waiting.map(\.text) }
-    /// Held texts dropped because the inbox was full (the oldest go first) or because they waited
-    /// longer than `maxAge`. The Receive screen shows this count when it is not zero.
+    /// Texts dropped because the inbox was full (held and queued texts together at `capacity`; the
+    /// oldest go first) or because they waited longer than `maxAge`. The Receive screen shows this
+    /// count when it is not zero.
     public private(set) var droppedWhileDetached = 0
 
     public let maxAge: TimeInterval
@@ -70,6 +72,21 @@ public final class PaymentInbox {
             waiting.removeFirst()
             droppedWhileDetached += 1
         }
+    }
+
+    /// When the oldest held text first arrived; nil when none is held.
+    var oldestHeldArrival: Date? { waiting.map(\.at).min() }
+
+    /// Drops and counts the held text that arrived first, to make room for a newer one.
+    func dropOldestHeld() {
+        guard let i = waiting.indices.min(by: { waiting[$0].at < waiting[$1].at }) else { return }
+        waiting.remove(at: i)
+        droppedWhileDetached += 1
+    }
+
+    /// Counts a text the attached screen dropped from its queue because the inbox was full.
+    func recordDrop() {
+        droppedWhileDetached += 1
     }
 
     /// Hands every held text that is not too old to the listener again, in arrival order.
