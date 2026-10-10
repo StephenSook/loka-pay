@@ -527,9 +527,178 @@ struct UnsettledRecoveryTests {
         let row = PreviewFixtures.unsettled(withAck: false)
         let text = ReceiveModel.unsettledRowText(row, canSettle: true)
         #expect(text.hasPrefix("Allowance #" + String(row.note.note.allowanceId) + ", received "))
-        #expect(text.contains("Settling signs its receipt first."))
+        #expect(text.contains("Settling checks it again as if received now and signs its receipt first."))
         for line in [summary, text, ReceiveModel.unsettledNextPaymentText] {
             #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"))
         }
+    }
+}
+
+/// Counts its signatures, so a test can prove nothing was signed.
+final class CountingSigner: PaymentSigner, @unchecked Sendable {
+    let inner = SoftwareP256Signer()
+    private let lock = NSLock()
+    private var calls = 0
+
+    var compressedPublicKey: Data { inner.compressedPublicKey }
+    var count: Int { lock.withLock { calls } }
+
+    func sign(_ message: Data) throws -> Data {
+        lock.withLock { calls += 1 }
+        return try inner.sign(message)
+    }
+}
+
+@Suite("a held note shows as Received only after the acceptance checks pass again (review 3 round 2, finding 1)")
+@MainActor
+struct RecoveryRecheckTests {
+    let payer = SoftwareP256Signer()
+    let merchant = CountingSigner()
+    /// Built once: CryptoKit's Ed25519 signatures are randomized, so a rebuilt wire differs.
+    let merchantWire: Data
+    let allowanceWire: Data
+    let nowSeconds = Int64(F.now.timeIntervalSince1970)
+
+    init() {
+        merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        allowanceWire = F.allowanceWire(payer: payer.keyHash)
+    }
+
+    /// A model with a settlement client; with no replies, any request fails the test.
+    func makeModel(ledger: OfflineLedger, replies: [StubReply] = []) -> (ReceiveModel, StubTransport) {
+        let stub = StubTransport(replies)
+        let model = ReceiveModel(merchantWire: merchantWire, signer: merchant, ledger: ledger,
+                                 settlementClient: APIFixtures.client(stub, retry: .never), deployment: F.deployment,
+                                 serverPublicKey: F.serverKey, internetState: { InternetState.none }, now: { F.now })
+        return (model, stub)
+    }
+
+    func certificate(_ wire: Data) throws -> AllowanceCertificate {
+        try AllowanceCertificate.verify(wire: wire, deployment: F.deployment, serverPublicKey: F.serverKey)
+    }
+
+    func settledReply(_ note: SignedNote) -> StubReply {
+        StubReply(status: 200, body: F.decisionBody(conf: F.confWire(noteId: note.noteId, status: 1), noteId: note.noteId,
+                                                    jsonStatus: "settled"))
+    }
+
+    /// Asserts the screen stayed ready, showed no payment, and signed and sent nothing.
+    func expectRefused(_ model: ReceiveModel, _ stub: StubTransport, signaturesBefore: Int,
+                       sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(model.phase == .ready, sourceLocation: sourceLocation)
+        #expect(model.payment == nil, sourceLocation: sourceLocation)
+        #expect(merchant.count == signaturesBefore, "a new ACK was signed", sourceLocation: sourceLocation)
+        #expect(stub.requests.isEmpty, "the note was uploaded", sourceLocation: sourceLocation)
+    }
+
+    @Test("a planted row whose certificate's earmarks exclude this merchant is refused, and nothing is signed")
+    func plantedExcludedRow() async throws {
+        let url = F.tempURL("ledger.json")
+        let ledger = OfflineLedger(url: url)
+        let excluding = F.allowanceWire(payer: payer.keyHash, earmarks: [SoftwareP256Signer().keyHash])
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        // A genuine payer note to this merchant and a genuine certificate, written into the ledger by
+        // something other than an acceptance: no merchant check ever ran on them, and no ACK exists.
+        try ledger.accept(note: note, certificate: try certificate(excluding), now: nowSeconds, allowanceWire: excluding)
+        let (model, stub) = makeModel(ledger: ledger)
+
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue?.kind == .payment(.notEarmarked))
+        expectRefused(model, stub, signaturesBefore: 0)
+
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.issue?.kind == .payment(.notEarmarked))
+        expectRefused(model, stub, signaturesBefore: 0)
+        #expect(try ledger.entries().first?.ackWireHex == nil)
+    }
+
+    @Test("a changed stored ACK makes the record damaged: refused by name, never signed again")
+    func tamperedAck() async throws {
+        let url = F.tempURL("ledger.json")
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let (first, _) = makeModel(ledger: OfflineLedger(url: url))
+        await first.accept(text: PaymentTransport.encode(.allowance, allowanceWire))
+        await first.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(first.payment?.ack != nil)
+        let signatures = merchant.count
+        #expect(signatures == 1)
+
+        // Flip one hex digit inside the stored ACK's signature.
+        var rows = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
+        var ackHex = Array(try #require(rows[0]["ackWireHex"] as? String))
+        let i = 2 * 56 + 10
+        ackHex[i] = ackHex[i] == "0" ? "1" : "0"
+        rows[0]["ackWireHex"] = String(ackHex)
+        try JSONSerialization.data(withJSONObject: rows).write(to: url)
+
+        let ledger = OfflineLedger(url: url)
+        let (model, stub) = makeModel(ledger: ledger)
+        let row = try #require(model.unsettledPayments.first)
+        #expect(!model.canSettle(row))
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue?.name == "damaged_record")
+        #expect(model.issue?.kind.isStep == false)
+        expectRefused(model, stub, signaturesBefore: signatures)
+
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.issue?.name == "damaged_record")
+        expectRefused(model, stub, signaturesBefore: signatures)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000, "it stays reserved")
+    }
+
+    @Test("a note with no stored ACK that has expired is refused at the phone's time now")
+    func expiredWithoutAck() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0, expiry: nowSeconds - 60)
+        try ledger.accept(note: note, certificate: try certificate(allowanceWire), now: nowSeconds - 600,
+                          allowanceWire: allowanceWire)
+        let (model, stub) = makeModel(ledger: ledger)
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue?.kind == .payment(.expired))
+        expectRefused(model, stub, signaturesBefore: 0)
+    }
+
+    @Test("with a stored ACK the checks run at its signed time: before expiry it settles, after expiry it is refused")
+    func checksAtTheAckTime() async throws {
+        let certificate = try certificate(allowanceWire)
+        let expiry = nowSeconds - 60
+        // Received 120 s before the note expired, by this merchant's own signature: still settleable now.
+        let early = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0, expiry: expiry)
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        try ledger.accept(note: early, certificate: certificate, now: expiry - 120, allowanceWire: allowanceWire)
+        let earlyAck = try Ack.sign(note: early, receivedAt: expiry - 120, with: merchant.inner)
+        try ledger.attachAck(noteId: early.noteId, ackWire: earlyAck.wire)
+        let (model, _) = makeModel(ledger: ledger, replies: [settledReply(early)])
+        await model.settleUnsettled(noteId: early.noteId)
+        #expect(model.settlement?.status == .paid)
+        #expect(model.payment?.ack == earlyAck)
+        #expect(merchant.count == 0)
+
+        // An ACK whose signed time is after the note's expiry: the note could not have been accepted then.
+        let late = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 1, expiry: expiry)
+        let lateLedger = OfflineLedger(url: F.tempURL("ledger.json"))
+        try lateLedger.accept(note: late, certificate: certificate, now: expiry - 120, allowanceWire: allowanceWire)
+        try lateLedger.attachAck(noteId: late.noteId,
+                                 ackWire: try Ack.sign(note: late, receivedAt: expiry + 30, with: merchant.inner).wire)
+        let (lateModel, stub) = makeModel(ledger: lateLedger)
+        await lateModel.settleUnsettled(noteId: late.noteId)
+        #expect(lateModel.issue?.kind == .payment(.expired))
+        expectRefused(lateModel, stub, signaturesBefore: 0)
+    }
+
+    @Test("no stored ACK: the full check runs now and the owner signs a fresh ACK for now, not the stored time")
+    func noAckRunsTheFullCheckNow() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        try ledger.accept(note: note, certificate: try certificate(allowanceWire), now: nowSeconds - 3600,
+                          allowanceWire: allowanceWire)
+        let (model, stub) = makeModel(ledger: ledger, replies: [settledReply(note)])
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(merchant.count == 1, "the owner signed once, as after a fresh scan")
+        let ack = try #require(model.payment?.ack)
+        #expect(ack.receivedAt == nowSeconds, "the ACK signs the time of this check, not the unsigned stored time")
+        #expect(model.settlement?.status == .paid)
+        #expect(stub.requests.count == 1)
+        #expect(try ledger.entries().first?.ackWireHex == ack.wire.hex)
     }
 }

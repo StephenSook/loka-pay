@@ -39,6 +39,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// This exact note is already in the merchant's offline ledger with nothing to settle here: the
     /// chain decided it (an unsettled one that can be read back comes on screen to settle instead).
     case alreadyReceived
+    /// A held note's saved record on this phone does not verify (its stored ACK or certificate was
+    /// changed), so it is not shown as received and nothing is signed for it.
+    case damagedRecord
     /// No settlement client is connected in this build.
     case serverNotConnected
     /// The settlement call failed; the note stays held on this phone.
@@ -75,6 +78,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .busy: return "busy"
         case .otherNoteWaiting: return "other_note_waiting"
         case .alreadyReceived: return "already_received"
+        case .damagedRecord: return "damaged_record"
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
         case .ledgerNotUpdated: return "ledger_not_updated"
@@ -110,6 +114,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 + "Scan that allowance, or tap Clear the waiting note, then send this note again."
         case .alreadyReceived:
             return "This exact note was already received on this phone and is recorded in its ledger, so nothing new was accepted."
+        case .damagedRecord:
+            return "This note's saved record on this phone does not verify (its stored receipt or certificate does not "
+                + "match), so it was not shown as received and nothing was signed. It stays reserved in the ledger."
         case .serverNotConnected: return "No settlement server is connected in this build. The note stays held on this phone."
         case .settlement(let e): return Self.settlementMessage(e)
         case .ledgerNotUpdated(let paid):

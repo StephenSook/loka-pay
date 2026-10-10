@@ -81,9 +81,9 @@ enum PreviewFixtures {
 
     /// A row of "Unsettled on this phone": vector note 0 with its vector ACK, or vector note 1
     /// with none (the vector ACK is for note 0).
-    static func unsettled(withAck: Bool = true, withCertificate: Bool = true) -> UnsettledPayment {
+    static func unsettled(withAck: Bool = true, withCertificate: Bool = true, damaged: Bool = false) -> UnsettledPayment {
         UnsettledPayment(note: withAck ? note0 : note1, receivedAt: receivedAt, receivedWithZeroBars: true,
-                         certificate: withCertificate ? allowance : nil, ack: withAck ? ack0 : nil)
+                         certificate: withCertificate ? allowance : nil, ack: withAck ? ack0 : nil, damaged: damaged)
     }
 
     static func settled(conf: Data) -> SettledPayment {

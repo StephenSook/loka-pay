@@ -34,16 +34,20 @@ public struct SettledPayment: Equatable, Sendable {
 public struct UnsettledPayment: Equatable, Sendable, Identifiable {
     /// From the ledger's stored wire: the original note bytes, which are the ones uploaded.
     public let note: SignedNote
-    /// The merchant phone's clock at receipt: the value its ACK signs.
+    /// The stored ACK's signed received-at time. Without an ACK it is the time the ledger recorded,
+    /// for display only: nothing signs it and no check relies on it.
     public let receivedAt: Date
     /// The phone's report at receipt that it had no internet path. Never signed.
     public let receivedWithZeroBars: Bool
     /// The allowance certificate it was accepted against, verified again with the pinned key; nil
     /// when the ledger entry was written before certificates were kept.
     public let certificate: AllowanceCertificate?
-    /// The ACK this phone signed for it, verified again; nil when it was never signed (settling then
-    /// signs it first).
+    /// The ACK this phone signed for it, verified again with this merchant's key and bound to this
+    /// note; nil when none was stored (settling then checks the note as if accepted now and signs one).
     public let ack: Ack?
+    /// A stored ACK or certificate is present but does not verify: the record is damaged, so the
+    /// note is never shown as received from it and nothing is signed for it.
+    public let damaged: Bool
 
     public var id: Data { note.noteId }
 }
@@ -487,11 +491,12 @@ public final class ReceiveModel {
             if let current = payment, current.note.noteId == note.noteId { return }
             guard phase == .ready else { return report(.busy) }
             // A note this phone already holds unsettled comes back on screen to settle, from the
-            // ledger's own copy, never reserved again. Without a certificate it takes the allowance
-            // path below, and `process` brings it back once the allowance arrives.
+            // ledger's own copy and only after `recheck`, never reserved again. Without a certificate
+            // it takes the allowance path below, and `process` brings it back once the allowance arrives.
             if let held = heldPayment(noteId: note.noteId),
-               let certificate = held.certificate ?? boundCertificate(for: held.note) {
-                return await restore(held, certificate: certificate)
+               held.damaged || held.certificate != nil || boundCertificate(for: held.note) != nil {
+                await bringBack(held)
+                return
             }
             guard let certificate = allowances[note.note.allowanceId] else {
                 // One note waits at a time. A different one is refused by name, never swapped in.
@@ -524,7 +529,8 @@ public final class ReceiveModel {
             if let entries = try? ledger.entries(), let entry = entries.first(where: { $0.noteIdHex == note.noteId.hex }) {
                 conflictAllowanceId = nil
                 if entry.state == .pending, let held = unsettledPayment(from: entry) {
-                    return await restore(held, certificate: held.certificate ?? certificate)
+                    await bringBack(held)
+                    return
                 }
                 return report(.alreadyReceived)
             }
@@ -732,26 +738,23 @@ public final class ReceiveModel {
 
     // MARK: - Unsettled on this phone
 
-    /// Settle on a row of "Unsettled on this phone". The note comes back on screen from the ledger's
-    /// copy, never reserved again, with its stored ACK (signed first only if it never was), then
-    /// uploads like Settle: Paid or Failed only from a verified CONF, which also releases it from
-    /// the ledger. Every other outcome leaves it reserved and listed.
+    /// Settle on a row of "Unsettled on this phone". The note is read fresh from the ledger and comes
+    /// back on screen only after `recheck`, never reserved again; then it uploads like Settle: Paid
+    /// or Failed only from a verified CONF, which also releases it from the ledger. Every other
+    /// outcome leaves it reserved and listed.
     public func settleUnsettled(noteId: Data) async {
-        guard phase == .ready, !isWorking,
-              let held = unsettledPayments.first(where: { $0.note.noteId == noteId }) else { return }
+        guard phase == .ready, !isWorking else { return }
         guard settlementClient != nil else { return report(.serverNotConnected) }
-        // A note stored before certificates were kept needs its allowance scanned on this screen.
-        guard let certificate = held.certificate ?? boundCertificate(for: held.note) else {
-            return report(.allowanceNeeded)
-        }
-        await restore(held, certificate: certificate)
+        // No longer pending (another screen decided it) or no longer readable: list again.
+        guard let held = heldPayment(noteId: noteId) else { return loadUnsettled() }
+        guard await bringBack(held) else { return }
         await settle()
     }
 
-    /// True when `held` can be settled now; false only for a note stored without its certificate
-    /// whose allowance has not been scanned on this screen.
+    /// False for a damaged record, and for a note stored without its certificate whose allowance has
+    /// not been scanned on this screen. True does not promise `recheck` passes.
     public func canSettle(_ held: UnsettledPayment) -> Bool {
-        held.certificate != nil || boundCertificate(for: held.note) != nil
+        !held.damaged && (held.certificate != nil || boundCertificate(for: held.note) != nil)
     }
 
     /// The line above the list.
@@ -774,10 +777,12 @@ public final class ReceiveModel {
         // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
         var line = "Allowance #" + String(held.note.note.allowanceId) + ", received "
             + held.receivedAt.formatted(date: .abbreviated, time: .shortened) + " (this phone's clock)."
-        if !canSettle {
+        if held.damaged {
+            line += " Its saved record on this phone does not verify, so it cannot be settled from here."
+        } else if !canSettle {
             line += " Scan its allowance code (code 1 of 2) to settle it."
         } else if held.ack == nil {
-            line += " Settling signs its receipt first."
+            line += " Settling checks it again as if received now and signs its receipt first."
         }
         return line
     }
@@ -799,25 +804,97 @@ public final class ReceiveModel {
         }
     }
 
-    /// A pending ledger entry as a settleable payment: the stored note must pass PAYMENT-V1 section 6
-    /// and be addressed to this merchant. The stored certificate and ACK are verified again (pinned
-    /// key, binding to the note) and dropped if they do not verify, never trusted as stored.
+    /// A pending ledger entry read back: the stored note must pass PAYMENT-V1 section 6 and be
+    /// addressed to this merchant. A stored certificate must verify with the pinned key and name the
+    /// note's allowance and payer; a stored ACK must verify with this merchant's key and bind this
+    /// note id. A part that is present but fails marks the record damaged; nothing stored is trusted
+    /// as stored. Nothing here is a merchant check: `recheck` runs those before the note is shown.
     private func unsettledPayment(from entry: OfflineLedger.Entry) -> UnsettledPayment? {
         guard let merchant, let serverPublicKey, let wire = Data(hex: entry.wireHex),
               let note = try? SignedNote.validate(wire: wire, deployment: deployment),
               note.note.payeeKeyHash == merchant.merchantKeyHash else { return nil }
+        var damaged = false
         var certificate: AllowanceCertificate?
-        if let hex = entry.allowanceWireHex, let wire = Data(hex: hex),
-           let verified = try? AllowanceCertificate.verify(wire: wire, deployment: deployment, serverPublicKey: serverPublicKey),
-           verified.allowanceId == note.note.allowanceId, verified.payerKeyHash == note.payerKeyHash {
-            certificate = verified
+        if let hex = entry.allowanceWireHex {
+            if let wire = Data(hex: hex),
+               let verified = try? AllowanceCertificate.verify(wire: wire, deployment: deployment,
+                                                               serverPublicKey: serverPublicKey),
+               verified.allowanceId == note.note.allowanceId, verified.payerKeyHash == note.payerKeyHash {
+                certificate = verified
+            } else {
+                damaged = true
+            }
         }
-        let ack = entry.ackWireHex.flatMap { Data(hex: $0) }.flatMap { try? Ack.verify(wire: $0, for: note) }
-        // The ACK's signed time when there is one; it is the acceptance time in every entry this app writes.
+        var ack: Ack?
+        if let hex = entry.ackWireHex {
+            if let wire = Data(hex: hex), let verified = try? Ack.verify(wire: wire, for: note),
+               P256Rules.keyHash(verified.merchantPublicKey) == merchant.merchantKeyHash {
+                ack = verified
+            } else {
+                damaged = true
+            }
+        }
         let seconds = ack?.receivedAt ?? entry.acceptedAt
         return UnsettledPayment(note: note, receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
                                 receivedWithZeroBars: entry.receivedWithZeroBars ?? false,
-                                certificate: certificate, ack: ack)
+                                certificate: certificate, ack: ack, damaged: damaged)
+    }
+
+    /// Checks a held note again, as an acceptance, before it may show as Received.
+    ///
+    /// The stored ACK is this merchant's own signature over the note id and the time the note was
+    /// received, so it authenticates the ledger record: with one, the merchant checks run at that
+    /// signed time and the ACK is reused (no new signature). With no ACK stored (an older entry, or
+    /// a signature that never finished), the note is treated as received now, like a fresh scan:
+    /// the checks run at the phone's time now and the owner signs a new ACK for that time. A
+    /// damaged record is refused and nothing is signed. Either way the note was reserved when it
+    /// was accepted, so it is not reserved again; the allowance's reserved total must still be
+    /// within the certificate's offline limit.
+    private func recheck(_ held: UnsettledPayment) -> Result<ReceivedPayment, MoneyIssueKind> {
+        guard let merchant else { return .failure(.noMerchantCertificate) }
+        guard !held.damaged else { return .failure(.damagedRecord) }
+        guard let certificate = held.certificate ?? boundCertificate(for: held.note) else {
+            return .failure(.allowanceNeeded)
+        }
+        let receivedAt: Int64
+        let zeroBars: Bool
+        if let ack = held.ack {
+            receivedAt = ack.receivedAt
+            zeroBars = held.receivedWithZeroBars
+        } else {
+            receivedAt = Int64(now().timeIntervalSince1970)
+            zeroBars = internetState?().map { $0 == InternetState.none } ?? false
+        }
+        do {
+            // PAYMENT-V1 section 6 merchant checks 2 to 5: allowance, payer, payee and earmarks, expiry.
+            try Acceptance.check(note: held.note, certificate: certificate, merchantKeyHash: merchant.merchantKeyHash,
+                                 now: receivedAt)
+            // Checks 6 and 7 held when it was reserved; the reserved total, this note included, must
+            // still be within the offline limit of the certificate it is shown against.
+            guard try ledger.unsettledTotal(allowanceId: certificate.allowanceId) <= certificate.offlineLimit else {
+                throw PaymentError.offlineLimit
+            }
+        } catch let error as PaymentError {
+            return .failure(.payment(error))
+        } catch {
+            return .failure(.payment(.storage))
+        }
+        return .success(ReceivedPayment(note: held.note, certificate: certificate,
+                                        receivedAt: Date(timeIntervalSince1970: TimeInterval(receivedAt)),
+                                        receivedWithZeroBars: zeroBars, ack: held.ack))
+    }
+
+    /// Brings a held note back on screen after `recheck`, or shows the named reason it cannot come back.
+    @discardableResult
+    private func bringBack(_ held: UnsettledPayment) async -> Bool {
+        switch recheck(held) {
+        case .failure(let kind):
+            report(kind)
+            return false
+        case .success(let received):
+            await restore(received)
+            return true
+        }
     }
 
     /// The pending ledger entry for `noteId`, read fresh, as a settleable payment.
@@ -833,22 +910,21 @@ public final class ReceiveModel {
         return certificate
     }
 
-    /// Puts a note this phone already holds back on screen to settle. It was reserved when it was
-    /// accepted, so the ledger is not touched here; a stored ACK is reused, so there is no new Face
-    /// ID prompt (the ACK is signed only if it never was).
-    private func restore(_ held: UnsettledPayment, certificate: AllowanceCertificate) async {
-        show(certificate)
+    /// Puts a rechecked held note back on screen to settle. It was reserved when it was accepted, so
+    /// the ledger is not touched here; a stored ACK is reused, so there is no new Face ID prompt.
+    /// Without one, the owner signs an ACK for the time `recheck` used, as after a fresh scan.
+    private func restore(_ received: ReceivedPayment) async {
+        show(received.certificate)
         conflictAllowanceId = nil
-        if waitingNote?.noteId == held.note.noteId { waitingNote = nil }
-        payment = ReceivedPayment(note: held.note, certificate: certificate, receivedAt: held.receivedAt,
-                                  receivedWithZeroBars: held.receivedWithZeroBars, ack: held.ack)
+        if waitingNote?.noteId == received.note.noteId { waitingNote = nil }
+        payment = received
         settlement = nil
         pendingSettlement = nil
         settlementOutcomeUnknown = false
         issue = nil
         phase = .received
-        refreshUnsettled(certificate.allowanceId)
-        if held.ack == nil { await signAck() }
+        refreshUnsettled(received.certificate.allowanceId)
+        if received.ack == nil { await signAck() }
     }
 
     // MARK: - Helpers

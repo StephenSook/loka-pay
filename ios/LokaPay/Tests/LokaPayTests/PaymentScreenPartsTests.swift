@@ -93,7 +93,7 @@ struct ThemeTests {
         let kinds: [MoneyIssueKind] = PaymentErrorList.all.map { .payment($0) } + [
             .amountUnreadable, .overCap, .notPaymentCode, .wrongKind(expected: [.note], got: .ack), .codeTooLong,
             .allowanceNeeded, .noAllowance, .noMerchantCertificate, .noSigner, .serverKeyMissing, .keyMismatch,
-            .signing("x"), .receiptMismatch, .busy, .alreadyReceived, .serverNotConnected,
+            .signing("x"), .receiptMismatch, .busy, .alreadyReceived, .damagedRecord, .serverNotConnected,
             .settlement(.refused(check: "bad_ack", message: "")), .settlement(.network(.timedOut)),
             .settlement(.http(status: 503, error: nil, message: nil)), .settlement(.chainUnavailable(message: "")),
             .settlement(.rateLimited(retryAfter: 3, message: "")), .settlement(.verification(.badSignature)),
