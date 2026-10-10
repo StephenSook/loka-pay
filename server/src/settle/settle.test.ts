@@ -211,8 +211,6 @@ test('an expired unsigned claim is taken over exactly once by concurrent uploads
   const f = await fixture();
   await f.store.claim({ noteId, note, ack: null, uploadedAt: 1800000001 });
   f.advance(30);
-  expect((await f.service.get(noteId)).statusCode).toBe(202);
-  expect(f.chain.prepare).not.toHaveBeenCalled();
   const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
     chain: f.chain, signConfirmation: f.sign, now: f.clock });
   await Promise.all([f.service.submit({ note, ack }), other.submit({ note }), f.service.submit({ note })]);
@@ -474,4 +472,33 @@ test('a saved replacement whose send failed resends identical bytes under the le
   expect(f.chain.send).toHaveBeenCalledTimes(4);
   f.chain.blockHeight.mockResolvedValue(201); f.advance(30); await other.get(noteId);
   expect(f.chain.send).toHaveBeenCalledTimes(4); expect(f.chain.prepare).toHaveBeenCalledTimes(2);
+});
+
+test('GET recovers a failed unsigned preparation only after lease expiry and preserves ACK and time', async () => {
+  const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('preparation failed'));
+  expect((await f.service.submit({ note, ack })).body.signature).toBeNull();
+  f.advance(29); expect((await f.service.get(noteId)).body.signature).toBeNull();
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1);
+  f.advance(1);
+  const result = await f.service.get(noteId); expect(result.statusCode).toBe(200);
+  expect(result.body).toMatchObject({ uploadedAt: 1800000001 });
+  expect((await f.store.get(noteId))?.ack).toBe(ack);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('concurrent GET recovery has one winner and rechecks stored payer identity', async () => {
+  const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('failed'));
+  await f.service.submit({ note }); f.advance(30);
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+    chain: f.chain, signConfirmation: f.sign, now: f.clock });
+  await Promise.all([f.service.get(noteId), other.get(noteId), f.service.get(noteId)]);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(f.chain.checkIdentity).toHaveBeenCalledTimes(2);
+});
+
+test('GET recovery cannot sign when stored payer binding cannot be verified', async () => {
+  const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('failed'));
+  await f.service.submit({ note }); f.advance(30); f.chain.checkIdentity.mockResolvedValue('payer_mismatch');
+  expect((await f.service.get(noteId)).body.signature).toBeNull();
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).not.toHaveBeenCalled();
 });

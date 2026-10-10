@@ -39,14 +39,20 @@ export class SettlementService {
       if (upload.ack) await this.options.store.attachAck(upload.noteId, upload.ack);
       return this.get(upload.noteId);
     }
-    let row = (await this.options.store.get(upload.noteId))!;
+    return this.execute((await this.options.store.get(upload.noteId))!, upload.validated, token, false);
+  }
+
+  private async execute(row: AttemptRow, validated: P.ValidatedNote, token: string, replayed: boolean): Promise<Outcome> {
     let stage: PendingStage = 'prepare';
     try {
-      const attempt = await this.options.chain.prepare(upload.validated);
+      const attempt = await this.options.chain.prepare(validated);
       // Commit before broadcast. This claim's winner alone sends the original transaction.
       stage = 'save_attempt';
       // A lease takeover fences out old workers. Never broadcast unless this token saved the attempt.
-      if (!await this.options.store.saveAttempt(upload.noteId, attempt, token)) return this.get(upload.noteId);
+      if (!await this.options.store.saveAttempt(row.noteId, attempt, token)) {
+        const current = (await this.options.store.get(row.noteId))!;
+        return current.attempt ? this.resolve(current, true) : this.pending(current, 'save_attempt');
+      }
       row = { ...row, attempt };
       stage = 'send';
       await this.options.store.broadcast(row.noteId, attempt, a => this.options.chain.send(a));
@@ -54,13 +60,24 @@ export class SettlementService {
       // A timeout cannot tell us whether it landed. Only the expiry/history gate can allow a rebuild.
       return this.pending(row, stage, true);
     }
-    return this.resolve(row, false);
+    return this.resolve(row, replayed);
   }
 
   async get(noteId: string): Promise<Outcome> {
     if (!/^[0-9a-f]{64}$/.test(noteId)) throw new HttpError(404, 'unknown_note');
     const row = await this.options.store.get(noteId);
     if (!row) throw new HttpError(404, 'unknown_note');
+    if (!row.attempt) {
+      let token: string | null;
+      try { token = await this.options.store.claim(row); }
+      catch { return this.pending(row, 'missing_attempt', true); }
+      if (!token) return this.pending((await this.options.store.get(noteId))!, 'missing_attempt');
+      try {
+        const upload = validateUpload({ note: row.note, ...(row.ack ? { ack: row.ack } : {}) }, this.options.deployment);
+        if (await this.options.chain.checkIdentity(upload.validated) !== null) return this.pending(row, 'prepare', true);
+        return await this.execute((await this.options.store.get(noteId))!, upload.validated, token, true);
+      } catch { return this.pending((await this.options.store.get(noteId))!, 'prepare', true); }
+    }
     return this.resolve(row, true);
   }
 
