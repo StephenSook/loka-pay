@@ -6,7 +6,7 @@ import {
   Connection, PublicKey, Transaction, TransactionInstruction,
   type Signer, type TransactionError,
 } from '@solana/web3.js';
-import type { ChainDecision, ChainGateway, PreparedAttempt } from './types.js';
+import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt } from './types.js';
 
 const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.json', import.meta.url), 'utf8'));
 const redeem = idl.instructions.find((ix: { name: string }) => ix.name === 'redeem_note');
@@ -52,17 +52,28 @@ export function decodeChainError(error: TransactionError | null): { error: strin
 export class SolanaGateway implements ChainGateway {
   constructor(private readonly connection: Connection, private readonly feePayer: Signer) {}
 
-  async bindPayer(note: P.ValidatedNote): Promise<boolean> {
+  async checkIdentity(note: P.ValidatedNote): Promise<IdentityRefusal | null> {
     const program = new PublicKey(note.note.programId);
     const id = Buffer.alloc(8); id.writeBigUInt64BE(note.note.allowanceId);
     const address = PublicKey.findProgramAddressSync([Buffer.from('allowance'), id], program)[0];
     const account = await this.connection.getAccountInfo(address, 'confirmed');
-    if (!account || !account.owner.equals(program)) return false;
+    if (!account || !account.owner.equals(program)) return 'unknown_allowance';
+    const coder = new BorshAccountsCoder(idl);
+    let allowance;
     try {
-      const allowance = new BorshAccountsCoder(idl).decode('Allowance', account.data);
-      return allowance.id.toString() === note.note.allowanceId.toString()
-        && P.equalBytes(Uint8Array.from(allowance.payer_key), note.payerPublicKey);
-    } catch { return false; }
+      allowance = coder.decode('Allowance', account.data);
+      if (allowance.id.toString() !== note.note.allowanceId.toString()) return 'unknown_allowance';
+    } catch { return 'unknown_allowance'; }
+    const merchantAddress = PublicKey.findProgramAddressSync([Buffer.from('merchant'), Buffer.from(note.note.payeeKeyHash)], program)[0];
+    const merchantAccount = await this.connection.getAccountInfo(merchantAddress, 'confirmed');
+    if (!merchantAccount || !merchantAccount.owner.equals(program)) return 'unknown_merchant';
+    try {
+      const merchant = coder.decode('Merchant', merchantAccount.data);
+      const hash = Uint8Array.from(merchant.key_hash);
+      if (!P.equalBytes(hash, note.note.payeeKeyHash)
+        || !P.equalBytes(P.keyHash(Uint8Array.from(merchant.public_key)), hash)) return 'unknown_merchant';
+    } catch { return 'unknown_merchant'; }
+    return P.equalBytes(Uint8Array.from(allowance.payer_key), note.payerPublicKey) ? null : 'payer_mismatch';
   }
 
   async prepare(note: P.ValidatedNote): Promise<PreparedAttempt> {

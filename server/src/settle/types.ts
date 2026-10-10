@@ -16,13 +16,14 @@ export interface ChainDecision {
   errorCode: number;
 }
 export interface ChainGateway {
-  bindPayer(note: ValidatedNote): Promise<boolean>;
+  checkIdentity(note: ValidatedNote): Promise<IdentityRefusal | null>;
   blockHeight(): Promise<number>;
   lookup(signature: string): Promise<{ found: boolean; decision: ChainDecision | null }>;
   prepare(note: ValidatedNote): Promise<PreparedAttempt>;
   send(attempt: PreparedAttempt): Promise<void>;
   observe(signature: string): Promise<ChainDecision | null>;
 }
+export type IdentityRefusal = 'unknown_allowance' | 'unknown_merchant' | 'payer_mismatch';
 export type ConfirmationSigner = (fields: ConfFields) => Uint8Array | Promise<Uint8Array>;
 export interface Decision extends ChainDecision {
   noteId: string;

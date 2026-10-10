@@ -10,7 +10,7 @@ import { registerSettlementRoutes } from './routes.js';
 
 // Jordan supplies pins, VPS signers, database, CORS and atomic fee-budget admission.
 // Do not enable request/body/IP logging. No secrets are read or generated in this module.
-// Payer-key binding is checked before a note id is claimed. Payment state stays on chain.
+// Allowance and merchant identity are checked before a note id is claimed. Spend state stays on chain.
 export async function installSettlement(options: {
   app: FastifyInstance;
   database: Pool;

@@ -12,6 +12,8 @@ const messages: Record<string, string> = {
   bad_pubkey: 'The public key must be a valid compressed P-256 point.',
   name_length: 'The merchant name must contain 1 to 64 UTF-8 bytes after normalization.',
   unknown_note: 'No settlement attempt exists for this note id.',
+  unknown_allowance: 'No valid allowance account exists for this allowance id.',
+  unknown_merchant: 'No valid merchant record exists for this payee key hash.',
   payer_mismatch: 'The supplied payer key does not match the allowance account.',
   budget_exhausted: 'The selected wallet pool has reached its daily budget.',
   chain_unavailable: 'Chain data is unavailable. Nothing was signed; you may retry.',

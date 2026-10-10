@@ -14,7 +14,7 @@ import { SettlementStore } from './store.js';
 import { SettlementService } from './service.js';
 import { registerSettlementRoutes } from './routes.js';
 import { testDatabase } from './test-database.js';
-import type { ChainGateway, PreparedAttempt, ChainDecision } from './types.js';
+import type { ChainGateway, PreparedAttempt, ChainDecision, IdentityRefusal } from './types.js';
 
 const vectors = JSON.parse(readFileSync(new URL('../../../protocol/vectors/payment-v1.json', import.meta.url), 'utf8'));
 const deployment: P.Deployment = {
@@ -28,7 +28,7 @@ const closers: (() => Promise<unknown>)[] = [];
 afterEach(async () => { while (closers.length) await closers.pop()!(); });
 
 class Chain implements ChainGateway {
-  bindPayer = vi.fn(async (_note: P.ValidatedNote) => true);
+  checkIdentity = vi.fn(async (_note: P.ValidatedNote): Promise<IdentityRefusal | null> => null);
   blockHeight = vi.fn(async () => 0);
   lookup = vi.fn(async (signature: string) => ({ found: this.decision !== null, decision: await this.observe(signature) }));
   prepare = vi.fn(async (validated: P.ValidatedNote): Promise<PreparedAttempt> => ({
@@ -108,7 +108,7 @@ test('bad signature cannot poison the same note id, including after settlement',
 test('a valid signature from an alternate payer cannot claim the real note id', async () => {
   const f = await fixture(); const secret = randomBytes(32);
   const real = P.validateNoteWire(P.base64urlDecode(note), deployment);
-  f.chain.bindPayer.mockImplementation(async upload => P.equalBytes(upload.payerPublicKey, real.payerPublicKey));
+  f.chain.checkIdentity.mockImplementation(async upload => P.equalBytes(upload.payerPublicKey, real.payerPublicKey) ? null : 'payer_mismatch');
   const forged = new Uint8Array(238); forged.set(real.noteBytes);
   forged.set(p256.sign(real.noteBytes, secret, { lowS: true }), 141); forged.set(p256.getPublicKey(secret), 205);
   expect((await f.post({ note: P.base64urlEncode(forged) })).json().error).toBe('payer_mismatch');
@@ -117,10 +117,21 @@ test('a valid signature from an alternate payer cannot claim the real note id', 
 });
 
 test('binding RPC failure signs nothing and leaves the note id unclaimed', async () => {
-  const f = await fixture(); f.chain.bindPayer.mockRejectedValue(new Error('RPC down'));
+  const f = await fixture(); f.chain.checkIdentity.mockRejectedValue(new Error('RPC down'));
   expect((await f.post()).statusCode).toBe(503); expect(await f.count()).toBe(0);
   expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.sign).not.toHaveBeenCalled();
 });
+
+test.each(['unknown_allowance', 'unknown_merchant', 'payer_mismatch'] as const)(
+  'identity refusal %s is unsigned, unsaved and cannot block a later valid upload', async refusal => {
+    const f = await fixture(); const claim = vi.spyOn(f.store, 'claim');
+    f.chain.checkIdentity.mockResolvedValueOnce(refusal);
+    const response = await f.post(); expect(response.statusCode).toBe(422); expect(response.json().error).toBe(refusal);
+    expect(await f.count()).toBe(0); expect(claim).not.toHaveBeenCalled(); expect(f.chain.prepare).not.toHaveBeenCalled();
+    expect(f.chain.send).not.toHaveBeenCalled(); expect(f.sign).not.toHaveBeenCalled();
+    expect((await f.post()).statusCode).toBe(200); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  },
+);
 
 test('bad ACK is unsigned and unsaved; a later valid ACK preserves the original CONF', async () => {
   const f = await fixture();
