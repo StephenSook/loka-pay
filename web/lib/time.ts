@@ -20,3 +20,12 @@ export function formatEt(ms: number): string {
 export function isoUtc(ms: number): string {
   return new Date(ms).toISOString();
 }
+
+/** How old something is, in words for a page: "45 s", "3 min", "2 h" (rounded down). */
+export function formatAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 120) return `${s} s`;
+  const min = Math.floor(s / 60);
+  if (min < 120) return `${min} min`;
+  return `${Math.floor(min / 60)} h`;
+}

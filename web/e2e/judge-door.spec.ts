@@ -95,7 +95,7 @@ test("/judge: seven numbered stops, the program facts or an honest failure, real
   await expect(steps).toHaveCount(7);
   for (const [n, title] of [
     [1, "Check a receipt in your browser"],
-    [2, "The program on devnet, read live"],
+    [2, "The program on devnet"],
     [3, "Watch the chain"],
     [4, "Proof"],
     [5, "Trust"],

@@ -84,8 +84,8 @@ export default async function JudgePage() {
           <SandboxChip />
         </div>
         <p className="text-xl leading-relaxed">
-          Seven stops, about three minutes, no login anywhere. Chain facts on these pages are read live from Solana
-          devnet, each with the slot and time it was read.
+          Seven stops, about three minutes, no login anywhere. Chain facts on these pages are read from Solana devnet,
+          each with the slot and time it was read, and marked when the value is a cached read.
         </p>
         <p className="text-muted">Sandbox only: test tokens on Solana devnet with no value. No real money moves.</p>
       </header>
@@ -101,10 +101,11 @@ export default async function JudgePage() {
           <GoLink href="/verify">Open /verify</GoLink>
         </Step>
 
-        <Step n={2} title="The program on devnet, read live" minutes="About 40 seconds">
+        <Step n={2} title="The program on devnet" minutes="About 40 seconds">
           <p className="leading-relaxed">
             The <code className="font-mono text-sm">loka_vault</code> program verifies the phone&apos;s signature on
-            chain and holds the sandbox tokens. These facts were read from devnet for this page.
+            chain and holds the sandbox tokens. These facts come from a devnet read; the line under them says when, and
+            whether it was made for this page or is a cached read.
           </p>
           <ProgramFactsPanel read={facts} />
         </Step>

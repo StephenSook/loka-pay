@@ -11,7 +11,7 @@
 // discriminator here; the fixed accounts are read together with getMultipleAccounts; a
 // batch never names the same method twice.
 
-import { cachedRead, type Read } from "./cached-read";
+import { cachedRead, type CachedReadOptions, type Read } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
 import { summarizeTransaction } from "./logs";
 import { PINS } from "./pins";
@@ -270,8 +270,9 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
   };
 }
 
-export function readProgramFacts(): Promise<Read<ProgramFacts>> {
-  return cachedRead(`program-facts:${PINS.programId}`, REVALIDATE_SECONDS, () => readProgramFactsUncached());
+/** `readFirst` for a page whose claims say Live: a read made for this page view (lib/cached-read.ts). */
+export function readProgramFacts(options: CachedReadOptions = {}): Promise<Read<ProgramFacts>> {
+  return cachedRead(`program-facts:${PINS.programId}`, REVALIDATE_SECONDS, () => readProgramFactsUncached(), options);
 }
 
 // ---------- proof of reserves (/proof, PLAN.md 3.24) ----------
@@ -383,6 +384,7 @@ export async function readReservesUncached(options: RpcOptions = serverReadOptio
   throw new Error("program accounts kept changing during the read; reload to try again");
 }
 
-export function readReserves(): Promise<Read<ReservesRead>> {
-  return cachedRead(`reserves:${PINS.programId}`, REVALIDATE_SECONDS, () => readReservesUncached());
+/** `readFirst` for a page whose claims say Live: a read made for this page view (lib/cached-read.ts). */
+export function readReserves(options: CachedReadOptions = {}): Promise<Read<ReservesRead>> {
+  return cachedRead(`reserves:${PINS.programId}`, REVALIDATE_SECONDS, () => readReservesUncached(), options);
 }

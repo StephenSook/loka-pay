@@ -2,8 +2,9 @@
 // the page hands in its reads, so the rules are unit-tested (unit/claims.test.ts).
 //
 // A claim is Live only with evidence a judge can open; a claim the chain decides is computed
-// from the latest devnet read, and when that read failed it says Not checked, never Live
-// from an older read. Everything else says Building and has no link.
+// from a devnet read made for this page view (the page passes `readFirst`), and when that
+// read failed, or only a cached read is available, it says Not checked, never Live from an
+// older read. Everything else says Building and has no link.
 
 import type { ProgramFacts, ReservesRead } from "./chain";
 import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
@@ -11,7 +12,7 @@ import { PINS } from "./pins";
 import type { Read } from "./read-state";
 import { REPO_URL } from "./site";
 import { explorerAddress, explorerTx } from "./solana";
-import { formatEt } from "./time";
+import { formatAge, formatEt } from "./time";
 
 /** LIVE (evidence linked), BUILDING (no link) or NOT CHECKED (the read behind it failed). */
 export type ClaimStatus = "live" | "building" | "unchecked";
@@ -35,13 +36,23 @@ export interface Claim {
 }
 
 /**
- * The data of a read that is current, or why there is none: the read failed, or only an
- * older read succeeded. A claim the chain decides is never decided from an older read.
+ * The data of a read made for this page view, or why there is none: the read failed, or only
+ * an older read (stale, or reused from the cache) is available. A claim is never decided
+ * from an older read: Live needs a read made for this page.
  */
-export function current<T>(read: Read<T>): { data: T; problem: null } | { data: null; problem: string } {
+export function current<T>(read: Read<T>, source = "devnet"): { data: T; problem: null } | { data: null; problem: string } {
   if (!read.ok) return { data: null, problem: read.reason };
   if (read.staleBecause) {
-    return { data: null, problem: `The latest devnet read, at ${formatEt(read.staleBecause.atMs)}, failed: ${read.staleBecause.reason}.` };
+    return {
+      data: null,
+      problem: `The ${source} read for this page, at ${formatEt(read.staleBecause.atMs)}, failed: ${read.staleBecause.reason}. The last good read, ${formatAge(read.askedAtMs - read.readAtMs)} old, does not make this claim Live.`,
+    };
+  }
+  if (!read.fresh) {
+    return {
+      data: null,
+      problem: `Only a cached ${source} read from ${formatEt(read.readAtMs)}, ${formatAge(read.askedAtMs - read.readAtMs)} old, is available; Live needs a read made for this page.`,
+    };
   }
   return { data: read.data, problem: null };
 }

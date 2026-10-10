@@ -41,7 +41,7 @@ export function ProgramFactsPanel({ read }: { read: Read<ProgramFacts> }) {
         </Fact>
       </dl>
       {read.ok ? (
-        <Facts facts={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} />
+        <Facts facts={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} fresh={read.fresh} askedAtMs={read.askedAtMs} />
       ) : (
         <ReadFailure what="the program from devnet" reason={read.reason} ms={read.atMs} />
       )}
@@ -49,9 +49,31 @@ export function ProgramFactsPanel({ read }: { read: Read<ProgramFacts> }) {
   );
 }
 
-function Facts({ facts, readAtMs, stale }: { facts: ProgramFacts; readAtMs: number; stale: FailedRead | null }) {
+function Facts({
+  facts,
+  readAtMs,
+  stale,
+  fresh,
+  askedAtMs,
+}: {
+  facts: ProgramFacts;
+  readAtMs: number;
+  stale: FailedRead | null;
+  fresh: boolean;
+  askedAtMs: number;
+}) {
   const { program, programData, vault, counts, init, config } = facts;
-  const stamp = <ReadStamp source="Solana devnet" slot={slotText(facts.slots)} ms={readAtMs} stale={stale} testId="program-read-stamp" />;
+  const stamp = (
+    <ReadStamp
+      source="Solana devnet"
+      slot={slotText(facts.slots)}
+      ms={readAtMs}
+      stale={stale}
+      fresh={fresh}
+      askedAtMs={askedAtMs}
+      testId="program-read-stamp"
+    />
+  );
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="program-facts">
       {/* Values from an older read are introduced as such, before any of them. */}

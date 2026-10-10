@@ -42,7 +42,7 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
           </p>
         </>
       ) : (
-        <Numbers b={read.data} readAtMs={read.readAtMs} />
+        <Numbers b={read.data} readAtMs={read.readAtMs} fresh={read.fresh} askedAtMs={read.askedAtMs} />
       )}
       <OutLink href={COMPARE_PAGE_URL} testId="compare-link">
         Every commit and file on GitHub ({KIT_TAG}...main)
@@ -51,7 +51,7 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
   );
 }
 
-function Numbers({ b, readAtMs }: { b: BuiltThisWeekend; readAtMs: number }) {
+function Numbers({ b, readAtMs, fresh, askedAtMs }: { b: BuiltThisWeekend; readAtMs: number; fresh: boolean; askedAtMs: number }) {
   const partial = b.listedCommits < b.totalCommits;
   return (
     <div className={`${CARD} flex flex-col gap-4`}>
@@ -81,7 +81,14 @@ function Numbers({ b, readAtMs }: { b: BuiltThisWeekend; readAtMs: number }) {
         {partial ? ` GitHub listed ${b.listedCommits} of the ${b.totalCommits} commits.` : ""}
       </p>
       {/* Numbers is shown only for the latest read (stale reads are handled above). */}
-      <ReadStamp source="GitHub's API (refreshed at most every 5 minutes)" ms={readAtMs} stale={null} testId="built-read-stamp" />
+      <ReadStamp
+        source="GitHub's API (refreshed at most every 5 minutes)"
+        ms={readAtMs}
+        stale={null}
+        fresh={fresh}
+        askedAtMs={askedAtMs}
+        testId="built-read-stamp"
+      />
     </div>
   );
 }

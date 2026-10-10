@@ -35,7 +35,12 @@ function EvidenceLink({ evidence, testId = "claim-evidence" }: { evidence: Evide
 
 export default async function ProofPage() {
   await connection();
-  const [facts, reserves, built] = await Promise.all([readProgramFacts(), readReserves(), readBuiltThisWeekend()]);
+  // Read for this page view (readFirst): a claim is never Live from a cached read.
+  const [facts, reserves, built] = await Promise.all([
+    readProgramFacts({ readFirst: true }),
+    readReserves({ readFirst: true }),
+    readBuiltThisWeekend(),
+  ]);
   const claims = claimsFrom(facts, reserves);
 
   return (
@@ -46,7 +51,8 @@ export default async function ProofPage() {
           <SandboxChip />
         </div>
         <p className="text-xl leading-relaxed">
-          A claim says Live only when it links to evidence you can open. Everything else says Building and has no link.
+          A claim says Live only when a read made for this page backs it, and then it links to evidence you can open. Not
+          checked means that read failed or could not be made; Building means it is not built yet. Neither has a link.
         </p>
       </header>
 
