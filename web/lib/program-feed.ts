@@ -29,6 +29,7 @@
 
 import { resultOf, summarizeLogs, summarizeTransaction, type TxResult, type TxSummary } from "./logs";
 import { WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
+import { isUnixSeconds } from "./time";
 
 export const HISTORY_LIMIT = 20;
 export const MAX_ROWS = 100;
@@ -133,7 +134,14 @@ interface SignatureInfo {
 
 function isSignatureInfo(value: unknown): value is SignatureInfo {
   const v = value as SignatureInfo | null;
-  return typeof v === "object" && v !== null && typeof v.signature === "string" && typeof v.slot === "number";
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof v.signature === "string" &&
+    typeof v.slot === "number" &&
+    // A block time is null (not known) or one a page can show; anything else is the wrong shape.
+    (v.blockTime === null || v.blockTime === undefined || isUnixSeconds(v.blockTime))
+  );
 }
 
 /** The latest signatures, as rows whose details are still to be read. */
@@ -145,7 +153,7 @@ export async function loadSignatures(programId: string): Promise<Row[]> {
   return result.map((s) => ({
     signature: s.signature,
     slot: s.slot,
-    blockTime: typeof s.blockTime === "number" ? s.blockTime : null,
+    blockTime: isUnixSeconds(s.blockTime) ? s.blockTime : null,
     // A missing err field is an unknown result, never a success.
     result: resultOf(s.err),
     actions: [],

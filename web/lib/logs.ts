@@ -10,6 +10,7 @@
 
 import { decodeBase58 } from "./base58";
 import { fromBase64 } from "./solana";
+import { isUnixSeconds } from "./time";
 import {
   BPF_UPGRADEABLE_LOADER,
   decodeEvent,
@@ -194,6 +195,8 @@ function isRawTransaction(value: unknown): value is RawTransaction {
     typeof t === "object" &&
     t !== null &&
     typeof t.slot === "number" &&
+    // A block time is null (not known) or one a page can show; anything else is the wrong shape.
+    (t.blockTime === null || t.blockTime === undefined || isUnixSeconds(t.blockTime)) &&
     Array.isArray(t.transaction?.message?.accountKeys) &&
     Array.isArray(t.transaction?.message?.instructions) &&
     Array.isArray(t.transaction?.signatures)

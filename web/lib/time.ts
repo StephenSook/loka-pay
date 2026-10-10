@@ -29,3 +29,15 @@ export function formatAge(ms: number): string {
   if (min < 120) return `${min} min`;
   return `${Math.floor(min / 60)} h`;
 }
+
+/** The latest instant a JavaScript Date can hold, in seconds (8.64e15 ms). */
+const MAX_DATE_SECONDS = 8_640_000_000_000;
+
+/**
+ * A Unix time in whole seconds that a page can show: a safe, non-negative integer a Date can
+ * hold. A node's block time is checked with this where it is decoded, so an impossible value
+ * becomes "unavailable" there instead of throwing while a page renders.
+ */
+export function isUnixSeconds(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_DATE_SECONDS;
+}

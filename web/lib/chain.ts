@@ -15,6 +15,7 @@
 import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
 import { summarizeTransaction, type TxResult } from "./logs";
+import { isUnixSeconds } from "./time";
 import { PINS } from "./pins";
 import { serverReadOptions } from "./server-rpc";
 import { RpcError, accountData, describeFailure, rpc, rpcBatch, unwrap, withContext, type RpcOptions, type RpcOutcome } from "./solana";
@@ -165,6 +166,22 @@ export function secp256r1FeaturePart(info: { owner: string; data: Uint8Array } |
   }
 }
 
+/**
+ * getTokenAccountBalance's value: a base-unit amount and the mint's decimals, checked here so
+ * a page never formats a value it cannot show. Decimals are a mint's u8 (0 to 255), a whole
+ * number; anything else is refused as an unexpected answer.
+ */
+export function parseTokenBalance(value: unknown): { amountUnits: string; decimals: number } {
+  const v = value as { amount?: unknown; decimals?: unknown } | null;
+  if (typeof v !== "object" || v === null || typeof v.amount !== "string" || !/^\d+$/.test(v.amount)) {
+    throw new RpcError("shape", "getTokenAccountBalance answered no amount");
+  }
+  if (typeof v.decimals !== "number" || !Number.isInteger(v.decimals) || v.decimals < 0 || v.decimals > 255) {
+    throw new RpcError("shape", "getTokenAccountBalance answered decimals that are not a whole number from 0 to 255");
+  }
+  return { amountUnits: v.amount, decimals: v.decimals };
+}
+
 export async function readProgramFactsUncached(options: RpcOptions = serverReadOptions()): Promise<ProgramFacts> {
   const slots: number[] = [];
   const [batch, listed] = await Promise.all([
@@ -224,15 +241,12 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
   const vaultPart = part(balance, (result) => {
     const { slot, value } = withContext(result);
     slots.push(slot);
-    const v = value as { amount?: unknown; decimals?: unknown };
-    if (typeof v?.amount !== "string" || !/^\d+$/.test(v.amount) || typeof v.decimals !== "number") {
-      throw new RpcError("shape", "getTokenAccountBalance answered no amount");
-    }
+    const { amountUnits, decimals } = parseTokenBalance(value);
     if (!vaultInfo) throw new RpcError("shape", "the vault token account does not exist");
     const token = decodeTokenAccount(vaultInfo.data);
     return {
-      amountUnits: v.amount,
-      decimals: v.decimals,
+      amountUnits,
+      decimals,
       mint: token.mint,
       owner: token.owner,
       mintMatchesPins: token.mint === PINS.mint,
@@ -276,7 +290,8 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
       let deployTimeMs: number | null = null;
       try {
         const blockTime = await rpc("getBlockTime", [deploySlot], options);
-        if (typeof blockTime === "number") deployTimeMs = blockTime * 1000;
+        // An impossible time is shown as "block time not read", never handed to the page.
+        if (isUnixSeconds(blockTime)) deployTimeMs = blockTime * 1000;
       } catch {
         // Shown as "block time not read".
       }
