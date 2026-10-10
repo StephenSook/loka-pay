@@ -19,8 +19,12 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const pins = JSON.parse(readFileSync(path.join(repoRoot, "config", "pins.json"), "utf8"));
 const recorded = JSON.parse(readFileSync(path.join(__dirname, "..", "unit", "fixtures", "devnet-transactions.json"), "utf8"));
 const INIT_TX = "2y4go46y25K6yMnSc4eVZCtbs3nKQzubb6Qr2Byp6piXGuCMWniaiL2aVBsrfMkAxUfJ9odVNcKKpqG3g4EraT4R";
-// The first real settled redeem_note on devnet (the README's "settled payment" link).
-const FIRST_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
+// The first payment signed on an iPhone, settled on devnet Sat Oct 10 4:23 PM ET (the README's
+// "settled iPhone payment" link). /proof links it as the evidence of a redeemed note.
+const IPHONE_SETTLED_TX = "2SpG1YURVivMHY3VNWwRsDfo7SZBjWZHXZHeqAovEh6RTNE4XVVNrH5BzU84yJk6nXyqprdHAxt22QSuktskez17";
+// The earlier redeem signed outside the iPhone app, Sat Oct 10 2:01 AM ET, which /proof no longer
+// offers as that evidence.
+const EARLIER_REDEEM_TX = "5tEKu2mtrdzu9hVaXCmkGyq9Y6mTobNVBmVx5ji59hku2bf28E3okmJatw7WbPRqfHHpLf9wyC1SbjwU3PWD5rAa";
 const DEVNET = /^https:\/\/api\.devnet\.solana\.com\/?$/;
 const DEVNET_WS = /^wss:\/\/api\.devnet\.solana\.com\/?$/;
 // Why a read on the failing server did not succeed: nothing listens there, or this server's
@@ -143,7 +147,7 @@ test("/judge: seven numbered stops, the program facts and each workflow's result
   await expect(page.getByTestId("program-read-stamp")).toHaveAttribute("data-stale", "false");
 
   await expect(page.getByTestId("testflight-status")).toHaveText(
-    "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves.",
+    "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight.",
   );
   await expect(page.getByTestId("repo-link")).toHaveAttribute("href", "https://github.com/StephenSook/loka-pay");
   // Every workflow in .github/workflows has its line, so a red one cannot be left out, and
@@ -158,8 +162,14 @@ test("/judge: seven numbered stops, the program facts and each workflow's result
     await expect(line.getByTestId("ci-result")).toHaveText(EXPECTED.ci[file] === "success" ? "Passed" : "Failed");
     await expect(line.getByRole("link")).toHaveAttribute("href", /^https:\/\/github\.com\/StephenSook\/loka-pay\/actions\/runs\/\d+\/job\/\d+$/);
   }
-  // The stand-in's server job failed, so the note about it is shown.
-  await expect(page.getByTestId("server-workflow-note")).toContainText("does not pass until that code is merged");
+  // The stand-in's server job failed, so the note about it is shown. The server code is merged,
+  // so the note points at the deployed server's own commit instead of saying it is unmerged.
+  const serverNote = page.getByTestId("server-workflow-note");
+  await expect(serverNote).toContainText(
+    "The server workflow tests the settlement server code in server/ on main's latest commit. The server deployed at api.zerobars.us reports the commit it runs on its health check:",
+  );
+  await expect(serverNote).not.toContainText("merged");
+  await expect(serverNote.getByTestId("server-health-link")).toHaveAttribute("href", "https://api.zerobars.us/api/health");
   // No image from GitHub: a hotlinked badge would send the visitor's GitHub cookies with it.
   await expect(page.locator("img")).toHaveCount(0);
   await page.waitForLoadState("networkidle");
@@ -274,7 +284,7 @@ async function readClaims(page: Page): Promise<Record<string, string | null>> {
   await expect(page.getByTestId("claim-testflight")).toHaveAttribute("data-status", "building");
   // The same dated status as /judge step 6.
   await expect(page.getByTestId("claim-testflight")).toContainText(
-    "TestFlight build 1 submitted to Apple beta review Sat Oct 10 12:05 AM ET; the public link appears here once Apple approves. Status as of 2026-10-10.",
+    "TestFlight build 1 has been in Apple beta review since Sat Oct 10 12:05 AM ET, and the public link appears here once Apple approves. The team runs build 5, with the scanner fix, through internal TestFlight. Status as of 2026-10-10.",
   );
   return statusOf;
 }
@@ -289,10 +299,12 @@ test("/proof: every read-backed claim Live from its current read, exact reserves
   const statusOf = await readClaims(page);
   // The success path, every run: each read-backed claim is Live from the stand-in's reads.
   for (const id of Object.keys(READ_BACKED)) expect(statusOf[id], id).toBe("live");
-  // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
-  // /live's newest rows; /live is the second link.
+  // A redeemed note is evidenced by the first iPhone payment itself, which cannot scroll off
+  // /live's newest rows; /live is the second link. The 2:01 AM test-key redeem is not used.
   const redeemed = page.getByTestId("claim-redeemed");
-  await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${FIRST_REDEEM_TX}?cluster=devnet`);
+  await expect(redeemed.getByTestId("claim-evidence")).toHaveAttribute("href", `https://explorer.solana.com/tx/${IPHONE_SETTLED_TX}?cluster=devnet`);
+  await expect(redeemed.getByTestId("claim-evidence")).toContainText("The first iPhone payment, settled Sat Oct 10 4:23 PM ET");
+  await expect(redeemed.locator(`a[href*="${EARLIER_REDEEM_TX}"]`)).toHaveCount(0);
   await expect(redeemed.getByTestId("claim-evidence-more")).toHaveAttribute("href", "/live");
   await expect(page.getByTestId("claim-precompile").getByTestId("claim-evidence")).toContainText("active since slot 380592000");
   await expect(page.getByTestId("claim-program-ci").getByTestId("claim-evidence")).toContainText(`(${EXPECTED.mainCommit})`);

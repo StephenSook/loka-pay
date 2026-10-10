@@ -10,7 +10,7 @@
 
 import type { ProgramFacts, ReservesRead } from "./chain";
 import { PROGRAM_JOB, type MainChecks } from "./github";
-import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
+import { INIT_TX_SIGNATURE, IPHONE_SETTLED_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
 import { PINS } from "./pins";
 import type { Read } from "./read-state";
 import { SETTLEMENT_HEALTH_URL, type ServerHealth } from "./settlement";
@@ -219,9 +219,12 @@ export function claimsFrom(
             id: "redeemed",
             text: "A payment note has been redeemed on devnet.",
             status: "live",
-            // The first settled redeem itself (lib/facts.ts), which cannot scroll away; /live
-            // lists only the newest transactions.
-            evidence: { href: explorerTx(FIRST_REDEEM_TX_SIGNATURE), label: "The first settled redeem on Solana Explorer" },
+            // The first payment signed on an iPhone, settled at 4:23 PM ET (lib/facts.ts), which
+            // cannot scroll away; /live lists only the newest transactions.
+            evidence: {
+              href: explorerTx(IPHONE_SETTLED_TX_SIGNATURE),
+              label: "The first iPhone payment, settled Sat Oct 10 4:23 PM ET, on Solana Explorer",
+            },
             more: { href: "/live", label: "Newer transactions on /live", internal: true },
           }
         : { id: "redeemed", text: "A payment note has been redeemed on devnet.", status: "building", note: "No allowance on chain has a redeemed amount yet." };
