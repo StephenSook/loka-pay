@@ -10,6 +10,141 @@ enum LokaPayBridge {
     static var secureEnclaveAvailable: Bool { SecureEnclaveP256Signer.isAvailable }
 }
 
+// MARK: - Key trust after a reinstall
+
+/// Decides whether this install may sign with a payment key. The Keychain item holding the enclave
+/// key's handle survives deleting the app, but the serial counters and the ledger in Application
+/// Support do not. A surviving key would get its same open allowance back (registration is
+/// idempotent by key) while the serial counter restarted at 0, so it could sign a serial it had
+/// already used. A marker file, written in the payment folder when a new key is created, ties the
+/// key to that folder; a key without a matching marker is never used. Foundation only, so the
+/// cases can be checked without a phone.
+enum LokaPayKeyTrust {
+    /// The payment folder's record of which key its files belong to.
+    struct Marker: Codable, Equatable {
+        /// The Keychain account holding the key's handle.
+        let account: String
+        /// sha256 of the key's compressed public key, lowercase hex.
+        let keyHash: String
+    }
+
+    enum MarkerRead: Equatable {
+        case absent
+        case unreadable
+        case present(Marker)
+    }
+
+    /// The accounts of the payment key items in the Keychain, or the OSStatus of a failed listing.
+    enum KeychainRead: Equatable {
+        case accounts([String])
+        case unreadable(Int32)
+    }
+
+    enum LockReason: Equatable {
+        /// A payment key is in the Keychain but this install has no marker for it.
+        case keySurvivedReinstall
+        /// The marker names a key that is not in the Keychain.
+        case keyMissing
+        /// The marker's key loaded, but its hash is not the marker's.
+        case keyMismatch
+        /// The marker file exists but does not decode.
+        case markerUnreadable
+    }
+
+    enum Decision: Equatable {
+        /// No marker and no payment key in the Keychain: first use on this install.
+        case createFresh
+        /// Load the marker's key, then require `confirms` before trusting it.
+        case load(Marker)
+        case locked(LockReason)
+        /// The Keychain could not be listed, so a surviving key cannot be ruled out.
+        case cannotCheck(Int32)
+    }
+
+    static func decide(marker: MarkerRead, keychain: KeychainRead) -> Decision {
+        let accounts: [String]
+        switch keychain {
+        case .unreadable(let status): return .cannotCheck(status)
+        case .accounts(let list): accounts = list
+        }
+        switch marker {
+        case .unreadable: return .locked(.markerUnreadable)
+        case .absent: return accounts.isEmpty ? .createFresh : .locked(.keySurvivedReinstall)
+        case .present(let marker): return accounts.contains(marker.account) ? .load(marker) : .locked(.keyMissing)
+        }
+    }
+
+    /// The loaded key is trusted only when its hash is the one the marker recorded.
+    static func confirms(loadedKeyHash: String, marker: Marker) -> Bool {
+        loadedKeyHash.lowercased() == marker.keyHash.lowercased()
+    }
+
+    /// A new Keychain account for each new key, so a key that failed to delete can never be
+    /// loaded again by name.
+    static func freshAccount(_ id: UUID = UUID()) -> String {
+        "payment-key-" + id.uuidString.lowercased()
+    }
+
+    static func readMarker(_ data: Data?) -> MarkerRead {
+        guard let data else { return .absent }
+        guard let marker = try? JSONDecoder().decode(Marker.self, from: data),
+              !marker.account.isEmpty, marker.keyHash.count == 64 else { return .unreadable }
+        return .present(marker)
+    }
+}
+
+// MARK: - Payment key items in the Keychain
+
+/// Lists and deletes the package's enclave key handles. `SecureEnclaveP256Signer` stores each one
+/// as a generic password under this service (ios/LokaPay/Sources/LokaPay/Signing.swift) and
+/// exposes only `loadOrCreate`, so the app needs its own view to find a key left by an earlier
+/// install and to delete it.
+enum LokaPayKeyItems {
+    /// Must equal `Keychain.service` in Signing.swift. Creating a key checks it: the new account
+    /// must then appear in `list()`, so a wrong value fails closed instead of hiding a key.
+    static let service = "us.zerobars.lokapay.keys"
+
+    static func list() -> LokaPayKeyTrust.KeychainRead {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        if status == errSecItemNotFound { return .accounts([]) }
+        guard status == errSecSuccess, let items = out as? [[String: Any]] else { return .unreadable(status) }
+        return .accounts(items.compactMap { $0[kSecAttrAccount as String] as? String })
+    }
+
+    /// Deletes every payment key item; success or "not found" both leave none.
+    static func deleteAll() -> OSStatus {
+        let status = SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service] as CFDictionary)
+        return status == errSecItemNotFound ? errSecSuccess : status
+    }
+
+    @discardableResult
+    static func delete(account: String) -> OSStatus {
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                       kSecAttrAccount as String: account] as CFDictionary)
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Simulator check only (launch argument `--lokapay-plant-key-item`): adds a payment key item
+    /// with no payment folder behind it, the state a reinstall leaves, so the lock can be seen
+    /// without a real enclave key. Not compiled into device or Release builds.
+    static func plantForSimulatorCheck() {
+        guard ProcessInfo.processInfo.arguments.contains("--lokapay-plant-key-item") else { return }
+        SecItemAdd([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                    kSecAttrAccount as String: "payment-key-planted-by-simulator-check",
+                    kSecValueData as String: Data("planted".utf8),
+                    kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly] as CFDictionary, nil)
+    }
+    #endif
+}
+
 // MARK: - App-level payment store (plan rows 1.10 and 3.71)
 
 /// Everything the payment screens need, for the app's lifetime: the pins from the bundled
@@ -21,7 +156,9 @@ enum LokaPayBridge {
 /// top-level `loka-` files, so it leaves this folder alone on purpose: forgetting the serial
 /// counters or the ledger would reuse serials or forget value a merchant is carrying. The folder
 /// is excluded from backups because everything in it is bound to this phone's enclave key, which
-/// never leaves the phone.
+/// never leaves the phone. Deleting the app does remove the folder while the key's Keychain item
+/// stays, so the key is used only when the folder's marker names it (`LokaPayKeyTrust`), and the
+/// serial and ledger stores are built only after that check passes.
 @MainActor
 final class LokaPayStore: ObservableObject {
     /// The one store for the app's lifetime (it outlives LOKA's view resets).
@@ -43,7 +180,17 @@ final class LokaPayStore: ObservableObject {
         /// fall back to a software key. (An Apple silicon Simulator can report true and then fail
         /// at the Keychain instead, which is `failed`.)
         case noSecureEnclave
+        /// A key exists that this install cannot trust (see `LokaPayKeyTrust`). It is never used;
+        /// `startFresh()` replaces it.
+        case locked(LokaPayKeyTrust.LockReason)
         /// The enclave or the Keychain refused; the text is the system's error.
+        case failed(String)
+    }
+
+    /// What opening or replacing the key came to, off the main actor.
+    enum KeyOutcome {
+        case ready(SecureEnclaveP256Signer)
+        case locked(LokaPayKeyTrust.LockReason)
         case failed(String)
     }
 
@@ -64,13 +211,15 @@ final class LokaPayStore: ObservableObject {
         let detail: String
     }
 
-    static let keyAccount = "payment-key-v1"
-    static let allowanceFile = "allowance.wire"
-    static let merchantFile = "merchant.wire"
+    nonisolated static let allowanceFile = "allowance.wire"
+    nonisolated static let merchantFile = "merchant.wire"
+    nonisolated static let markerFile = "key-marker.json"
 
     let pins: Pins
-    let serials: SerialReservations
-    let ledger: OfflineLedger
+    /// Built only once the key is trusted, so nothing can reserve a serial for a key whose serial
+    /// record this install does not hold.
+    private(set) var serials: SerialReservations?
+    private(set) var ledger: OfflineLedger?
     let connectivity = ConnectivityMonitor()
     /// The one Bluetooth inbox for the app's lifetime. Nothing feeds it yet (the mesh glue is a
     /// later task), so the screens are not given it: Receive mentions Bluetooth only when it is.
@@ -109,8 +258,6 @@ final class LokaPayStore: ObservableObject {
         pins = Self.loadPins(bundle: bundle)
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("LokaPay", isDirectory: true)
-        serials = SerialReservations(url: directory.appendingPathComponent("serials.json"))
-        ledger = OfflineLedger(url: directory.appendingPathComponent("ledger.json"))
         if case .ready(let deployment, let serverKey?) = pins {
             settlementClient = SettlementClient(deployment: deployment, serverPublicKey: serverKey,
                                                 baseURL: SettlementClient.defaultBaseURL)
@@ -121,6 +268,9 @@ final class LokaPayStore: ObservableObject {
         allowanceWire = readWire(Self.allowanceFile)
         merchantWire = readWire(Self.merchantFile)
         recheck()
+        #if DEBUG && targetEnvironment(simulator)
+        LokaPayKeyItems.plantForSimulatorCheck()
+        #endif
     }
 
     /// The server's Ed25519 key from config/pins.json; nil while the file holds null.
@@ -135,7 +285,9 @@ final class LokaPayStore: ObservableObject {
     /// What `LokaPayHomeView` needs, or nil until setup is complete. Bluetooth stays off in this
     /// build (meshSend and meshInbox nil): camera codes are the transport.
     var homeDependencies: LokaPayDependencies? {
-        guard isReady, case .ready(let deployment, let serverKey?) = pins, let signer else { return nil }
+        guard isReady, case .ready(let deployment, let serverKey?) = pins, let signer, let serials, let ledger else {
+            return nil
+        }
         return LokaPayDependencies(deployment: deployment, serverPublicKey: serverKey, signer: signer,
                                    allowanceWire: allowanceWire, merchantWire: merchantWire,
                                    serials: serials, ledger: ledger, settlementClient: settlementClient,
@@ -144,35 +296,153 @@ final class LokaPayStore: ObservableObject {
 
     // MARK: Key
 
-    /// Loads this phone's enclave key, creating it on first use. Loading or creating the key shows
-    /// no prompt; each signature asks for Face ID or the passcode.
+    /// Opens this phone's enclave key: the one the payment folder's marker names, or a new one
+    /// when neither a marker nor any payment key exists. Any other combination locks (see
+    /// `LokaPayKeyTrust`). Loading or creating the key shows no prompt; each signature asks for
+    /// Face ID or the passcode.
     func prepareKey() {
         switch keyState {
         case .notLoaded, .failed: break
-        case .loading, .ready, .noSecureEnclave: return
+        case .loading, .ready, .noSecureEnclave, .locked: return
         }
         guard SecureEnclaveP256Signer.isAvailable else {
             keyState = .noSecureEnclave
             return
         }
         keyState = .loading
-        let account = Self.keyAccount
+        let directory = directory
         Task {
-            do {
-                let loaded = try await Task.detached(priority: .userInitiated) {
-                    try SecureEnclaveP256Signer.loadOrCreate(account: account)
-                }.value
-                signer = loaded
-                keyState = .ready
-            } catch PaymentError.storage {
-                signer = nil
-                keyState = .failed("the Keychain refused to read or store the key (storage)")
-            } catch {
-                signer = nil
-                keyState = .failed(Self.systemText(error))
-            }
-            recheck()
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Self.openKey(directory: directory)
+            }.value
+            apply(outcome)
         }
+    }
+
+    /// The only way out of a lock: deletes every payment key item, clears the stored certificates
+    /// and the marker, then creates a new enclave key and its marker. Setup then registers the new
+    /// key, whose new key hash gets a new allowance and a new merchant record. The serial and
+    /// ledger files stay: they hold past records, and a new allowance id never shares a counter.
+    func startFresh() {
+        guard case .locked = keyState else { return }
+        keyState = .loading
+        let directory = directory
+        Task {
+            let (outcome, note) = await Task.detached(priority: .userInitiated) {
+                Self.replaceKey(directory: directory)
+            }.value
+            storageProblem = note
+            allowanceWire = readWire(Self.allowanceFile)
+            merchantWire = readWire(Self.merchantFile)
+            setupIssue = nil
+            wiresVersion += 1
+            apply(outcome)
+        }
+    }
+
+    private func apply(_ outcome: KeyOutcome) {
+        switch outcome {
+        case .ready(let loaded):
+            signer = loaded
+            serials = SerialReservations(url: directory.appendingPathComponent("serials.json"))
+            ledger = OfflineLedger(url: directory.appendingPathComponent("ledger.json"))
+            keyState = .ready
+        case .locked(let reason):
+            signer = nil
+            serials = nil
+            ledger = nil
+            keyState = .locked(reason)
+        case .failed(let text):
+            signer = nil
+            serials = nil
+            ledger = nil
+            keyState = .failed(text)
+        }
+        recheck()
+    }
+
+    nonisolated private static func openKey(directory: URL) -> KeyOutcome {
+        let markerURL = directory.appendingPathComponent(markerFile)
+        let marker: LokaPayKeyTrust.MarkerRead
+        if FileManager.default.fileExists(atPath: markerURL.path) {
+            // A marker that exists but cannot be read is never treated as absent.
+            marker = (try? Data(contentsOf: markerURL)).map { LokaPayKeyTrust.readMarker($0) } ?? .unreadable
+        } else {
+            marker = .absent
+        }
+        switch LokaPayKeyTrust.decide(marker: marker, keychain: LokaPayKeyItems.list()) {
+        case .cannotCheck(let status):
+            return .failed("the Keychain could not be listed (OSStatus \(status)), so this phone cannot rule out "
+                           + "a payment key left by an earlier install")
+        case .locked(let reason):
+            return .locked(reason)
+        case .createFresh:
+            return createKey(directory: directory)
+        case .load(let marker):
+            do {
+                let loaded = try SecureEnclaveP256Signer.loadOrCreate(account: marker.account)
+                return LokaPayKeyTrust.confirms(loadedKeyHash: loaded.keyHash.hex, marker: marker)
+                    ? .ready(loaded) : .locked(.keyMismatch)
+            } catch {
+                return .failed(keyErrorText(error))
+            }
+        }
+    }
+
+    /// A new key under a new account, then the marker that ties it to this folder. The key is
+    /// returned only after the marker is on disk.
+    nonisolated private static func createKey(directory: URL) -> KeyOutcome {
+        let account = LokaPayKeyTrust.freshAccount()
+        let created: SecureEnclaveP256Signer
+        do {
+            created = try SecureEnclaveP256Signer.loadOrCreate(account: account)
+        } catch {
+            return .failed(keyErrorText(error))
+        }
+        // Checks `LokaPayKeyItems.service`: if this build cannot list the key it just made, it
+        // could not see a key left by an earlier install either.
+        guard case .accounts(let accounts) = LokaPayKeyItems.list(), accounts.contains(account) else {
+            LokaPayKeyItems.delete(account: account)
+            return .failed("this build cannot find the payment key it just created in the Keychain, so it cannot "
+                           + "detect a key left by an earlier install")
+        }
+        let marker = LokaPayKeyTrust.Marker(account: account, keyHash: created.keyHash.hex)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(marker).write(to: directory.appendingPathComponent(markerFile),
+                                                   options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            LokaPayKeyItems.delete(account: account)
+            return .failed("the payment folder could not record the new key (\(systemText(error))), so it is not used")
+        }
+        return .ready(created)
+    }
+
+    nonisolated private static func replaceKey(directory: URL) -> (KeyOutcome, String?) {
+        let status = LokaPayKeyItems.deleteAll()
+        guard status == errSecSuccess else {
+            return (.failed("the old payment key could not be deleted (OSStatus \(status)), so payments stay locked"), nil)
+        }
+        // The old marker names a deleted key. If it cannot be removed, the next launch locks
+        // (key missing) rather than trusting anything; a new key's marker replaces it anyway.
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(markerFile))
+        var note: String?
+        for file in [allowanceFile, merchantFile] {
+            let url = directory.appendingPathComponent(file)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                note = "This phone could not clear \(file) (\(systemText(error))). A stored certificate for the old "
+                    + "key does not match the new key, so setup registers the new key anyway."
+            }
+        }
+        return (createKey(directory: directory), note)
+    }
+
+    nonisolated private static func keyErrorText(_ error: Error) -> String {
+        if case PaymentError.storage = error { return "the Keychain refused to read or store the key (storage)" }
+        return systemText(error)
     }
 
     // MARK: Certificates
@@ -277,9 +547,12 @@ final class LokaPayStore: ObservableObject {
     }
 
     /// The system's own words for an error, for the screens and logs.
-    static func systemText(_ error: Error) -> String {
+    nonisolated static func systemText(_ error: Error) -> String {
         if let error = error as? PaymentError { return error.rawValue }
-        return (error as NSError).localizedDescription
+        // The screens add their own full stop.
+        var text = (error as NSError).localizedDescription
+        while text.hasSuffix(".") { text.removeLast() }
+        return text
     }
 }
 
@@ -472,6 +745,18 @@ struct LokaPaySetupView: View {
                     Button("Load the payment key again") { store.prepareKey() }
                         .buttonStyle(LokaPaySetupButtonStyle(primary: false))
                 }
+                if case .locked = store.keyState {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button("Start fresh with a new key") { store.startFresh() }
+                            .buttonStyle(LokaPaySetupButtonStyle(primary: true))
+                        Text("This deletes the old key, makes a new one in the Secure Enclave and clears the stored "
+                             + "certificates. Setup then registers the new key, which gets a new allowance and a new "
+                             + "merchant record. Serial and ledger records already on this phone are kept.")
+                            .font(LokaPay.LokaStyle.caption)
+                            .foregroundStyle(LokaColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 if let problem = store.storageProblem {
                     notice(title: "Payment folder problem", detail: problem, warning: true)
                 }
@@ -517,10 +802,30 @@ struct LokaPaySetupView: View {
                 id: "key", title: "The payment key could not be loaded",
                 detail: "The system said: \(text). Pay stays locked; no software key is used instead. On a phone, "
                     + "unlock it and load the key again. A build without code signing may have no Keychain access at all."))
+        case .locked(let reason):
+            list.append(Blocker(id: "locked", title: "Payments are locked on this phone", detail: Self.lockText(reason)))
         case .notLoaded, .loading, .ready:
             break
         }
         return list
+    }
+
+    static func lockText(_ reason: LokaPayKeyTrust.LockReason) -> String {
+        switch reason {
+        case .keySurvivedReinstall:
+            return "This phone's payment key survived a reinstall, but its record of used serials did not. To stay "
+                + "safe it will not sign again with that key. Payments this phone had received but not settled were "
+                + "in the same record, so it no longer holds them."
+        case .keyMissing:
+            return "This phone's payment records belong to a key that is no longer in the Keychain. To stay safe it "
+                + "will not sign with another key against those records."
+        case .keyMismatch:
+            return "The payment key in the Keychain is not the key this phone's payment records belong to. To stay "
+                + "safe it will not sign with it."
+        case .markerUnreadable:
+            return "This phone could not read the record that ties its payment key to its serial counters. To stay "
+                + "safe it will not sign until it starts fresh with a new key."
+        }
     }
 
     private var certificates: some View {
