@@ -26,6 +26,7 @@ import {
   MINT_DECIMALS,
   PROGRAM_DATA_HEADER_LEN,
   SECP256R1_FEATURE,
+  TOKEN_PROGRAM,
   computeReserves,
   decodeAllowance,
   decodeFeature,
@@ -377,7 +378,19 @@ export async function readReservesUncached(options: RpcOptions = serverReadOptio
     const infos = value.map(accountInfo);
     const vaultInfo = infos[0];
     if (!vaultInfo) throw new RpcError("shape", "the vault token account does not exist");
+    // No verdict for an asset that is not the pinned sandbox USDC held by the program's vault:
+    // an account the SPL Token program does not own, another mint, or another authority is
+    // refused before anything is counted.
+    if (vaultInfo.owner !== TOKEN_PROGRAM) {
+      throw new RpcError("shape", `the vault token account is owned by ${vaultInfo.owner}, not the SPL Token program; no reserves verdict`);
+    }
     const token = decodeTokenAccount(vaultInfo.data);
+    if (token.mint !== PINS.mint) {
+      throw new RpcError("shape", `the vault token account holds mint ${token.mint}, not the pinned devnet USDC mint; no reserves verdict`);
+    }
+    if (token.owner !== PINS.accounts.vault) {
+      throw new RpcError("shape", `the vault token account's authority is ${token.owner}, not the program's vault account; no reserves verdict`);
+    }
     const allowances = infos.slice(1, 1 + allowanceAddresses.length).map((info, i) => {
       if (!info || info.owner !== PINS.programId) throw new RpcError("shape", `allowance ${allowanceAddresses[i]} is missing`);
       return decodeAllowance(info.data);
