@@ -25,6 +25,24 @@ public final class OfflineLedger: @unchecked Sendable {
         public var state: State
         /// The 238-byte note wire, kept so a pending note can be uploaded or re-injected.
         public let wireHex: String
+        /// The allowance certificate wire the note was accepted against, kept so a pending note can
+        /// be settled after Next payment or a relaunch. Nil in entries written before it was kept.
+        /// The reader verifies it again with the pinned server key before using it.
+        public let allowanceWireHex: String?
+        /// The phone's report at receipt that it had no internet path. Never signed (PLAN 3.53).
+        public let receivedWithZeroBars: Bool?
+        /// The merchant's signed ACK wire once it exists (`attachAck`), so settling the note later
+        /// needs no new signature, so no new Face ID prompt. The reader verifies it against the note.
+        public var ackWireHex: String?
+        /// Set by the loader, never stored: another entry holds the same allowance and serial.
+        /// `accept` never writes that, so the ledger is damaged; every such entry keeps counting as
+        /// reserved, and none may be shown as received or acknowledged from it.
+        public internal(set) var sharesSerial = false
+
+        enum CodingKeys: String, CodingKey {
+            case noteIdHex, allowanceId, serial, amount, acceptedAt, state, wireHex, allowanceWireHex,
+                 receivedWithZeroBars, ackWireHex
+        }
     }
 
     private let url: URL
@@ -37,9 +55,11 @@ public final class OfflineLedger: @unchecked Sendable {
     }
 
     /// Records `note` as accepted offline, or throws `serialSeen` / `offlineLimit` and
-    /// changes nothing. Call after `SignedNote.validate` and `Acceptance.check`.
+    /// changes nothing. Call after `SignedNote.validate` and `Acceptance.check`. `allowanceWire` is
+    /// the verified wire of `certificate`, kept with the note so it can be settled later.
     @discardableResult
-    public func accept(note: SignedNote, certificate: AllowanceCertificate, now: Int64) throws -> Entry {
+    public func accept(note: SignedNote, certificate: AllowanceCertificate, now: Int64,
+                       allowanceWire: Data? = nil, receivedWithZeroBars: Bool? = nil) throws -> Entry {
         let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
@@ -53,10 +73,24 @@ public final class OfflineLedger: @unchecked Sendable {
         let (total, overflow) = unsettled.addingReportingOverflow(note.note.amount)
         guard !overflow, total <= certificate.offlineLimit else { throw PaymentError.offlineLimit }
         let entry = Entry(noteIdHex: note.noteId.hex, allowanceId: allowance, serial: note.note.serial,
-                          amount: note.note.amount, acceptedAt: now, state: .pending, wireHex: note.wire.hex)
+                          amount: note.note.amount, acceptedAt: now, state: .pending, wireHex: note.wire.hex,
+                          allowanceWireHex: allowanceWire?.hex, receivedWithZeroBars: receivedWithZeroBars,
+                          ackWireHex: nil)
         entries.append(entry)
         try save(entries, to: file)
         return entry
+    }
+
+    /// Keeps the merchant's signed ACK with its note, so the note can be settled later without
+    /// signing again. The caller has verified the ACK against the note. Changes no reservation.
+    public func attachAck(noteId: Data, ackWire: Data) throws {
+        let (lock, file) = try FileLocks.resolve(url)
+        lock.lock()
+        defer { lock.unlock() }
+        var entries = try load(file)
+        guard let i = entries.firstIndex(where: { $0.noteIdHex == noteId.hex }) else { throw PaymentError.storage }
+        entries[i].ackWireHex = ackWire.hex
+        try save(entries, to: file)
     }
 
     /// Moves a pending note to settled or refused. Either way it stops counting against the
@@ -95,6 +129,20 @@ public final class OfflineLedger: @unchecked Sendable {
         return try load(file)
     }
 
+    /// True only when `noteId` is pending and its entry is the one entry, in any state, on its
+    /// allowance and serial: the reservation is unique and belongs to this exact note. Read under
+    /// the ledger lock. Changes nothing.
+    public func holdsSoleReservation(noteId: Data) throws -> Bool {
+        let (lock, file) = try FileLocks.resolve(url)
+        lock.lock()
+        defer { lock.unlock() }
+        let entries = try load(file)
+        guard let entry = entries.first(where: { $0.noteIdHex == noteId.hex }), entry.state == .pending else {
+            return false
+        }
+        return entries.filter { $0.allowanceId == entry.allowanceId && $0.serial == entry.serial }.count == 1
+    }
+
     private static func pendingTotal(_ entries: [Entry], allowanceId: UInt64) throws -> UInt64 {
         var total: UInt64 = 0
         for e in entries where e.allowanceId == allowanceId && e.state == .pending {
@@ -108,7 +156,7 @@ public final class OfflineLedger: @unchecked Sendable {
     private func load(_ url: URL) throws -> [Entry] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         do {
-            let entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
+            var entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
             // The retained note wire is the source of truth: every cached field must match it,
             // so a damaged record can never understate carried value or hide a serial.
             for e in entries {
@@ -118,10 +166,26 @@ public final class OfflineLedger: @unchecked Sendable {
                 guard note.allowanceId == e.allowanceId, note.serial == e.serial, note.amount == e.amount,
                       Data(SHA256.hash(data: noteBytes)).hex == e.noteIdHex else { throw PaymentError.storage }
             }
+            // Two entries on one allowance and serial are kept (both stay reserved) and flagged.
+            var holders: [SerialKey: Int] = [:]
+            for e in entries { holders[SerialKey(e), default: 0] += 1 }
+            for i in entries.indices where holders[SerialKey(entries[i]), default: 0] > 1 {
+                entries[i].sharesSerial = true
+            }
             return entries
         } catch {
             // A corrupt ledger must never read as empty: that would forget carried value.
             throw PaymentError.storage
+        }
+    }
+
+    private struct SerialKey: Hashable {
+        let allowanceId: UInt64
+        let serial: UInt8
+
+        init(_ entry: Entry) {
+            allowanceId = entry.allowanceId
+            serial = entry.serial
         }
     }
 
