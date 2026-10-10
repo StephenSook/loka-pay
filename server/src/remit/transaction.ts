@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { BN, BorshAccountsCoder, BorshInstructionCoder } from '@anchor-lang/core';
+// @anchor-lang/core is CommonJS: Node's ESM loader cannot see BN as a named export, so take it from the default.
+import anchor from '@anchor-lang/core';
 import { base58 } from '@scure/base';
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { PublicKey, SystemProgram, Transaction, TransactionInstruction, type Connection, type Signer } from '@solana/web3.js';
 import * as P from '@lokapay/protocol';
 import type { PreparedAttempt } from '../settle/types.js';
 import type { PoolName, Quote, RegistrationChain, RegistrationPlan } from './types.js';
+const { BN, BorshAccountsCoder, BorshInstructionCoder } = anchor;
 
 const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.json', import.meta.url), 'utf8'));
 const instructions = new BorshInstructionCoder(idl);
