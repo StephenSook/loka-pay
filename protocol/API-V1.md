@@ -27,7 +27,7 @@ Every error is `{ "error": "<name>", "message": "<plain English>" }`.
 | 400 | `bad_pubkey` | A public key is not a 33-byte compressed P-256 point |
 | 400 | `name_length` | Merchant name is not 1 to 64 bytes of UTF-8 after NFC |
 | 404 | `unknown_note` | `GET /v1/notes/{noteId}` for a note this server never saw |
-| 422 | a PAYMENT-V1 section 6 name, or `bad_ack` | The note or ack failed a stateless check (section 4) |
+| 422 | a PAYMENT-V1 section 6 name, `bad_ack`, `unknown_allowance`, `unknown_merchant` or `payer_mismatch` | The note or ack failed a stateless check or an identity check (section 4) |
 | 429 | `rate_limited` | The in-memory burst guard tripped; retry after `Retry-After` seconds |
 | 429 | `budget_exhausted` | That wallet's daily budget is spent (team and public pools are separate) |
 | 503 | `chain_unavailable` | Devnet RPC failed after retries; nothing was signed; safe to retry |
@@ -100,7 +100,8 @@ Request:
 - `ack` is what the merchant normally sends. It is optional so a payer phone (the Sat 3 AM checkpoint) or a stranger (task 3.29) can settle a note without one; the chain does not need it. Without it, no "held offline" time exists for that note.
 - The server runs the note through PAYMENT-V1 section 6 in order. A failure is HTTP 422 named by that check (`length`, `prefix`, `cluster`, `currency`, `amount_zero`, `wrong_program`, `wrong_mint`, `bad_pubkey`, `high_s`, `bad_signature`). A note shorter than 141 bytes has no note id, which is fine: a 422 does not need one.
 - When `ack` is present, the server then checks it: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is HTTP 422 `bad_ack`. A valid note with a bad ack is refused rather than settled without the ack, so the caller learns its ack is broken.
-- **The server does not pre-check state** (used serial, cap, expiry, earmark). Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+- Then the identity checks, before the note id is claimed or anything is sent: the allowance account for the note's allowance id must exist (else 422 `unknown_allowance`), the merchant record for its payee key hash must exist (else 422 `unknown_merchant`), and the note's payer key must equal the allowance's stored payer key (else 422 `payer_mismatch`). Neither the allowance's payer key nor the existence of a record changes once created, so the server may cache them. Without the payer check, anyone who had seen a note could re-sign its 141 bytes with their own key: the chain would reject that wire, and its failed decision would be cached under the genuine note's id and block the real payment. Found by the Codex review of #19.
+- **The server does not pre-check spend state** (used serial, cap, expiry, earmark). The identity checks above are not spend state: the genuine payer's reused serial still reaches the chain. Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
 
 Only an outcome on chain is final. Once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and it never changes the decision or the CONF.
 
