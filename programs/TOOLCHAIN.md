@@ -23,10 +23,30 @@ The final verified Solana pin is 3.1.10. The installer's Node 24 default was
 replaced with Node 22 to match PLAN.md D5. Surfpool installed successfully,
 but the installer reported failure before its new PATH was loaded.
 
-Gate B must pin Anchor 1.1.2 and Solana 3.1.10 in the workspace configuration,
-and use the matching Anchor Rust crates and TypeScript client.
+Gate B pins Anchor 1.1.2 and Solana 3.1.10 in the workspace configuration,
+with matching Anchor Rust crates and TypeScript client.
 Use `anchor test --validator legacy` for the tested solana-test-validator
-backend. The program has not been scaffolded, built, tested, or deployed yet.
+backend. The program builds and passes local tests. It is not deployed to devnet.
+
+## Gate B evidence
+
+Verified locally on 2026-10-09 after the upstream merge at `8ddd43a`:
+
+- `anchor build` and `anchor build --ignore-keys` both pass.
+- `anchor test --skip-build --validator legacy`: 34 tests pass across
+  `redeem.ts`, `withdraw.ts` and `units.ts`.
+- `cargo test --locked -p loka_vault`: 3 tests pass, including Rust decoding
+  of the committed protocol vectors and u64 boundaries.
+- `pnpm typecheck`, `cargo fmt --all --check` and the frozen pnpm install pass.
+- `scripts/assert-secp256r1-active.sh` reports the local feature active from
+  epoch 0 and stops its validator afterward.
+- The local SBF artifact is 359712 bytes. This is a local build measurement,
+  not a verified-build or deployed-program claim.
+- Test first: the initial integration run failed because the scaffold had no
+  `initializeVault` method. The implementation was added after those tests.
+- GitHub Actions has not run on this change. No external funding, faucet
+  request or devnet deployment was performed. Task 1.4 remains incomplete
+  until its approved deployment and public pins are verified.
 
 ## Task 0.4 evidence
 
