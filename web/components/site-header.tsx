@@ -22,7 +22,7 @@ export function SiteHeader() {
         aria-label="Main"
         className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-4 sm:px-6"
       >
-        <Link href="/" className="font-display text-2xl font-extrabold tracking-display" aria-current={pathname === "/" ? "page" : undefined}>
+        <Link prefetch={false} href="/" className="font-display text-2xl font-extrabold tracking-display" aria-current={pathname === "/" ? "page" : undefined}>
           LOKA Pay
         </Link>
         <ul className="flex flex-wrap gap-2">
@@ -30,7 +30,7 @@ export function SiteHeader() {
             const current = pathname === link.href;
             return (
               <li key={link.href}>
-                <Link
+                <Link prefetch={false}
                   href={link.href}
                   aria-current={current ? "page" : undefined}
                   className={`inline-flex items-center rounded-full border-2 border-ink px-3 py-1.5 text-sm font-bold leading-none ${
