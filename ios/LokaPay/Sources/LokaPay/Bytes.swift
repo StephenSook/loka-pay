@@ -101,3 +101,20 @@ public extension Data {
         self = out
     }
 }
+
+/// One lock per canonical file path, shared by every store object in this process, so two
+/// instances pointed at the same file serialize their whole read-check-write transaction.
+enum FileLocks {
+    private static let registryLock = NSLock()
+    private static var locks: [String: NSLock] = [:]
+
+    static func lock(for url: URL) -> NSLock {
+        let key = url.standardizedFileURL.resolvingSymlinksInPath().path
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if let existing = locks[key] { return existing }
+        let created = NSLock()
+        locks[key] = created
+        return created
+    }
+}
