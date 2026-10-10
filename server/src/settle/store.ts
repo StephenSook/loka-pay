@@ -1,4 +1,4 @@
-import type { AttemptRow, Claim, Decision, PreparedAttempt } from './types.js';
+import type { AttemptRow, Claim, Decision, PendingStage, PreparedAttempt } from './types.js';
 
 // Both pg.Pool and PGlite implement this interface. Production must use durable PostgreSQL.
 export interface Database {
@@ -16,6 +16,8 @@ export class SettlementStore {
     )`);
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS replacement jsonb');
     await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS rebuild_claimed boolean NOT NULL DEFAULT false');
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS pending_stage text');
+    await this.db.query('ALTER TABLE settlement_attempts ADD COLUMN IF NOT EXISTS failure_stage text');
   }
 
   async claim(row: Claim): Promise<boolean> {
@@ -47,7 +49,7 @@ export class SettlementStore {
   }
 
   async finish(noteId: string, decision: Decision): Promise<Decision> {
-    await this.db.query(`UPDATE settlement_attempts SET decision=$2::jsonb
+    await this.db.query(`UPDATE settlement_attempts SET decision=$2::jsonb,pending_stage=NULL,failure_stage=NULL
       WHERE note_id=$1 AND attempt IS NOT NULL AND (decision IS NULL
         OR ($2::jsonb->>'signature'=attempt->>'signature' AND decision->>'signature'<>attempt->>'signature'))`,
     [noteId, JSON.stringify(decision)]);
@@ -68,5 +70,12 @@ export class SettlementStore {
       WHERE note_id=$1 AND rebuild_claimed AND replacement IS NULL AND decision IS NULL
         AND attempt->>'signature'<>$2::jsonb->>'signature' RETURNING note_id`, [noteId, JSON.stringify(attempt)]);
     if (result.rows.length !== 1) throw new Error('Replacement was not saved');
+  }
+
+  async markPending(noteId: string, stage: PendingStage, failed: boolean): Promise<void> {
+    // Fixed stage names only. Never persist exception text, RPC payloads or caller input here.
+    await this.db.query(`UPDATE settlement_attempts SET pending_stage=$2,
+      failure_stage=CASE WHEN $3::boolean THEN $2 ELSE failure_stage END
+      WHERE note_id=$1 AND decision IS NULL`, [noteId, stage, failed]);
   }
 }

@@ -324,3 +324,32 @@ test('uncertain rebuild preparation consumes the one rebuild claim across restar
   expect((await other.get(noteId)).statusCode).toBe(202); expect(f.chain.prepare).toHaveBeenCalledTimes(2);
   expect(f.chain.send).toHaveBeenCalledTimes(1);
 });
+
+test.each(['prepare', 'save_attempt', 'send', 'lookup', 'height_lookup', 'sign_confirmation', 'save_decision'] as const)(
+  'pending records the safe %s failure stage without the exception text', async stage => {
+    const f = await fixture(); const sensitive = new Error('private RPC payload: do not store this');
+    if (stage === 'prepare') f.chain.prepare.mockRejectedValue(sensitive);
+    if (stage === 'save_attempt') vi.spyOn(f.store, 'saveAttempt').mockRejectedValue(sensitive);
+    if (stage === 'send') f.chain.send.mockRejectedValue(sensitive);
+    if (stage === 'lookup') f.chain.lookup.mockRejectedValue(sensitive);
+    if (stage === 'height_lookup') { f.chain.decision = null; f.chain.blockHeight.mockRejectedValue(sensitive); }
+    if (stage === 'sign_confirmation') f.sign.mockImplementation(() => { throw sensitive; });
+    if (stage === 'save_decision') vi.spyOn(f.store, 'finish').mockRejectedValue(sensitive);
+    const response = await f.post(); expect(response.statusCode).toBe(202);
+    const { rows } = await f.db.query('SELECT pending_stage,failure_stage FROM settlement_attempts WHERE note_id=$1', [noteId]);
+    expect(rows[0]).toEqual({ pending_stage: stage, failure_stage: stage });
+    expect(JSON.stringify(response.json())).not.toContain('private RPC');
+    expect(JSON.stringify(rows)).not.toContain('private RPC');
+  },
+);
+
+test('successful resolution clears pending diagnostics and diagnostic write failures keep HTTP 202', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  vi.spyOn(f.store, 'markPending').mockRejectedValueOnce(new Error('database unavailable'));
+  expect((await f.post()).statusCode).toBe(202);
+  expect((await f.post()).statusCode).toBe(202);
+  f.chain.decision = { slot: 12, blockTime: 1800000000, error: null, errorCode: 0 };
+  expect((await f.post()).statusCode).toBe(200);
+  const { rows } = await f.db.query('SELECT pending_stage,failure_stage FROM settlement_attempts WHERE note_id=$1', [noteId]);
+  expect(rows[0]).toEqual({ pending_stage: null, failure_stage: null });
+});

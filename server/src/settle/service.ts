@@ -1,6 +1,6 @@
 import { base58 } from '@scure/base';
 import * as P from '@lokapay/protocol';
-import type { AttemptRow, ChainDecision, ChainGateway, ConfirmationSigner, Decision, Outcome } from './types.js';
+import type { AttemptRow, ChainDecision, ChainGateway, ConfirmationSigner, Decision, Outcome, PendingStage } from './types.js';
 import { SettlementStore } from './store.js';
 import { HttpError, validateUpload } from './validation.js';
 
@@ -32,15 +32,18 @@ export class SettlementService {
       return this.get(upload.noteId);
     }
     let row: AttemptRow = { ...claim, attempt: null, replacement: null, rebuildClaimed: false, decision: null };
+    let stage: PendingStage = 'prepare';
     try {
       const attempt = await this.options.chain.prepare(upload.validated);
       // Commit before broadcast. This claim's winner alone sends the original transaction.
+      stage = 'save_attempt';
       await this.options.store.saveAttempt(upload.noteId, attempt);
       row = { ...row, attempt };
+      stage = 'send';
       await this.options.chain.send(attempt);
     } catch {
       // A timeout cannot tell us whether it landed. Only the expiry/history gate can allow a rebuild.
-      return this.pending(row);
+      return this.pending(row, stage, true);
     }
     return this.resolve(row, false);
   }
@@ -52,14 +55,17 @@ export class SettlementService {
     return this.resolve(row, true);
   }
 
-  private pending(row: AttemptRow): Outcome {
+  private async pending(row: AttemptRow, stage: PendingStage = 'awaiting_confirmation', failed = false): Promise<Outcome> {
+    try { await this.options.store.markPending(row.noteId, stage, failed); }
+    catch { /* A diagnostic write failure cannot turn an uncertain send into a final refusal. */ }
     return { statusCode: 202, body: { noteId: row.noteId, status: 'pending',
       signature: row.replacement?.signature ?? row.attempt?.signature ?? null, retryAfter: 2 } };
   }
 
   private async resolve(row: AttemptRow, replayed: boolean): Promise<Outcome> {
     if (row.decision && row.decision.signature === row.attempt?.signature) return { statusCode: 200, body: { ...row.decision, replayed } };
-    if (!row.attempt) return this.pending(row);
+    if (!row.attempt) return this.pending(row, 'missing_attempt');
+    let stage: PendingStage = 'lookup';
     try {
       const original = await this.options.chain.lookup(row.attempt.signature);
       if (original.decision) return await this.finalize(row, row.attempt.signature, original.decision, replayed);
@@ -73,44 +79,55 @@ export class SettlementService {
         if (again.found) return this.pending(row);
         return await this.finalize(row, row.replacement.signature, current.decision, replayed);
       }
-      if (row.rebuildClaimed) return this.pending(row);
+      if (row.rebuildClaimed) return this.pending(row, 'rebuild_consumed');
+      stage = 'height_lookup';
       const height = await this.options.chain.blockHeight();
       if (!Number.isSafeInteger(height) || height <= row.attempt.lastValidBlockHeight) return this.pending(row);
       // The history search must occur after the expiry observation, not from a cached lookup.
+      stage = 'lookup';
       const atExpiry = await this.options.chain.lookup(row.attempt.signature);
       if (atExpiry.decision) return await this.finalize(row, row.attempt.signature, atExpiry.decision, replayed);
       if (atExpiry.found) return this.pending(row);
+      stage = 'rebuild_claim';
       if (!await this.options.store.claimRebuild(row.noteId, row.attempt.signature)) return this.pending(row);
       row = { ...row, rebuildClaimed: true };
+      stage = 'lookup';
       const beforeSign = await this.options.chain.lookup(row.attempt!.signature);
       if (beforeSign.decision) return await this.finalize(row, row.attempt!.signature, beforeSign.decision, replayed);
       if (beforeSign.found) return this.pending(row);
+      stage = 'rebuild_prepare';
       const upload = validateUpload({ note: row.note, ...(row.ack ? { ack: row.ack } : {}) }, this.options.deployment);
       const replacement = await this.options.chain.prepare(upload.validated);
       if (replacement.signature === row.attempt!.signature || replacement.blockhash === row.attempt!.blockhash
         || replacement.lastValidBlockHeight <= height) throw new Error('Replacement requires a fresh blockhash');
+      stage = 'rebuild_save';
       await this.options.store.saveReplacement(row.noteId, replacement);
       row = { ...row, replacement };
+      stage = 'rebuild_send';
       await this.options.chain.send(replacement);
       return this.resolve(row, replayed);
     } catch {
       if (row.decision) return { statusCode: 200, body: { ...row.decision, replayed } };
-      return this.pending(row);
+      return this.pending(row, stage, true);
     }
   }
 
   private async finalize(row: AttemptRow, signature: string, chain: ChainDecision, replayed: boolean): Promise<Outcome> {
-    const conf = await this.options.signConfirmation({
-      noteId: P.fromHex(row.noteId), txSignature: base58.decode(signature), slot: BigInt(chain.slot),
-      blockTime: BigInt(chain.blockTime), uploadedAt: BigInt(row.uploadedAt),
-      status: chain.error === null ? 'settled' : 'failed_on_chain', errorCode: chain.errorCode,
-    });
-    const decision: Decision = {
-      noteId: row.noteId, status: chain.error === null ? 'settled' : 'failed', ...chain,
-      conf: P.base64urlEncode(conf), signature, uploadedAt: row.uploadedAt,
-      explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
-    };
-    const saved = await this.options.store.finish(row.noteId, decision);
-    return { statusCode: 200, body: { ...saved, replayed } };
+    let stage: PendingStage = 'sign_confirmation';
+    try {
+      const conf = await this.options.signConfirmation({
+        noteId: P.fromHex(row.noteId), txSignature: base58.decode(signature), slot: BigInt(chain.slot),
+        blockTime: BigInt(chain.blockTime), uploadedAt: BigInt(row.uploadedAt),
+        status: chain.error === null ? 'settled' : 'failed_on_chain', errorCode: chain.errorCode,
+      });
+      const decision: Decision = {
+        noteId: row.noteId, status: chain.error === null ? 'settled' : 'failed', ...chain,
+        conf: P.base64urlEncode(conf), signature, uploadedAt: row.uploadedAt,
+        explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+      };
+      stage = 'save_decision';
+      const saved = await this.options.store.finish(row.noteId, decision);
+      return { statusCode: 200, body: { ...saved, replayed } };
+    } catch { return this.pending(row, stage, true); }
   }
 }

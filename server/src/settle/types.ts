@@ -6,6 +6,9 @@ export interface PreparedAttempt {
   blockhash: string;
   lastValidBlockHeight: number;
 }
+export type PendingStage = 'prepare' | 'save_attempt' | 'send' | 'lookup' | 'height_lookup'
+  | 'rebuild_claim' | 'rebuild_prepare' | 'rebuild_save' | 'rebuild_send' | 'sign_confirmation'
+  | 'save_decision' | 'awaiting_confirmation' | 'missing_attempt' | 'rebuild_consumed';
 export interface ChainDecision {
   slot: number;
   blockTime: number;
