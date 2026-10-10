@@ -102,9 +102,10 @@ public enum SettlementError: Error, Equatable, Sendable {
     case badPubkey(message: String)
     case nameLength(message: String)
     case unknownNote(message: String)
-    /// HTTP 422: the note or ack failed a stateless check. `check` is a PAYMENT-V1 section 6
-    /// name (`PaymentError(rawValue:)` maps it) or `bad_ack`. Unsigned and not remembered by the
-    /// server: a corrected upload of the same note is checked from scratch.
+    /// HTTP 422: the note or ack failed a stateless or identity check. `check` is a PAYMENT-V1
+    /// section 6 name (`PaymentError(rawValue:)` maps it), `bad_ack`, `unknown_allowance`,
+    /// `unknown_merchant` or `payer_mismatch`. Unsigned and not remembered by the server: a
+    /// corrected upload of the same note is checked from scratch.
     case refused(check: String, message: String)
     /// `retryAfter` is the Retry-After header in seconds; nil when absent or not an integer.
     case rateLimited(retryAfter: Int?, message: String)
@@ -529,10 +530,12 @@ public struct SettlementClient: Sendable {
         "unknown_note": 404, "rate_limited": 429, "budget_exhausted": 429, "chain_unavailable": 503,
     ]
 
-    /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, and `bad_ack`.
+    /// The names a 422 may carry: the PAYMENT-V1 section 6 checks, `bad_ack`, and the identity
+    /// checks of API-V1 section 4 (`unknown_allowance`, `unknown_merchant`, `payer_mismatch`).
     static let refusalChecks: Set<String> = [
         "length", "prefix", "cluster", "currency", "amount_zero", "wrong_program", "wrong_mint",
         "bad_pubkey", "high_s", "bad_signature", "bad_ack",
+        "unknown_allowance", "unknown_merchant", "payer_mismatch",
     ]
 
     static func apiError(status: Int, data: Data, response: HTTPURLResponse) -> SettlementError {
