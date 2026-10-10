@@ -11,6 +11,36 @@
     "updated_at": "2026-10-10T17:05:00+00:00"
   },
   "facts": {
+    "zero_bar_payments_settled": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "GET /api/stats?run=EXP-PAY-001 (its first field): payments made with zero bars in the task 3.6 session that settled on Solana, each with an explorer link; deliberate cheats, canary, ci and load_test rows excluded. The headline numerator (0B.3)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
+    "zero_bar_payments_tried": {
+      "value": null,
+      "unit": "payments",
+      "kind": "measured",
+      "status": "pending",
+      "source": "experiments/EXP-PAY-001.md, task 3.6: every payment tried with zero bars, failures included (the server cannot see a try that never reached the merchant). The headline denominator (0B.3)",
+      "as_of": null,
+      "surfaces": [
+        "README",
+        "/judge",
+        "slides",
+        "video",
+        "Devpost"
+      ]
+    },
     "ble_direct_hop_seconds_median": {
       "value": null,
       "unit": "s",
