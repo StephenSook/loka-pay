@@ -200,7 +200,9 @@ struct InboxIssueTests {
         inbox.deliver("not a payment code")
         await model.inboxDrained()
         #expect(model.issue?.kind == .ledgerNotUpdated(paid: true))
-        #expect(inbox.held == [strayText, "not a payment code"])
+        // Only the note is held; the junk is counted and dropped (low finding 4).
+        #expect(inbox.held == [strayText])
+        #expect(model.inboxUnreadable == 1)
     }
 
     @Test("a screen that cannot receive leaves Bluetooth codes in the inbox")

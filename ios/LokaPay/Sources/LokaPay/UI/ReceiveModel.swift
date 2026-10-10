@@ -73,6 +73,10 @@ public final class ReceiveModel {
     /// counted instead of reported: nobody at the till asked for them. Counted since the last
     /// Next payment, like `inboxDropped`.
     public private(set) var inboxIgnored = 0
+    /// Bluetooth texts that were not valid payment codes (not LOKA text, too long, damaged, or an
+    /// allowance or note that fails its own checks), counted and dropped: no later step can make
+    /// them valid. Counted since the last Next payment.
+    public private(set) var inboxUnreadable = 0
     /// The inbox's drop count when Next payment was last tapped: drops before it were shown during
     /// an earlier payment, so they are not the next payer's.
     private var inboxDroppedBefore = 0
@@ -210,15 +214,20 @@ public final class ReceiveModel {
     /// The line about Bluetooth texts that were not checked since the last Next payment; nil when
     /// there are none.
     public var inboxLine: String? {
-        Self.inboxLine(dropped: inboxDropped, ignored: inboxIgnored, maxAge: inbox?.maxAge ?? PaymentInbox.defaultMaxAge)
+        Self.inboxLine(dropped: inboxDropped, ignored: inboxIgnored, unreadable: inboxUnreadable,
+                       maxAge: inbox?.maxAge ?? PaymentInbox.defaultMaxAge)
     }
 
-    public static func inboxLine(dropped: Int, ignored: Int, maxAge: TimeInterval) -> String? {
+    public static func inboxLine(dropped: Int, ignored: Int, unreadable: Int = 0, maxAge: TimeInterval) -> String? {
         var lines: [String] = []
         if dropped > 0 {
             let minutes = String(max(1, Int((maxAge / 60).rounded())))
             lines.append("Bluetooth codes dropped before this screen could check them: " + String(dropped)
                          + " (too many waiting, or held longer than " + minutes + " min). Ask the payer to send again.")
+        }
+        if unreadable > 0 {
+            lines.append("Bluetooth texts that were not valid payment codes: " + String(unreadable)
+                         + " (damaged, or not LOKA codes). Ask the payer to send again if one was theirs.")
         }
         if ignored > 0 {
             lines.append("Bluetooth texts for other steps ignored: " + String(ignored) + " (such as spend markers).")
@@ -253,22 +262,52 @@ public final class ReceiveModel {
 
     /// A Bluetooth text. Nobody at the till chose to scan it, so it is checked only while the screen
     /// is ready for a payer: during a payment it goes back to the inbox until Next payment, and never
-    /// replaces that payment's issue (a settlement error, a ledger write that failed). Protocol texts
-    /// for other steps are counted, not reported.
+    /// replaces that payment's issue (a settlement error, a ledger write that failed). Texts that can
+    /// never be accepted here are counted, not reported or held: protocol texts for other steps, and
+    /// texts that are not valid payment codes. Only an allowance or note that passes its own checks
+    /// goes back to the inbox, so junk takes no inbox place and never shows as Stopped later.
     private func acceptFromInbox(_ text: String, arrivedAt: Date) async {
         guard phase != .unavailable, merchant != nil else { return }
-        if case .failure(.wrongKind) = ScanParser.parse(text, accepting: [.allowance, .note]) {
+        let decoded: (kind: PaymentTransport.Kind, payload: Data)
+        switch ScanParser.parse(text, accepting: [.allowance, .note]) {
+        case .failure(.wrongKind):
             // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
             // confirmations are for payers. None of them is a step on this screen.
             inboxIgnored += 1
             return
+        case .failure:
+            // Not a payment code, too long, or damaged text: the same text can never parse later.
+            inboxUnreadable += 1
+            return
+        case .success(let parsed):
+            decoded = parsed
         }
         guard phase == .ready else {
+            // A structure check that fails now fails forever (it depends only on the bytes, the
+            // deployment and the pinned server key).
+            guard passesStructureChecks(decoded) else {
+                inboxUnreadable += 1
+                return
+            }
             // Back with its first arrival time, so the inbox age limit still counts from then.
             inbox?.hold(text, arrivedAt: arrivedAt)
             return
         }
-        await accept(text: text)
+        await accept(decoded)
+    }
+
+    /// True when the allowance verifies, or the note passes PAYMENT-V1 section 6, on their own.
+    private func passesStructureChecks(_ decoded: (kind: PaymentTransport.Kind, payload: Data)) -> Bool {
+        switch decoded.kind {
+        case .allowance:
+            guard let serverPublicKey else { return false }
+            return (try? AllowanceCertificate.verify(wire: decoded.payload, deployment: deployment,
+                                                     serverPublicKey: serverPublicKey)) != nil
+        case .note:
+            return (try? SignedNote.validate(wire: decoded.payload, deployment: deployment)) != nil
+        default:
+            return false
+        }
     }
 
     /// Waits until every inbox text handed over so far has been checked (for tests).
@@ -285,11 +324,16 @@ public final class ReceiveModel {
         case .failure(let kind):
             report(kind)
         case .success(let decoded):
-            if decoded.kind == .allowance {
-                await acceptAllowance(decoded.payload)
-            } else {
-                await acceptNote(decoded.payload)
-            }
+            await accept(decoded)
+        }
+    }
+
+    /// An `A` or `N` payload that has already been parsed.
+    private func accept(_ decoded: (kind: PaymentTransport.Kind, payload: Data)) async {
+        if decoded.kind == .allowance {
+            await acceptAllowance(decoded.payload)
+        } else {
+            await acceptNote(decoded.payload)
         }
     }
 
@@ -521,10 +565,11 @@ public final class ReceiveModel {
         unsettledAllowanceId = nil
         phase = .ready
         if waitingNote != nil { report(.allowanceNeeded) }
-        // Drops and ignored texts so far were shown during that payment; the next payer's counts
-        // start here. Taken before release(), so a held code that expires now counts for them.
+        // Drops, ignored and unreadable texts so far were shown during that payment; the next
+        // payer's counts start here. Taken before release(), so a held code that expires now counts for them.
         inboxDroppedBefore = inbox?.droppedWhileDetached ?? 0
         inboxIgnored = 0
+        inboxUnreadable = 0
         inbox?.release()
     }
 

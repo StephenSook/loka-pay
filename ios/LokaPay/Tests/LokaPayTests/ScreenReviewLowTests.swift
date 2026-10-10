@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import LokaPay
@@ -205,5 +206,78 @@ struct InboxCountSnapshotTests {
         #expect(model.inboxWaiting == 0)
         #expect(model.inboxDropped == 1)
         #expect(model.inboxLine?.hasPrefix("Bluetooth codes dropped before this screen could check them: 1 ") == true)
+    }
+}
+
+@Suite("Bluetooth texts that can never be accepted are counted, never held (low finding 4)")
+@MainActor
+struct InboxJunkTests {
+    let payer = SoftwareP256Signer()
+    let payerB = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    var allowanceText: String { PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)) }
+
+    /// Eight texts that fail to parse and eight that parse as A or N but fail their own checks.
+    func junk() throws -> [String] {
+        var tampered = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 9).wire
+        tampered[141 + 10] ^= 0x01  // a byte of r
+        let parseFailures = [
+            "hello", "L1|P|1|N|AAA=", "L1|P|1|N|AA+/", "L1|P|1|A|A A",
+            "L1|P|1|N|" + String(repeating: "A", count: ScanParser.maxLength), "L1|T|abc|aGk", "", "L1|P|1|A",
+        ]
+        let checkFailures = [
+            "L1|P|1|N|AAAA", "L1|P|1|A|AAAA", PaymentTransport.encode(.note, tampered),
+            PaymentTransport.encode(.note, Data(repeating: 1, count: 238)),
+            PaymentTransport.encode(.allowance, Data(repeating: 2, count: 300)),
+            // Signed by a stranger, not the pinned server key.
+            PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash,
+                                                                signedBy: Curve25519.Signing.PrivateKey())),
+            PaymentTransport.encode(.note, Data(repeating: 3, count: 10)),
+            PaymentTransport.encode(.allowance, Data(repeating: 4, count: 10)),
+        ]
+        return parseFailures + checkFailures
+    }
+
+    @Test("a junk burst during a payment does not push a real held note out of the inbox")
+    func junkBurstKeepsRealNote() async throws {
+        let inbox = PaymentInbox()
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+        model.startInbox()
+        let paid = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        inbox.deliver(allowanceText)
+        inbox.deliver(PaymentTransport.encode(.note, paid.wire))
+        await model.inboxDrained()
+        #expect(model.phase == .received)
+
+        // Payer B's real note arrives during the payment, then as many junk texts as the inbox holds.
+        let noteB = try F.note(payer: payerB, payee: merchant.keyHash, amount: 600_000, serial: 0, allowanceId: 88)
+        let noteBText = PaymentTransport.encode(.note, noteB.wire)
+        let burst = try junk()
+        #expect(burst.count == PaymentInbox.capacity)
+        inbox.deliver(noteBText)
+        for text in burst { inbox.deliver(text) }
+        await model.inboxDrained()
+        #expect(inbox.held == [noteBText])
+        #expect(inbox.droppedWhileDetached == 0)
+        #expect(model.inboxUnreadable == burst.count)
+        #expect(model.issue == nil)
+        #expect(model.inboxLine?.contains("not valid payment codes: 16") == true)
+
+        // Next payment: B's note is checked, and no junk shows as Stopped on B's screen.
+        model.nextPayment()
+        await model.inboxDrained()
+        #expect(model.waitingNote == noteB, "the real note was pushed out by junk")
+        #expect(model.issue?.kind == .allowanceNeeded)
+        #expect(model.inboxUnreadable == 0)
+    }
+
+    @Test("the unreadable count has its own sentence in the inbox line")
+    func lineWording() {
+        #expect(ReceiveModel.inboxLine(dropped: 0, ignored: 0, unreadable: 2, maxAge: 300)
+                == "Bluetooth texts that were not valid payment codes: 2 (damaged, or not LOKA codes). "
+                + "Ask the payer to send again if one was theirs.")
     }
 }

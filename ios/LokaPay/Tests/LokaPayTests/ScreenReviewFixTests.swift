@@ -257,10 +257,14 @@ struct MeshInboxTests {
         let ack = try #require(model.payment?.ack)
         #expect(try Ack.verify(wire: ack.wire, for: note).noteId == note.noteId)
 
-        // Text that is not a payment code is refused by name, as from the camera.
+        // Text that is not a payment code is counted, not shown as Stopped: nobody at the till
+        // chose to send it (low finding 4). From the camera it is still refused by name.
         model.nextPayment()
         inbox.deliver("hello over Bluetooth")
         await model.inboxDrained()
+        #expect(model.issue == nil)
+        #expect(model.inboxUnreadable == 1)
+        await model.accept(text: "hello from the camera")
         #expect(model.issue?.kind == .notPaymentCode)
     }
 
