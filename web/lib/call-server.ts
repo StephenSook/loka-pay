@@ -50,6 +50,8 @@ export const DEFAULT_PUBLIC_ORIGIN = "https://zerobars.us";
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 const TTS_TIMEOUT_MS = 20_000;
 const MAX_BODY_CHARS = 2048;
+/** On a deployed site the desk code is required and at least this long. */
+export const MIN_DESK_CODE_CHARS = 6;
 
 export interface CallConfig {
   applicationId: string;
@@ -139,7 +141,13 @@ export function callConfig(): CallConfigResult {
     .filter(([, v]) => v === "")
     .map(([name]) => name);
   if (missing.length > 0) return off(`not set: ${missing.join(", ")}`);
+  // The desk code fails closed on Vercel (production and preview): without a code of at least
+  // MIN_DESK_CODE_CHARS characters, calls are off there. Only a local run (no VERCEL_ENV) may go
+  // without one. NODE_ENV alone cannot tell them apart: the local e2e build runs next start
+  // with NODE_ENV=production.
   const deskCode = process.env.LOKA_CALL_CODE?.trim() || null;
+  const deployed = process.env.VERCEL_ENV === "production" || process.env.VERCEL_ENV === "preview";
+  if (deployed && (deskCode === null || deskCode.length < MIN_DESK_CODE_CHARS)) return off("not set: LOKA_CALL_CODE");
   if (!/^[A-Za-z0-9-]{8,64}$/.test(applicationId)) return off("LOKA_VONAGE_APPLICATION_ID is not a Vonage application id");
   if (!/^[1-9]\d{6,14}$/.test(fromNumber)) return off("LOKA_VONAGE_FROM_NUMBER must be the number's digits in E.164 form, without the plus");
   if (Buffer.byteLength(secret, "utf8") < 32) return off("LOKA_CALL_SECRET must be at least 32 bytes");

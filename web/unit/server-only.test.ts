@@ -356,7 +356,7 @@ test("GITHUB_TOKEN is read in lib/github.ts only, and never under a NEXT_PUBLIC 
 });
 
 // Set by the platform, not by us: never listed in .env.example.
-const PLATFORM_VARIABLES = new Set(["NODE_ENV", "VERCEL"]);
+const PLATFORM_VARIABLES = new Set(["NODE_ENV", "VERCEL", "VERCEL_ENV"]);
 
 test(".env.example lists exactly the variables the code reads", () => {
   const read = new Set(

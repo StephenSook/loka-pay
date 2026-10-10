@@ -807,6 +807,7 @@ test.describe("limits end state (table)", () => {
     { rule: "1 bad number (Jamaica, +1 876)", send: { body: { ...ok, to: `${PLUS}18765550100` } }, status: 400, error: "bad_number", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "2 calls off (LOKA_CALLS_OFF=1)", env: { LOKA_CALLS_OFF: "1" }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "2 not configured (no ElevenLabs key)", env: { ELEVENLABS_API_KEY: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "2 deployed without a desk code", env: { VERCEL_ENV: "production", LOKA_CALL_CODE: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "3 missing desk code", send: { body: { to: NUMBER, lang: "en" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     { rule: "3 wrong desk code", send: { body: { ...ok, code: "nope" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
     {
@@ -980,6 +981,37 @@ test.describe("limits end state (table)", () => {
       failures: 3,
       memo: 3,
       audio: 3,
+    });
+  });
+});
+
+test.describe("the desk code fails closed on Vercel", () => {
+  for (const vercelEnv of ["production", "preview"]) {
+    test(`VERCEL_ENV=${vercelEnv}: no code or a 4-character code turns calls off; 6 or more works`, async () => {
+      await withStandIn({}, async (s) => {
+        for (const code of [undefined, "", "1234", "12345"]) {
+          const r = await withEnv(callEnv(s.base, { VERCEL_ENV: vercelEnv, LOKA_CALL_CODE: code }), () =>
+            handleCall(callRequest({ to: NUMBER, lang: "en", code: code ?? "x" }), deps()),
+          );
+          expect(r.status, String(code)).toBe(503);
+          expect(await r.json(), String(code)).toEqual({ error: "calls_off", reason: "not set: LOKA_CALL_CODE" });
+        }
+        expect(s.seen.rpc).toHaveLength(0);
+        const r = await withEnv(callEnv(s.base, { VERCEL_ENV: vercelEnv, LOKA_CALL_CODE: "123456" }), () =>
+          handleCall(callRequest({ to: NUMBER, lang: "en", code: "123456" }), deps()),
+        );
+        expect(r.status).toBe(200);
+        expect(s.seen.vonage).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a local run (no VERCEL_ENV, even with NODE_ENV=production) may go without a code; VERCEL_ENV=development too", async () => {
+    await withStandIn({}, async (s) => {
+      for (const extra of [{ NODE_ENV: "production" }, { VERCEL_ENV: "development" }]) {
+        const config = await withEnv(callEnv(s.base, { ...extra, LOKA_CALL_CODE: undefined }), () => callConfig());
+        expect(config.ok, JSON.stringify(extra)).toBe(true);
+      }
     });
   });
 });
