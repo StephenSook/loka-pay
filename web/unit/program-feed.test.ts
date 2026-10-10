@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { MAX_ROWS, keepNewest, loadDetails, mergeHistory, type Details, type Row } from "../lib/program-feed";
+import {
+  MAX_ROWS,
+  ProgramFeed,
+  STALL_AFTER_MS,
+  keepNewest,
+  loadDetails,
+  mergeHistory,
+  type Details,
+  type FeedClock,
+  type Row,
+} from "../lib/program-feed";
 import { PINS } from "../lib/pins";
 
 // The /live engine's bookkeeping (lib/program-feed.ts). Rows here are TEST FIXTURES with
@@ -110,6 +120,121 @@ test.describe("reading a batch of transaction details", () => {
       });
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+});
+
+// The connection chip says Live only while the socket carries traffic. A FAKE clock drives
+// the liveness check, a FAKE WebSocket stands in for devnet's, and a stubbed fetch answers
+// the history read: no request leaves this machine.
+test.describe("the liveness check", () => {
+  const T0 = 1_791_700_000_000;
+
+  class FakeClock implements FeedClock {
+    ms = T0;
+    private timers: { every: number; next: number; fn: () => void }[] = [];
+    now(): number {
+      return this.ms;
+    }
+    every(ms: number, fn: () => void): () => void {
+      const timer = { every: ms, next: this.ms + ms, fn };
+      this.timers.push(timer);
+      return () => {
+        this.timers = this.timers.filter((t) => t !== timer);
+      };
+    }
+    /** Moves time forward, firing each repeating timer at every moment it is due. */
+    advance(ms: number): void {
+      const end = this.ms + ms;
+      for (;;) {
+        const due = this.timers.filter((t) => t.next <= end).sort((a, b) => a.next - b.next)[0];
+        if (!due) break;
+        this.ms = due.next;
+        due.next += due.every;
+        due.fn();
+      }
+      this.ms = end;
+    }
+  }
+
+  class FakeSocket {
+    static opened: FakeSocket[] = [];
+    readonly sent: { id?: number; method?: string }[] = [];
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    constructor(readonly url: string) {
+      FakeSocket.opened.push(this);
+    }
+    send(text: string): void {
+      this.sent.push(JSON.parse(text));
+    }
+    close(): void {
+      this.onclose?.();
+    }
+    receive(message: object): void {
+      this.onmessage?.({ data: JSON.stringify(message) });
+    }
+  }
+
+  const slot = (n: number) => ({ jsonrpc: "2.0", method: "slotNotification", params: { subscription: 9, result: { slot: n, parent: n - 1, root: n - 2 } } });
+
+  test("Live while slots arrive; No update after the window of silence; Live again when traffic resumes", async () => {
+    const realFetch = globalThis.fetch;
+    const realWebSocket = globalThis.WebSocket;
+    let historyReads = 0;
+    globalThis.fetch = (async () => {
+      historyReads += 1;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 0, result: [] }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    FakeSocket.opened = [];
+    globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+    const clock = new FakeClock();
+    const feed = new ProgramFeed(PINS.programId, "wss://devnet.fixture.test", clock);
+    try {
+      feed.start();
+      expect(FakeSocket.opened).toHaveLength(1);
+      const ws = FakeSocket.opened[0];
+      ws.onopen!();
+      // The program's logs, and slots as the heartbeat.
+      expect(ws.sent.map((m) => m.method)).toEqual(["logsSubscribe", "slotSubscribe"]);
+      ws.receive({ jsonrpc: "2.0", id: 1, result: 7 });
+      ws.receive({ jsonrpc: "2.0", id: 2, result: 8 });
+      expect(feed.getState().connection).toEqual({ kind: "live", sinceMs: T0 });
+
+      // Slots keep arriving for a minute: still live.
+      for (let i = 1; i <= 60; i += 1) {
+        clock.advance(1000);
+        ws.receive(slot(i));
+      }
+      expect(feed.getState().connection).toEqual({ kind: "live", sinceMs: T0 });
+
+      // The socket goes silent without closing. Exactly at the window it is still live.
+      clock.advance(STALL_AFTER_MS);
+      expect(feed.getState().connection.kind).toBe("live");
+      clock.advance(1000);
+      expect(feed.getState().connection).toEqual({ kind: "stalled", sinceMs: T0, silentMs: STALL_AFTER_MS + 1000 });
+      clock.advance(5000);
+      expect(feed.getState().connection).toEqual({ kind: "stalled", sinceMs: T0, silentMs: STALL_AFTER_MS + 6000 });
+
+      // Traffic resumes: live again at once, and the history is read again.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const readsBefore = historyReads;
+      ws.receive(slot(61));
+      expect(feed.getState().connection).toEqual({ kind: "live", sinceMs: T0 });
+      expect(historyReads).toBe(readsBefore + 1);
+      clock.advance(1000);
+      expect(feed.getState().connection.kind).toBe("live");
+
+      // A closed socket stops the check: reconnecting is not turned into stalled.
+      ws.close();
+      clock.advance(STALL_AFTER_MS * 3);
+      expect(feed.getState().connection.kind).toBe("reconnecting");
+    } finally {
+      feed.stop();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      globalThis.fetch = realFetch;
+      globalThis.WebSocket = realWebSocket;
     }
   });
 });

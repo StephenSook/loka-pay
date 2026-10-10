@@ -465,6 +465,32 @@ test("/live: a malformed transaction answer marks only its own row, which still 
   await expect(deployRow.getByTestId("tx-action")).toHaveText("program deployed");
 });
 
+test("/live: a socket that goes silent without closing stops saying Live, and says Live again when traffic resumes", async ({ page }) => {
+  await routeDevnet(page);
+  const sockets: { send?: (text: string) => void } = {};
+  const subscribed: string[] = [];
+  await page.routeWebSocket(DEVNET_WS, (ws) => {
+    sockets.send = (text) => ws.send(text);
+    ws.onMessage((raw) => {
+      const msg = JSON.parse(String(raw));
+      subscribed.push(msg.method);
+      // Both subscriptions are confirmed, then the socket sends nothing at all.
+      ws.send(JSON.stringify({ jsonrpc: "2.0", result: msg.id + 40, id: msg.id }));
+    });
+  });
+  await open(page, "/live");
+  const connection = page.getByTestId("connection");
+  await expect(connection).toHaveAttribute("data-state", "live");
+  await expect.poll(() => subscribed).toEqual(["logsSubscribe", "slotSubscribe"]);
+  // The page's window is 10 s of silence.
+  await expect(connection).toHaveAttribute("data-state", "stalled", { timeout: 15_000 });
+  await expect(connection).toContainText(/No update for 1\d s/);
+  await expect(connection).toContainText("Nothing has arrived on the WebSocket for");
+  sockets.send!(JSON.stringify({ jsonrpc: "2.0", method: "slotNotification", params: { subscription: 42, result: { slot: 600_000_001, parent: 600_000_000, root: 599_999_990 } } }));
+  await expect(connection).toHaveAttribute("data-state", "live");
+  await expect(connection).toContainText("Live");
+});
+
 test("/live: a failed history read is said plainly, never filled in", async ({ page }) => {
   await routeDevnet(page, { failHistory: true });
   await page.routeWebSocket(DEVNET_WS, (ws) => {
@@ -507,6 +533,7 @@ test("/live against real devnet: the subscription opens or the page says why; th
   const connection = page.getByTestId("connection");
   await expect(connection).not.toHaveAttribute("data-state", "connecting", { timeout: 20_000 });
   const state = await connection.getAttribute("data-state");
-  expect(["live", "reconnecting", "failed"]).toContain(state);
+  // "stalled": subscribed, but nothing has arrived on the socket for 10 s.
+  expect(["live", "stalled", "reconnecting", "failed"]).toContain(state);
   if (state !== "live") test.info().annotations.push({ type: "devnet", description: await connection.innerText() });
 });

@@ -7,7 +7,16 @@
 // while a read is pending or failed.
 
 import { useEffect, useRef, useState } from "react";
-import { HISTORY_LIMIT, INITIAL_FEED_STATE, MAX_ATTEMPTS, ProgramFeed, type Connection, type History, type Row } from "@/lib/program-feed";
+import {
+  HISTORY_LIMIT,
+  INITIAL_FEED_STATE,
+  MAX_ATTEMPTS,
+  ProgramFeed,
+  STALL_AFTER_MS,
+  type Connection,
+  type History,
+  type Row,
+} from "@/lib/program-feed";
 import { RPC_URL, WS_URL, explorerTx } from "@/lib/solana";
 import { formatUnits } from "@/lib/vault";
 import { OutlineChip, StateChip } from "./chips";
@@ -43,6 +52,13 @@ export function LiveFeed({ programId, kiosk }: { programId: string; kiosk: boole
             {connection.kind === "live" && (
               <>
                 Subscribed to the program&apos;s logs since <When ms={connection.sinceMs} />.
+              </>
+            )}
+            {connection.kind === "stalled" && (
+              <>
+                Nothing has arrived on the WebSocket for {silentSeconds(connection.silentMs)} s, though devnet sends a new slot
+                more than once a second. Live needs a message at least every {STALL_AFTER_MS / 1000} s; it returns when traffic
+                does.
               </>
             )}
             {connection.kind === "reconnecting" && (
@@ -96,6 +112,8 @@ function ConnectionChip({ connection, kiosk }: { connection: Connection; kiosk: 
   switch (connection.kind) {
     case "live":
       return <StateChip state="paid" label="Live" size={size} />;
+    case "stalled":
+      return <StateChip state="warning" label={`No update for ${silentSeconds(connection.silentMs)} s`} size={size} />;
     case "connecting":
       return <StateChip state="pending" label="Connecting" size={size} />;
     case "reconnecting":
@@ -103,6 +121,10 @@ function ConnectionChip({ connection, kiosk }: { connection: Connection; kiosk: 
     case "failed":
       return <StateChip state="failed" label="Not connected" size={size} />;
   }
+}
+
+function silentSeconds(ms: number): number {
+  return Math.floor(ms / 1000);
 }
 
 function HistoryLine({ history }: { history: History }) {

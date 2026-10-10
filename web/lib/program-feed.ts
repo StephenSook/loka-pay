@@ -9,6 +9,12 @@
 // that landed while the socket was down still appears, and a row whose details were given
 // up on ("unread") is read again.
 //
+// A socket can also stall without closing, so "live" needs traffic as well: the feed also
+// subscribes to slots (devnet sends a new slot more than once a second), and when nothing at
+// all arrives on the socket for STALL_AFTER_MS the state turns "stalled" with how long it has
+// been silent. The next message turns it "live" again and reads the history again, since a
+// transaction may have landed during the silence.
+//
 // The feed keeps the newest MAX_ROWS rows, so a kiosk left open all weekend does not grow
 // without limit.
 //
@@ -31,6 +37,10 @@ const DETAIL_WAIT_MS = 11_000;
 const LIVE_DETAIL_ATTEMPTS = 3;
 const LIVE_DETAIL_DELAY_MS = 1500;
 const SUBSCRIBE_ID = 1;
+const SLOT_SUBSCRIBE_ID = 2;
+/** With nothing on the socket for longer than this, the connection is "stalled", not "live". */
+export const STALL_AFTER_MS = 10_000;
+const LIVENESS_CHECK_MS = 1000;
 
 /**
  * "reading": not read yet; "read": from getTransaction; "unread": gave up (the row says so);
@@ -68,6 +78,8 @@ export function mergeHistory(current: ReadonlyMap<string, Row>, loaded: readonly
 export type Connection =
   | { kind: "connecting" }
   | { kind: "live"; sinceMs: number }
+  /** Subscribed since `sinceMs`, but nothing has arrived on the socket for `silentMs`. */
+  | { kind: "stalled"; sinceMs: number; silentMs: number }
   | { kind: "reconnecting"; attempt: number; retryInMs: number }
   | { kind: "failed"; reason: string };
 
@@ -90,6 +102,21 @@ export const INITIAL_FEED_STATE: FeedState = {
   connection: { kind: "connecting" },
   lastEventMs: null,
   announcement: "",
+};
+
+/** The time and a repeating timer: the browser's, or a fake one in unit/program-feed.test.ts. */
+export interface FeedClock {
+  now(): number;
+  /** Calls `fn` every `ms` milliseconds until the returned function is called. */
+  every(ms: number, fn: () => void): () => void;
+}
+
+export const SYSTEM_CLOCK: FeedClock = {
+  now: () => Date.now(),
+  every: (ms, fn) => {
+    const id = setInterval(fn, ms);
+    return () => clearInterval(id);
+  },
 };
 
 const TX_OPTIONS = { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" } as const;
@@ -178,10 +205,15 @@ export class ProgramFeed {
   private enriching = false;
   /** Rows that just arrived over the socket, whose details enrichLive is reading. */
   private readonly liveEnriching = new Set<string>();
+  /** When the current socket last sent anything (this.clock). */
+  private lastMessageMs = 0;
+  /** Stops the liveness check; set while a subscription is confirmed. */
+  private unwatch: (() => void) | null = null;
 
   constructor(
     private readonly programId: string,
     private readonly wsUrl: string = WS_URL,
+    private readonly clock: FeedClock = SYSTEM_CLOCK,
   ) {}
 
   subscribe(listener: (state: FeedState) => void): () => void {
@@ -202,6 +234,7 @@ export class ProgramFeed {
 
   stop(): void {
     this.running = false;
+    this.stopWatching();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const ws = this.socket;
@@ -229,17 +262,35 @@ export class ProgramFeed {
     this.rows.set(row.signature, row);
   }
 
+  private startWatching(): void {
+    this.stopWatching();
+    this.unwatch = this.clock.every(LIVENESS_CHECK_MS, () => this.checkLiveness());
+  }
+
+  private stopWatching(): void {
+    this.unwatch?.();
+    this.unwatch = null;
+  }
+
+  /** "live" turns "stalled" once the socket has been silent past STALL_AFTER_MS. */
+  private checkLiveness(): void {
+    const c = this.state.connection;
+    if (c.kind !== "live" && c.kind !== "stalled") return;
+    const silentMs = this.clock.now() - this.lastMessageMs;
+    if (silentMs > STALL_AFTER_MS) this.update({ connection: { kind: "stalled", sinceMs: c.sinceMs, silentMs } });
+  }
+
   /** `retryUnread` after a reconnect: rows whose details were given up on are read again. */
   private async refreshHistory(retryUnread: boolean): Promise<void> {
     try {
       const loaded = await loadSignatures(this.programId);
       if (!this.running) return;
       for (const row of mergeHistory(this.rows, loaded, retryUnread)) this.setRow(row);
-      this.update({ history: { kind: "ok", atMs: Date.now(), count: loaded.length } });
+      this.update({ history: { kind: "ok", atMs: this.clock.now(), count: loaded.length } });
       void this.enrich();
     } catch (e) {
       if (!this.running) return;
-      this.update({ history: { kind: "failed", atMs: Date.now(), reason: describeFailure(e) } });
+      this.update({ history: { kind: "failed", atMs: this.clock.now(), reason: describeFailure(e) } });
     }
   }
 
@@ -290,7 +341,7 @@ export class ProgramFeed {
     const slot = typeof slotValue === "number" ? slotValue : null;
     const logs = value.logs.filter((l): l is string => typeof l === "string");
     const summary = summarizeLogs(value.signature, slot, value.err ?? null, logs, this.programId);
-    const now = Date.now();
+    const now = this.clock.now();
     // A transaction already shown from history keeps its fuller details.
     if (this.rows.has(summary.signature)) return;
     this.setRow({ ...summary, arrivedLive: true, seenAtMs: now, details: "reading" });
@@ -353,9 +404,19 @@ export class ProgramFeed {
           params: [{ mentions: [this.programId] }, { commitment: "confirmed" }],
         }),
       );
+      // Slots are the heartbeat for the liveness check: any message counts, so a refused slot
+      // subscription only means a quiet program shows "stalled" (it is: nothing arrives).
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id: SLOT_SUBSCRIBE_ID, method: "slotSubscribe", params: [] }));
     };
     ws.onmessage = (event) => {
       if (this.socket !== ws) return;
+      this.lastMessageMs = this.clock.now();
+      const shown = this.state.connection;
+      if (shown.kind === "stalled") {
+        // Traffic resumed: live again, and the history is read again for anything missed.
+        this.update({ connection: { kind: "live", sinceMs: shown.sinceMs } });
+        void this.refreshHistory(true);
+      }
       let message: { id?: unknown; result?: unknown; method?: unknown };
       try {
         message = JSON.parse(String(event.data));
@@ -365,7 +426,8 @@ export class ProgramFeed {
       if (message.id === SUBSCRIBE_ID) {
         if (typeof message.result === "number") {
           this.attempts = 0;
-          this.update({ connection: { kind: "live", sinceMs: Date.now() } });
+          this.update({ connection: { kind: "live", sinceMs: this.clock.now() } });
+          this.startWatching();
           if (this.everLive) void this.refreshHistory(true);
           this.everLive = true;
         } else {
@@ -379,6 +441,7 @@ export class ProgramFeed {
     ws.onclose = () => {
       if (this.socket !== ws || !this.running) return;
       this.socket = null;
+      this.stopWatching();
       // A confirmed subscription reset the count, so this counts closes in a row.
       this.attempts += 1;
       if (this.attempts > MAX_ATTEMPTS) {
