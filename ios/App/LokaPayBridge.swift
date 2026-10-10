@@ -689,3 +689,88 @@ private struct LokaPaySetupButtonBody: View {
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
     }
 }
+
+// MARK: - Pay tab (plan rows 3.71 entry point and 3.1)
+
+/// The Pay tab: Set up payments until both certificates are stored and verified, then Pay and
+/// Receive. The games stay one tap away in the Offline corner, which is kept alive underneath so
+/// a game in progress survives a trip back to Pay.
+struct LokaPayTab<OfflineCorner: View>: View {
+    @ObservedObject var store: LokaPayStore
+    @Binding var showOfflineCorner: Bool
+    private let offlineCorner: OfflineCorner
+
+    init(store: LokaPayStore, showOfflineCorner: Binding<Bool>, @ViewBuilder offlineCorner: () -> OfflineCorner) {
+        self.store = store
+        _showOfflineCorner = showOfflineCorner
+        self.offlineCorner = offlineCorner()
+    }
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                payBar
+                payments
+            }
+            .background(LokaColor.paper.ignoresSafeArea())
+            .opacity(showOfflineCorner ? 0 : 1)
+            .allowsHitTesting(!showOfflineCorner)
+            .accessibilityHidden(showOfflineCorner)
+            VStack(spacing: 0) {
+                cornerBar
+                offlineCorner
+            }
+            .opacity(showOfflineCorner ? 1 : 0)
+            .allowsHitTesting(showOfflineCorner)
+            .accessibilityHidden(!showOfflineCorner)
+        }
+        .onAppear { store.prepareKey() }
+    }
+
+    /// Pay and Receive once setup is complete; until then, setup (which says what is missing).
+    @ViewBuilder private var payments: some View {
+        if let dependencies = store.homeDependencies {
+            LokaPayHomeView(dependencies: dependencies).id(store.wiresVersion)
+        } else {
+            LokaPaySetupView(store: store)
+        }
+    }
+
+    private var payBar: some View {
+        HStack(spacing: 12) {
+            Text("LOKA Pay (sandbox)")
+                .font(LokaPay.LokaStyle.label)
+                .foregroundStyle(LokaColor.muted)
+            Spacer()
+            Button { showOfflineCorner = true } label: {
+                Label("Offline corner", systemImage: "gamecontroller")
+                    .font(LokaPay.LokaStyle.label)
+                    .foregroundStyle(LokaColor.ink)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(LokaColor.card))
+                    .overlay(Capsule().strokeBorder(LokaColor.ink, lineWidth: 2))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Games to play with people nearby")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    private var cornerBar: some View {
+        HStack {
+            Button { showOfflineCorner = false } label: {
+                Label("Back to Pay", systemImage: "chevron.left")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LokaStyle.green)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .background(LokaStyle.background)
+    }
+}
