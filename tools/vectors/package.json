@@ -1,0 +1,16 @@
+{
+  "name": "loka-pay-vectors",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "description": "Deterministic test vectors for protocol/PAYMENT-V1.md",
+  "scripts": {
+    "gen": "node gen.mjs ../../protocol/vectors/payment-v1.json",
+    "check": "node gen.mjs --check ../../protocol/vectors/payment-v1.json"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.4.0"
+  }
+}
