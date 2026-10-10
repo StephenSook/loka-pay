@@ -37,6 +37,8 @@ services:
       - "127.0.0.1:3001:3001"
     volumes:
       - /etc/loka-pay/keys:/run/keys:ro
+      # Committed 3.50 evidence (measurements/redeem.json, measurements/p256-verify.json); the image does not copy it.
+      - ../measurements:/run/measurements:ro
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://loka:${POSTGRES_PASSWORD}@db:5432/loka}
       COMMIT_SHA: ${COMMIT_SHA:-uncommitted}
@@ -52,7 +54,9 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-https://zerobars.us,https://www.zerobars.us}
       TRUST_PROXY: ${TRUST_PROXY:-}
       # Phase 3 routes (server/src/app/phase3.ts) stay off until their values are set in /etc/loka-pay/api.env.
-      # REMIT_SEND_KEYPAIR_PATH points inside the container, e.g. /run/keys/funding-send.json.
+      # Paths are inside the container: REMIT_SEND_KEYPAIR_PATH=/run/keys/funding-send.json (the wallets.send pin),
+      # VOLUME_MEASUREMENT_PATH=/run/measurements/redeem.json, VOLUME_BENCHMARK_PATH=/run/measurements/p256-verify.json.
+      # TRUST_PROXY can stay unset: the default trusts the Docker bridge (172.16.0.0/12) that Caddy arrives on.
       TRUST_ENABLED: ${TRUST_ENABLED:-}
       RESERVES_ENABLED: ${RESERVES_ENABLED:-}
       VOLUME_MEASUREMENT_PATH: ${VOLUME_MEASUREMENT_PATH:-}
