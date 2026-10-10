@@ -67,7 +67,7 @@ Commands for parts that do not exist yet are filled in by the task that creates 
 - **One logical change per commit.** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`), subject at most 100 characters. Status changes to `PLAN.md` are their own commits: `status: <task#> <emoji> <description>`.
 - **Stage named paths only.** Never `git add -A` or `git add .`.
 - **Pull requests** into `main`, small enough to review in 20 minutes, with every required check green on the PR head. After a merge, the verdict is the check-runs of the merged SHA, not the PR's.
-- **Ownership.** Each path has one owner in `PLAN.md` (Lanes and file ownership). Only Stephen changes `ios/LOKA.xcodeproj`, `ios/Features/ChatStore.swift` and `ios/Network/LokaMesh.swift`. New Swift payment code goes in `ios/LokaPay/`, which needs no project-file change.
+- **Ownership.** Each path has one owner in `PLAN.md` (Lanes and file ownership). Only Stephen changes `ios/LOKA.xcodeproj`, `ios/Features/ChatStore.swift` and `ios/Core/LokaMesh.swift`. New Swift payment code goes in `ios/LokaPay/`, which needs no project-file change.
 - **Contracts.** The shared contracts in `PLAN.md` and `protocol/PAYMENT-V1.md` change only after an announcement in `PLAN.md`; the commit subject starts with `⚠️ CONTRACT`.
 - **Imported LOKA files** change only when a task needs it, with the smallest diff that works. Do not reformat or rename them wholesale.
 - **Dependencies.** Check every new package for supply-chain risk before adding it, pin it through the lockfile, and commit the lockfile. iOS uses first-party frameworks only.
