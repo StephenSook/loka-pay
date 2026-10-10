@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { MAX_ROWS, keepNewest, mergeHistory, type Details, type Row } from "../lib/program-feed";
+import { MAX_ROWS, keepNewest, loadDetails, mergeHistory, type Details, type Row } from "../lib/program-feed";
+import { PINS } from "../lib/pins";
 
 // The /live engine's bookkeeping (lib/program-feed.ts). Rows here are TEST FIXTURES with
 // made-up signatures; only the fields the bookkeeping reads matter.
@@ -67,5 +68,48 @@ test.describe("merging a history read", () => {
     ]);
     // A row reset for another try keeps what it had, such as the New mark from the socket.
     expect(changed.find((r) => r.signature === "unread-live-row")?.arrivedLive).toBe(true);
+  });
+});
+
+// getTransaction answers in one JSON-RPC batch (TEST FIXTURES, answered by a stubbed fetch:
+// no request leaves this machine). One answer has the right outer shape but a log line that
+// is not a string, which the log parser throws on.
+test.describe("reading a batch of transaction details", () => {
+  const P = PINS.programId;
+  const signatures = Array.from({ length: 8 }, (_, i) => `fixture-sig-${i}`);
+  const MALFORMED = "fixture-sig-3";
+
+  function answerFor(signature: string) {
+    const ok = {
+      slot: 600_000_000 + signatures.indexOf(signature),
+      blockTime: 1_791_700_000,
+      meta: { err: null, logMessages: [`Program ${P} invoke [1]`, "Program log: Instruction: RedeemNote", `Program ${P} success`] },
+      transaction: { signatures: [signature], message: { accountKeys: [P], instructions: [] } },
+    };
+    return signature === MALFORMED ? { ...ok, meta: { err: null, logMessages: [null] } } : ok;
+  }
+
+  test("one malformed answer marks only its own row unavailable; the other seven are read", async () => {
+    const realFetch = globalThis.fetch;
+    let requests = 0;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      requests += 1;
+      const calls = JSON.parse(String(init?.body)) as { id: number; params: [string, unknown] }[];
+      const body = calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: answerFor(c.params[0]) }));
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const outcomes = await loadDetails(signatures, P);
+      expect(requests).toBe(1);
+      expect(outcomes.map((o) => o.kind)).toEqual(["read", "read", "read", "unavailable", "read", "read", "read", "read"]);
+      outcomes.forEach((o, i) => {
+        if (o.kind !== "read") return;
+        // Each summary belongs to its own signature, in the order asked.
+        expect(o.summary.signature).toBe(signatures[i]);
+        expect(o.summary.actions).toEqual(["redeem_note"]);
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

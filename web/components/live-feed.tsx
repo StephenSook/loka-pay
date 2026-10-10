@@ -152,6 +152,8 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
             <span className="text-muted">Reading details</span>
           ) : row.details === "read" ? (
             <span className="text-muted">No loka_vault instruction in its logs</span>
+          ) : row.details === "unavailable" ? (
+            <span className="text-muted">Details unavailable: devnet&apos;s answer could not be read</span>
           ) : (
             <span className="text-muted">Details not read</span>
           )}

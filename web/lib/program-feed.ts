@@ -14,10 +14,12 @@
 //
 // Public devnet allows 10 getTransaction calls per 10 seconds per IP, so details are read
 // in batches of DETAIL_BATCH, newest first, waiting between batches; a row whose details
-// were refused for the limit stays "reading" and is tried again in the next batch.
+// were refused for the limit stays "reading" and is tried again in the next batch. Each
+// answer in a batch is read on its own: one this page cannot read marks only its own row
+// "unavailable", and the other rows of the batch still get their details.
 
 import { summarizeLogs, summarizeTransaction, type TxSummary } from "./logs";
-import { WS_URL, describeFailure, rpc, rpcBatch } from "./solana";
+import { WS_URL, describeFailure, rpc, rpcBatch, type RpcOutcome } from "./solana";
 
 export const HISTORY_LIMIT = 20;
 export const MAX_ROWS = 100;
@@ -30,8 +32,12 @@ const LIVE_DETAIL_ATTEMPTS = 3;
 const LIVE_DETAIL_DELAY_MS = 1500;
 const SUBSCRIBE_ID = 1;
 
-/** "reading": not read yet; "read": from getTransaction; "unread": gave up (the row says so). */
-export type Details = "reading" | "read" | "unread";
+/**
+ * "reading": not read yet; "read": from getTransaction; "unread": gave up (the row says so);
+ * "unavailable": devnet answered, but not with a transaction this page can read (the row
+ * says so, and still links the signature to the explorer).
+ */
+export type Details = "reading" | "read" | "unread" | "unavailable";
 
 export type Row = TxSummary & { arrivedLive: boolean; seenAtMs: number | null; details: Details };
 
@@ -122,24 +128,35 @@ export async function loadSignatures(programId: string): Promise<Row[]> {
   }));
 }
 
-type DetailOutcome = { kind: "read"; summary: TxSummary } | { kind: "retry" } | { kind: "unread" };
+export type DetailOutcome = { kind: "read"; summary: TxSummary } | { kind: "retry" } | { kind: "unread" } | { kind: "unavailable" };
 
-/** getTransaction for several signatures in one batch. A per-call rate limit means "retry later". */
+/**
+ * One getTransaction answer. A per-call rate limit or a null result (not found yet) means
+ * "retry later"; another error means "unread". An answer of the wrong shape, or one the
+ * parser throws on, is "unavailable" for this row only: it never throws, so it cannot stop
+ * the other answers of its batch from being read.
+ */
+export function detailOutcome(outcome: RpcOutcome, programId: string): DetailOutcome {
+  if (!outcome.ok) return outcome.error.code === 429 ? { kind: "retry" } : { kind: "unread" };
+  if (outcome.result === null) return { kind: "retry" };
+  try {
+    const summary = summarizeTransaction(outcome.result, programId);
+    return summary ? { kind: "read", summary } : { kind: "unavailable" };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+/** getTransaction for several signatures in one batch, one outcome per signature in order. */
 export async function loadDetails(signatures: string[], programId: string): Promise<DetailOutcome[]> {
-  let outcomes: Awaited<ReturnType<typeof rpcBatch>>;
+  let outcomes: RpcOutcome[];
   try {
     outcomes = await rpcBatch(signatures.map((s) => ({ method: "getTransaction", params: [s, TX_OPTIONS] })));
   } catch {
     // The whole request was refused or failed: every row waits for the next batch.
     return signatures.map((): DetailOutcome => ({ kind: "retry" }));
   }
-  return outcomes.map((outcome): DetailOutcome => {
-    if (outcome.ok) {
-      const summary = outcome.result === null ? null : summarizeTransaction(outcome.result, programId);
-      return summary ? { kind: "read", summary } : { kind: "retry" };
-    }
-    return outcome.error.code === 429 ? { kind: "retry" } : { kind: "unread" };
-  });
+  return outcomes.map((outcome) => detailOutcome(outcome, programId));
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -252,8 +269,8 @@ export class ProgramFeed {
           if (!current) return;
           if (outcome.kind === "read") {
             this.setRow({ ...current, ...outcome.summary, blockTime: outcome.summary.blockTime ?? current.blockTime, details: "read" });
-          } else if (outcome.kind === "unread") {
-            this.setRow({ ...current, details: "unread" });
+          } else if (outcome.kind === "unread" || outcome.kind === "unavailable") {
+            this.setRow({ ...current, details: outcome.kind });
           }
         });
         this.update({});
@@ -300,6 +317,11 @@ export class ProgramFeed {
       if (!current || !this.running) return;
       if (outcome.kind === "read") {
         this.setRow({ ...current, ...outcome.summary, blockTime: outcome.summary.blockTime ?? current.blockTime, details: "read" });
+        this.update({});
+        return;
+      }
+      if (outcome.kind === "unavailable") {
+        this.setRow({ ...current, details: "unavailable" });
         this.update({});
         return;
       }

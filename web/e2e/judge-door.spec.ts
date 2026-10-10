@@ -309,7 +309,10 @@ function transactionFor(signature: string) {
 }
 
 /** Answers devnet JSON-RPC from the recorded fixtures; counts calls by method. */
-async function routeDevnet(page: Page, options: { failHistory?: boolean; failTransactions?: () => boolean } = {}) {
+async function routeDevnet(
+  page: Page,
+  options: { failHistory?: boolean; failTransactions?: () => boolean; malformedSignature?: string } = {},
+) {
   const calls: Record<string, number> = {};
   await page.route(DEVNET, async (route: Route) => {
     const body = route.request().postDataJSON();
@@ -319,6 +322,11 @@ async function routeDevnet(page: Page, options: { failHistory?: boolean; failTra
       if (msg.method === "getTransaction" && options.failTransactions?.()) {
         // An error other than the rate limit: the page gives up on the row ("Details not read").
         return { jsonrpc: "2.0", id: msg.id, error: { code: -32005, message: "node is behind (test fixture)" } };
+      }
+      if (msg.method === "getTransaction" && msg.params[0] === options.malformedSignature) {
+        // TEST FIXTURE: the right outer shape, but a log line that is not a string.
+        const tx = transactionFor(msg.params[0] as string);
+        return { jsonrpc: "2.0", id: msg.id, result: { ...tx, meta: { err: null, logMessages: [null] } } };
       }
       if (msg.method === "getTransaction") return { jsonrpc: "2.0", id: msg.id, result: transactionFor(msg.params[0] as string) };
       return { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "not in the test fixture" } };
@@ -429,6 +437,20 @@ test("/live: rows whose details could not be read are read again after a reconne
   await expect(
     page.locator(`[data-testid="tx-row"][data-signature="${recorded.deploy.transaction.signatures[0]}"]`).getByTestId("tx-action"),
   ).toHaveText("program deployed");
+});
+
+test("/live: a malformed transaction answer marks only its own row, which still links the explorer", async ({ page }) => {
+  await routeDevnet(page, { malformedSignature: INIT_TX });
+  await page.routeWebSocket(DEVNET_WS, () => {});
+  await open(page, "/live");
+  const initRow = page.locator(`[data-testid="tx-row"][data-signature="${INIT_TX}"]`);
+  await expect(initRow).toHaveAttribute("data-details", "unavailable");
+  await expect(initRow.getByTestId("tx-action")).toHaveText("Details unavailable: devnet's answer could not be read");
+  await expect(initRow.getByTestId("tx-explorer")).toHaveAttribute("href", `https://explorer.solana.com/tx/${INIT_TX}?cluster=devnet`);
+  // The other row in the same batch is read.
+  const deployRow = page.locator(`[data-testid="tx-row"][data-signature="${recorded.deploy.transaction.signatures[0]}"]`);
+  await expect(deployRow).toHaveAttribute("data-details", "read");
+  await expect(deployRow.getByTestId("tx-action")).toHaveText("program deployed");
 });
 
 test("/live: a failed history read is said plainly, never filled in", async ({ page }) => {
