@@ -315,6 +315,43 @@ struct OutcomeUnknownTests {
         #expect(!model.offersCheckAgain)
         #expect(try ledger.entries().first?.state == .pending)
     }
+
+    @Test("a 429 on Check again after a timeout describes only that request: the outcome stays unknown (round 2, finding 2)")
+    func rateLimitKeepsTheUnknownOutcome() async throws {
+        let n = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let (model, _, ledger, _) = try await received([
+            StubReply(failure: URLError(.timedOut)),
+            APIFixtures.errorReply(429, "rate_limited", headers: ["Retry-After": "3"]),
+            settledReply(n),
+        ])
+        await model.settle()
+        #expect(model.settlementOutcomeUnknown)
+        await model.checkAgain()
+        #expect(model.issue?.kind == .settlement(.rateLimited(retryAfter: 3, message: "m")))
+        #expect(model.settlementOutcomeUnknown, "the unknown-outcome copy stays on screen")
+        #expect(model.offersCheckAgain, "Check again stays offered")
+        #expect(try ledger.entries().first?.state == .pending)
+        await model.checkAgain()
+        #expect(model.settlement?.status == .paid)
+        #expect(!model.settlementOutcomeUnknown)
+    }
+
+    @Test("chain_unavailable on Settle again keeps the unknown outcome; a 422 for the same bytes resolves it")
+    func onlyNoteAnswersResolve() async throws {
+        let (model, _, _, _) = try await received([
+            StubReply(failure: URLError(.networkConnectionLost)),
+            APIFixtures.errorReply(503, "chain_unavailable"),
+            APIFixtures.errorReply(422, "bad_signature"),
+        ])
+        await model.settle()
+        await model.settle()
+        #expect(model.issue?.kind == .settlement(.chainUnavailable(message: "m")))
+        #expect(model.offersCheckAgain)
+        await model.settle()
+        #expect(model.issue?.kind == .settlement(.refused(check: "bad_signature", message: "m")))
+        #expect(!model.settlementOutcomeUnknown)
+        #expect(!model.offersCheckAgain)
+    }
 }
 
 @Suite("a held note stays settleable after Next payment and a relaunch (review 3, finding 1)")

@@ -160,8 +160,9 @@ extension SettlementError {
     /// reached the server, which may have settled the note before the answer was lost (or sent one
     /// that did not verify). Only a verified CONF says what happened, so the note stays reserved and
     /// the screen offers Check again (`GET /v1/notes/{noteId}`). False for the answers API v1
-    /// defines as reaching no decision: a 422 refusal, the 400 errors, `unknown_note`, the 429s and
-    /// `chain_unavailable` (nothing was signed), and for `stillPending` (the chain is deciding).
+    /// defines as reaching no decision for this request: a 422 refusal, the 400 errors,
+    /// `unknown_note`, the 429s and `chain_unavailable` (nothing was signed), and for `stillPending`
+    /// (the chain is deciding). Of those, only `resolvesUnknownOutcome` ones speak for earlier uploads.
     public var leavesOutcomeUnknown: Bool {
         switch self {
         case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
@@ -170,6 +171,18 @@ extension SettlementError {
         case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
              .budgetExhausted, .chainUnavailable, .stillPending:
             return false
+        }
+    }
+
+    /// True for an answer about the note itself that settles what an earlier lost answer left open:
+    /// `unknown_note` (the server never attempted this note id) and a 422 refusal (the same note and
+    /// ACK bytes fail a stateless check, so no upload of them ever reached the chain). A verified
+    /// CONF and a 202 also settle it; they are not errors. The 400s, the 429s and `chain_unavailable`
+    /// describe only the latest request and say nothing about an earlier upload.
+    public var resolvesUnknownOutcome: Bool {
+        switch self {
+        case .unknownNote, .refused: return true
+        default: return false
         }
     }
 }

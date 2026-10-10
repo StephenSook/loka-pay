@@ -679,8 +679,10 @@ public final class ReceiveModel {
     }
 
     /// Shows a failed settlement call. The ledger is never touched here, so the note stays reserved
-    /// whatever went wrong. Only an answer API v1 defines as "no decision" settles the question;
-    /// any other failure leaves the outcome unknown and offers Check again.
+    /// whatever went wrong. A failure with no answer this phone can trust makes the note's outcome
+    /// unknown and offers Check again. Only a note-specific answer that resolves it clears that
+    /// (here `unknown_note` or a 422; a verified CONF or a 202 in `handle`). An error about only
+    /// the latest request (a 429, the 400s, `chain_unavailable`) keeps an earlier unknown outcome.
     private func reportSettlement(_ error: Error) {
         if error is CancellationError { return }
         let settlement = (error as? SettlementError) ?? .transport(String(describing: error))
@@ -690,7 +692,11 @@ public final class ReceiveModel {
         case .unknownNote: pendingSettlement = nil
         default: break
         }
-        settlementOutcomeUnknown = settlement.leavesOutcomeUnknown
+        if settlement.leavesOutcomeUnknown {
+            settlementOutcomeUnknown = true
+        } else if settlement.resolvesUnknownOutcome {
+            settlementOutcomeUnknown = false
+        }
         report(.settlement(settlement))
     }
 
