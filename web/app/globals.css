@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+/*
+  LOKA Pay design tokens. This file is the one place they live; every page reads them.
+
+  paper: the page background. ink: text, borders and hard shadows.
+  Both flip in dark mode to a warm night (never pure black) with cream text.
+
+  Money-state colors never flip. Each state is shown with a word AND an icon,
+  never color alone (see app/components/StateChip.tsx). White text sits only on
+  the "strong" fills (paid-strong, failed-strong); every other fill takes the
+  fixed ink color (on-state).
+*/
+
+:root {
+  color-scheme: light;
+  --paper: #fbf8f3;
+  --ink: #102a43;
+  --surface: #ffffff;
+  --muted: #486581;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #14163a;
+    --ink: #fff8ec;
+    --surface: #1e2150;
+    --muted: #e2d8c6;
+  }
+}
+
+/* Tokens that follow the color scheme. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+
+  /* Hard offset shadows, no blur. */
+  --shadow-hard: 4px 4px 0 0 var(--ink);
+  --shadow-hard-lg: 6px 6px 0 0 var(--ink);
+}
+
+/* Tokens that never change. */
+@theme {
+  --tracking-display: -0.03em;
+  --radius-card: 1rem;
+
+  /* Fixed ink for text on a money-state fill, in both color schemes. */
+  --color-on-state: #102a43;
+
+  --color-pending: #ffb020;
+  --color-received: #9fe3e0;
+  --color-paid: #1fa35b;
+  --color-paid-strong: #0f7a40;
+  --color-warning: #ffd9d7;
+  --color-warning-line: #b4232a;
+  --color-failed: #e5484d;
+  --color-failed-strong: #b4232a;
+}
+
+@layer base {
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-weight: 500;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: var(--tracking-display);
+  }
+
+  /* A grid child defaults to min-width: auto and can push the page wider than
+     the screen (a past overflow bug). Markup also sets min-w-0 on grid children. */
+  .grid > * {
+    min-width: 0;
+  }
+
+  a {
+    text-underline-offset: 3px;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--ink);
+    outline-offset: 3px;
+  }
+}
