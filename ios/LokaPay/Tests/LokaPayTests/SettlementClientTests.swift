@@ -946,6 +946,23 @@ extension APIFixtures {
     static var createdPayer: StubReply {
         StubReply(status: 201, body: payerBody(allowance: wire("allowances", 0)))
     }
+
+    /// The bytes the settle server sends for a registration 202: `RegistrationService.pending()`
+    /// in server/src/remit/service.ts (PR #19), serialized by Fastify in that key order.
+    static func serverPending(kind: String, key: String, signature: String?) -> StubReply {
+        let sig = signature.map { "\"\($0)\"" } ?? "null"
+        let text = "{\"status\":\"pending\",\"kind\":\"\(kind)\",\"keyHash\":\"\(keyHashHex(key))\","
+            + "\"signature\":\(sig),\"retryAfter\":2}"
+        return StubReply(status: 202, headers: ["Content-Type": "application/json; charset=utf-8"], body: Data(text.utf8))
+    }
+
+    /// The bytes the settle server sends when the chain refused a registration: the 409 result
+    /// `RegistrationService.resolve` stores and repeats for that key.
+    static func serverFailed(signature: String) -> StubReply {
+        let text = "{\"error\":\"registration_failed\",\"message\":\"The registration transaction failed on chain.\","
+            + "\"signature\":\"\(signature)\",\"explorer\":\"https://explorer.solana.com/tx/\(signature)?cluster=devnet\"}"
+        return StubReply(status: 409, headers: ["Content-Type": "application/json; charset=utf-8"], body: Data(text.utf8))
+    }
 }
 
 @Suite("settlement client: registration pending and failure")
@@ -1238,5 +1255,43 @@ struct RegistrationPendingTests {
             }
             #expect(stub.requests.count == 1)
         }
+    }
+
+    @Test("the settle server's own 202 and 409 bytes: repost then success, budget spent, refused on chain")
+    func serverBodies() async throws {
+        let sig = APIFixtures.settledSignatureBase58
+        // Payer: pending with no signature yet, pending with the saved signature, then created.
+        let payer = StubTransport([APIFixtures.serverPending(kind: "payer", key: "payer", signature: nil),
+                                   APIFixtures.serverPending(kind: "payer", key: "payer", signature: sig),
+                                   APIFixtures.createdPayer])
+        let clock = FakeClock()
+        let reg = try await APIFixtures.client(payer, clock: clock).registerPayer(publicKey: APIFixtures.publicKey("payer"))
+        #expect(reg.created)
+        #expect(reg.certificate.payerKeyHash == P256Rules.keyHash(APIFixtures.publicKey("payer")))
+        #expect(payer.requests.count == 3)
+        expectSameRequest(payer)
+        #expect(clock.sleeps == [2, 2], "the server's retryAfter of 2 s each time")
+
+        // Still pending when the budget runs out: the last body, with its signature and retryAfter.
+        let slow = StubTransport(Array(repeating: APIFixtures.serverPending(kind: "payer", key: "payer", signature: sig),
+                                       count: 3))
+        await #expect(throws: SettlementError.registrationPending(APIFixtures.pendingRegistration(.payer, key: "payer"))) {
+            try await APIFixtures.client(slow).registerPayer(publicKey: APIFixtures.publicKey("payer"), timeout: 5)
+        }
+        #expect(slow.requests.count == 3)
+
+        // Merchant: pending, then the chain refused it. The link comes from the signature.
+        let merchant = StubTransport([APIFixtures.serverPending(kind: "merchant", key: "merchantA", signature: sig),
+                                      APIFixtures.serverFailed(signature: sig)])
+        let merchantClock = FakeClock()
+        let refused = SettlementError.registrationFailed(signature: sig, explorer: URL(string: APIFixtures.settledExplorer)!,
+                                                         message: "The registration transaction failed on chain.")
+        await #expect(throws: refused) {
+            try await APIFixtures.client(merchant, clock: merchantClock)
+                .registerMerchant(publicKey: APIFixtures.publicKey("merchantA"), name: "Khadim's stall")
+        }
+        #expect(merchant.requests.count == 2, "a 409 ends the call; it is not posted again")
+        #expect(merchantClock.sleeps == [2])
+        expectSameRequest(merchant)
     }
 }
