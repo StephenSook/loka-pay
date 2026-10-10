@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": null
+    "updated_at": "2026-10-10T08:33:00+00:00"
   },
   "facts": {
     "ble_direct_hop_seconds_median": {
@@ -370,58 +370,58 @@
       ]
     },
     "secp256r1_devnet_activation_slot": {
-      "value": null,
+      "value": 380592000,
       "unit": "slot",
       "kind": "measured",
-      "status": "pending",
-      "source": "feature account read from devnet RPC, re-checked in task 0.4",
-      "as_of": null,
+      "status": "measured",
+      "source": "getAccountInfo srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q on https://api.devnet.solana.com (owner Feature111111111111111111111111111111111111, activated_at decoded from the account data)",
+      "as_of": "2026-10-10T08:32:06+00:00",
       "surfaces": [
         "/proof",
         "/trust"
       ]
     },
     "secp256r1_mainnet_activation_slot": {
-      "value": null,
+      "value": 345600000,
       "unit": "slot",
       "kind": "measured",
-      "status": "pending",
-      "source": "feature account read from mainnet RPC, re-checked before task 3.35",
-      "as_of": null,
+      "status": "measured",
+      "source": "getAccountInfo srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q on https://api.mainnet-beta.solana.com (owner Feature111111111111111111111111111111111111, activated_at decoded from the account data)",
+      "as_of": "2026-10-10T08:32:06+00:00",
       "surfaces": [
         "/proof"
       ]
     },
     "note_v1_bytes": {
-      "value": null,
+      "value": 141,
       "unit": "bytes",
       "kind": "computed",
-      "status": "pending",
-      "source": "protocol/PAYMENT-V1.md, asserted by the vector tests (task 1.2)",
-      "as_of": null,
+      "status": "computed",
+      "source": "protocol/vectors/payment-v1.json: every notes[].noteHex is 141 bytes; protocol/PAYMENT-V1.md layout; asserted by the vector tests in Swift, TypeScript, Kotlin and Rust",
+      "as_of": "2026-10-10T08:32:06+00:00",
       "surfaces": [
         "README",
         "/proof"
       ]
     },
     "note_wire_bytes": {
-      "value": null,
+      "value": 238,
       "unit": "bytes",
       "kind": "computed",
-      "status": "pending",
-      "source": "protocol/PAYMENT-V1.md, asserted by the vector tests (task 1.2)",
-      "as_of": null,
+      "status": "computed",
+      "source": "protocol/vectors/payment-v1.json: every notes[].wireHex is 238 bytes (141-byte note + 64-byte low-S signature + 33-byte compressed key)",
+      "as_of": "2026-10-10T08:32:06+00:00",
       "surfaces": [
         "/proof"
       ]
     },
     "serials_per_allowance": {
-      "value": null,
+      "value": 256,
       "unit": "serials",
       "kind": "computed",
-      "status": "pending",
-      "source": "program constant, programs/loka_vault (task 1.4)",
-      "as_of": null,
+      "status": "computed",
+      "source": "programs/loka_vault/src/state.rs: used_serials: [u8; 32] is a 256-bit bitmap; the note's serial is a u8 (0 to 255)",
+      "as_of": "2026-10-10T08:32:06+00:00",
       "surfaces": [
         "/trust"
       ]
@@ -610,49 +610,52 @@
       ]
     },
     "senegal_remittances_pct_gdp_2023": {
-      "value": null,
+      "value": 10.6434131462934,
       "unit": "% of GDP",
       "kind": "sourced",
-      "status": "pending",
-      "source": "World Bank API (BX.TRF.PWKR.DT.GD.ZS); re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank API https://api.worldbank.org/v2/country/SEN/indicator/BX.TRF.PWKR.DT.GD.ZS?format=json&date=2023 (Personal remittances, received, % of GDP; dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T08:33:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "10.6%"
     },
     "senegal_remittances_usd_2023": {
-      "value": null,
+      "value": 3267137360.56511,
       "unit": "USD",
       "kind": "sourced",
-      "status": "pending",
-      "source": "World Bank API (BX.TRF.PWKR.CD.DT); re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank API https://api.worldbank.org/v2/country/SEN/indicator/BX.TRF.PWKR.CD.DT?format=json&date=2023 (Personal remittances, received, current US$; dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T08:33:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "$3.27 billion"
     },
     "nigeria_remittances_usd_2024": {
-      "value": null,
+      "value": 22126757545.065,
       "unit": "USD",
       "kind": "sourced",
-      "status": "pending",
-      "source": "World Bank API (BX.TRF.PWKR.CD.DT); re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank API https://api.worldbank.org/v2/country/NGA/indicator/BX.TRF.PWKR.CD.DT?format=json&date=2024 (Personal remittances, received, current US$; dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T08:33:00+00:00",
       "surfaces": [
         "README",
         "/judge",
         "slides",
         "video",
         "Devpost"
-      ]
+      ],
+      "display": "$22.13 billion"
     },
     "senegal_mobile_money_adults_pct_2021": {
       "value": null,
@@ -670,15 +673,16 @@
       ]
     },
     "senegal_adults_15plus_2025": {
-      "value": null,
+      "value": 11786511,
       "unit": "people",
       "kind": "sourced",
-      "status": "pending",
-      "source": "World Bank API, Senegal population aged 15+ (2025); re-verify before use",
-      "as_of": null,
+      "status": "sourced",
+      "source": "World Bank API, Senegal 2025: SP.POP.TOTL 18,931,966 minus SP.POP.0014.TO 7,145,455 (dataset last updated 2026-10-08)",
+      "as_of": "2026-10-10T08:33:00+00:00",
       "surfaces": [
         "slides"
-      ]
+      ],
+      "display": "11.8 million"
     },
     "people_count_estimate": {
       "value": null,

@@ -40,7 +40,7 @@ jobs:
           ls "$ANDROID_HOME/platforms"
 
       - name: Core tests, debug build, lint
-        run: ./gradlew --no-daemon :core:test :app:assembleDebug :app:lintDebug
+        run: ./gradlew --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v4

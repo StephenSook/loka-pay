@@ -4,6 +4,7 @@
 // checked here in the browser with @lokapay/protocol. No request, no login, no storage.
 
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { toHex } from "@lokapay/protocol";
 import {
   ACK_MISMATCH_WORDS,
   CHECK_LABELS,
@@ -25,6 +26,7 @@ import {
   type SerializedDeployment,
 } from "@/lib/receipt";
 import type { TestVector } from "@/lib/test-vector";
+import { AttackerPanel } from "./attacker-panel";
 import { OutlineChip, StateChip, type MoneyState } from "./chips";
 import { AlertIcon, ArrowUpRightIcon, CheckIcon, CircleIcon, ClockIcon, CrossIcon, FlaskIcon } from "./icons";
 
@@ -139,7 +141,11 @@ export function ReceiptVerifier({
         data-testid="verify-result"
         className="flex min-w-0 flex-col gap-6 outline-offset-4"
       >
-        {evaluation && active ? <Result evaluation={evaluation} origin={active.origin} /> : <Waiting />}
+        {evaluation && active ? (
+          <Result evaluation={evaluation} origin={active.origin} pinned={pinned} testVector={testVector} />
+        ) : (
+          <Waiting />
+        )}
       </div>
 
       <DeploymentInfo pinned={pinned} />
@@ -182,19 +188,24 @@ const ORIGIN_WORDS: Record<Origin, string> = {
   test: "The published test receipt.",
 };
 
-function Result({ evaluation, origin }: { evaluation: Evaluation; origin: Origin }) {
+interface CheckSetup {
+  pinned: SerializedDeployment | null;
+  testVector: TestVector;
+}
+
+function Result({ evaluation, origin, ...setup }: { evaluation: Evaluation; origin: Origin } & CheckSetup) {
   return (
     <>
       <div className="flex flex-col gap-1">
         <h2 className="text-3xl">Result</h2>
         <p className="text-sm text-muted">{ORIGIN_WORDS[origin]}</p>
       </div>
-      <ResultBody evaluation={evaluation} />
+      <ResultBody evaluation={evaluation} {...setup} />
     </>
   );
 }
 
-function ResultBody({ evaluation }: { evaluation: Evaluation }) {
+function ResultBody({ evaluation, pinned, testVector }: { evaluation: Evaluation } & CheckSetup) {
   switch (evaluation.kind) {
     case "input":
       return <InputProblemCard problem={evaluation.problem} />;
@@ -207,6 +218,13 @@ function ResultBody({ evaluation }: { evaluation: Evaluation }) {
           <StatusCard view={evaluation.view} />
           <Checklist checks={evaluation.checks} context={evaluation.context} />
           <Fields view={evaluation.view} context={evaluation.context} />
+          {/* Keyed by the bytes, so a newly verified receipt starts with its own signed values. */}
+          <AttackerPanel
+            key={toHex(evaluation.bytes)}
+            receipt={evaluation.bytes}
+            pinned={pinned}
+            testVector={testVector}
+          />
         </>
       );
     case "failed":
