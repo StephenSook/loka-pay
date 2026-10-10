@@ -31,6 +31,31 @@ struct ReviewFixTests {
         #expect(try stores[0].remaining(allowanceId: 9) == 56)
     }
 
+    @Test("the lock is the same before and after the file exists (Codex round 2)")
+    func lockIdentityAcrossCreation() throws {
+        // Under /private/tmp, URL.resolvingSymlinksInPath returns "/private/tmp/..." while the
+        // file is missing and "/tmp/..." once it exists (measured on macOS), so the old key
+        // changed identity across creation. iOS app containers also live under /private/var.
+        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("lokapay-\(UUID().uuidString)").appendingPathComponent("serials.json")
+        let before = FileLocks.lock(for: url)
+        let first = SerialReservations(url: url)
+        #expect(try first.reserve(allowanceId: 5) == 0)  // creates the file
+        let after = FileLocks.lock(for: url)
+        #expect(before === after)
+        let second = SerialReservations(url: url)
+        let results = NSLock()
+        var serials: [UInt8] = []
+        DispatchQueue.concurrentPerform(iterations: 100) { i in
+            if let s = try? (i % 2 == 0 ? first : second).reserve(allowanceId: 5) {
+                results.lock(); serials.append(s); results.unlock()
+            }
+        }
+        #expect(serials.count == 100)
+        #expect(Set(serials).count == 100)
+        #expect(!serials.contains(0))
+    }
+
     @Test("a counter outside 0...256 in valid JSON is refused before anything changes")
     func corruptCounters() throws {
         for bad in [#"{"42": -5}"#, #"{"42": 300}"#, #"{"not-a-number": 1}"#] {
