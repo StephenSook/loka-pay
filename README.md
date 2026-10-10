@@ -80,7 +80,7 @@ Toolchain and commands for every part are in `AGENTS.md`.
 | Android relay | `android/loka-mesh-lab/` | `./gradlew :core:test :app:assembleDebug` |
 | Solana program | `programs/` | TODO(1.4): `anchor test` |
 | Settlement server | `server/` | TODO(1.9): `pnpm test` |
-| Website | `web/` | TODO(1.8): `pnpm build` |
+| Website | `web/` | `pnpm install --frozen-lockfile && pnpm build` (more in `web/README.md`) |
 
 ## Tests named in the demo
 
