@@ -46,6 +46,12 @@ struct ReviewFixTests {
         #expect(throws: PaymentError.serialsExhausted) { try SerialReservations(url: url).reserve(allowanceId: 42) }
     }
 
+    @Test("earmark hashes of mixed length throw instead of crashing (Greptile)")
+    func earmarkLengths() {
+        #expect(throws: PaymentError.earmarkList) { try Earmarks.encode([Data(repeating: 1, count: 31), Data(repeating: 2, count: 32)]) }
+        #expect(throws: PaymentError.earmarkList) { try Earmarks.encode(Array(repeating: Data(repeating: 3, count: 32), count: 17)) }
+    }
+
     @Test("a server-signed merchant name that is not NFC is refused; the NFC spelling passes")
     func merchantNameMustBeNFC() throws {
         let server = try Curve25519.Signing.PrivateKey(
