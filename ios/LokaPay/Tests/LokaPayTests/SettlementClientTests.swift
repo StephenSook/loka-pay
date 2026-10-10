@@ -77,6 +77,46 @@ final class FakeClock: @unchecked Sendable {
     }
 }
 
+/// Time stands still and every sleep lasts until its task is cancelled, so a wait on this clock
+/// ends only by cancellation. `started` yields once each time a sleep begins.
+final class HeldClock: @unchecked Sendable {
+    let started: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() { (started, continuation) = AsyncStream<Void>.makeStream() }
+
+    var clock: SettlementClock {
+        SettlementClock(now: { 0 }, sleep: { [continuation] _ in
+            continuation.yield()
+            try await Task.sleep(nanoseconds: 3_600 * 1_000_000_000)
+        })
+    }
+}
+
+/// A transport whose exchange never answers: it holds each request until its task is cancelled and
+/// then fails the way URLSession does (`URLError(.cancelled)`). `started` yields once per request.
+final class HeldTransport: HTTPTransport, @unchecked Sendable {
+    let started: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private let lock = NSLock()
+    private var count = 0
+
+    init() { (started, continuation) = AsyncStream<Void>.makeStream() }
+
+    var requests: Int { lock.withLock { count } }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        lock.withLock { count += 1 }
+        continuation.yield()
+        do {
+            try await Task.sleep(nanoseconds: 3_600 * 1_000_000_000)
+        } catch {
+            throw URLError(.cancelled)
+        }
+        throw URLError(.unknown)
+    }
+}
+
 /// Serves scripted responses to a real URLSession, so `URLSessionTransport` is tested without a
 /// network. Each script has its own URL, so tests running in parallel do not share one.
 final class ScriptedURLProtocol: URLProtocol, @unchecked Sendable {
@@ -604,6 +644,43 @@ struct SettlementPendingTests {
         #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
         #expect(clock.sleeps == [1])
     }
+
+    @Test("settleAndWait reports each 202 to onPending in order, the upload's first, and never the decision")
+    func settleAndWaitReportsPending() async throws {
+        let stub = StubTransport([APIFixtures.pending(retryAfter: 1), APIFixtures.pending(retryAfter: 3),
+                                  APIFixtures.settled()])
+        let seen = PendingLog()
+        let decision = try await APIFixtures.client(stub, clock: FakeClock())
+            .settleAndWait(note: APIFixtures.note(0), timeout: 30) { seen.append($0) }
+        #expect(decision.status == .settled)
+        #expect(seen.values.map(\.retryAfter) == [1, 3])
+        #expect(seen.values.allSatisfy { $0.noteId == APIFixtures.note(0).noteId })
+    }
+
+    @Test("a cancelled wait sends no further poll, even when the clock's sleep does not notice the cancellation")
+    func cancelledWaitStopsPolling() async throws {
+        // FakeClock's sleep returns at once and ignores cancellation; the task is cancelled when the
+        // upload's 202 arrives, so only the poll's own cancellation check can stop the next request.
+        let stub = StubTransport([APIFixtures.pending(retryAfter: 1), APIFixtures.settled()])
+        let client = APIFixtures.client(stub, clock: FakeClock())
+        // Its own task, so cancelling it never cancels the test.
+        let wait = Task {
+            try await client.settleAndWait(note: APIFixtures.note(0), timeout: 30) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        let result = await wait.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(stub.requests.map(\.httpMethod) == ["POST"])
+    }
+}
+
+/// Collects the pending bodies `settleAndWait` reports.
+final class PendingLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var log: [PendingSettlement] = []
+    var values: [PendingSettlement] { lock.withLock { log } }
+    func append(_ pending: PendingSettlement) { lock.withLock { log.append(pending) } }
 }
 
 @Suite("settlement client: one time budget")
