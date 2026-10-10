@@ -448,3 +448,105 @@ test.describe("a newer recorded failure outranks a recent kept success", () => {
     expect(i.calls()).toBe(0);
   });
 });
+
+// A read the gate held back sends nothing, so it says nothing about the source: a read still
+// inside its window stays current, and only a failure since it (or its age) takes that away.
+// The e2e run that found this: two /judge views missed the empty cache and the first /proof
+// view read now, three GitHub reads in about a second; a /proof view 52 s later was past the
+// 45 s reuse window, the budget (3 a minute) held its read back, and the 52 s old read on a
+// 60 s window was shown as Not checked.
+test.describe("a read the budget holds back leaves a read inside its window current", () => {
+  const GITHUB: GateLimits = { reads: 3, perMs: 60_000, rateLimitPauseMs: 60_000 };
+
+  function proofView(
+    gate: ReadGate,
+    clock: { ms: number },
+    state: { cache: Stamped<string>; kept: Stamped<string> | null },
+    upstream: () => Promise<string>,
+    lastFailure: () => FailedRead | null = () => null,
+  ) {
+    return resolveRead<string>({
+      // The cache's entry from the first /judge view; its own refresh is not due for 5 minutes.
+      cached: async () => state.cache,
+      readNow: () => gate.read("checks", GITHUB, upstream),
+      maxAgeMs: 300_000,
+      currentForMs: 60_000,
+      reuseForMs: 45_000,
+      lastFailure,
+      lastGoodRead: () => state.kept,
+      keepGoodRead: (entry) => {
+        state.kept = entry;
+      },
+      now: () => clock.ms,
+      needCurrent: true,
+    });
+  }
+
+  /** Two /judge views that each missed the empty cache, then the first /proof view: three reads in a second. */
+  async function spendTheBudget() {
+    const clock = { ms: NOW };
+    const gate = new ReadGate(() => clock.ms);
+    const calls = { n: 0 };
+    const upstream = async () => {
+      calls.n += 1;
+      return "checks";
+    };
+    const cache = await gate.read("checks", GITHUB, upstream);
+    clock.ms = NOW + 400;
+    await gate.read("checks", GITHUB, upstream);
+    clock.ms = NOW + 1_000;
+    const state = { cache, kept: null as Stamped<string> | null };
+    const first = await proofView(gate, clock, state, upstream);
+    expect(first).toMatchObject({ ok: true, readAtMs: NOW + 1_000, current: true });
+    expect(calls.n).toBe(3);
+    return { clock, gate, calls, upstream, state };
+  }
+
+  test("52 s later the budget holds the read back: the 52 s old read is still current, and nothing is sent", async () => {
+    const { clock, gate, calls, upstream, state } = await spendTheBudget();
+    clock.ms = NOW + 53_000;
+    const read = await proofView(gate, clock, state, upstream);
+    expect(read).toEqual({ ok: true, data: "checks", readAtMs: NOW + 1_000, staleBecause: null, current: true, shownAtMs: NOW + 53_000, currentForMs: 60_000 });
+    expect(calls.n).toBe(3);
+    // The budget really was spent at that moment: a fourth read is refused.
+    await expect(gate.read("checks", GITHUB, upstream)).rejects.toBeInstanceOf(ReadNotMade);
+  });
+
+  test("the same view with a failure recorded since the kept read: not current, showing that failure", async () => {
+    const { clock, gate, upstream, state } = await spendTheBudget();
+    const failed: FailedRead = { reason: "GitHub did not answer within 10 s", atMs: NOW + 2_000 };
+    clock.ms = NOW + 53_000;
+    const read = await proofView(gate, clock, state, upstream, () => failed);
+    expect(read).toEqual({ ok: true, data: "checks", readAtMs: NOW + 1_000, staleBecause: failed, current: false, shownAtMs: NOW + 53_000, currentForMs: 60_000 });
+  });
+
+  test("a held-back read with only a read past its window: not current, naming the read that was not made", async () => {
+    const notMade = "this server already made 3 reads in the last 10 s, so it did not read again";
+    const i = input({ cached: new Error("nothing cached"), kept: { data: "kept", readAtMs: NOW - 11_000 }, readNow: new ReadNotMade(notMade), needCurrent: true });
+    expect(await resolveRead(i.value)).toEqual(ok("kept", NOW - 11_000, false, { reason: notMade, atMs: NOW, notMade: true }));
+  });
+
+  test("a failure recorded while the page waited for the cache counts: not current, showing it", async () => {
+    const failures: { latest: FailedRead | null } = { latest: null };
+    const failed: FailedRead = { reason: "node is behind", atMs: NOW };
+    const read = await resolveRead<string>({
+      cached: async () => {
+        // The cache's own refresh fails while this page waits for it.
+        failures.latest = failed;
+        throw new Error("nothing cached");
+      },
+      readNow: async () => {
+        throw new ReadNotMade("this server already made 3 reads in the last 10 s, so it did not read again");
+      },
+      maxAgeMs: MAX_AGE,
+      currentForMs: CURRENT_FOR,
+      reuseForMs: 7_000,
+      lastFailure: () => failures.latest,
+      lastGoodRead: () => ({ data: "kept", readAtMs: NOW - 8_000 }),
+      keepGoodRead: () => {},
+      now: () => NOW,
+      needCurrent: true,
+    });
+    expect(read).toEqual(ok("kept", NOW - 8_000, false, failed));
+  });
+});
