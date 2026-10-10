@@ -12,13 +12,14 @@ import {
 import {
   IPHONE_PAIR,
   IPHONE_REFUSED_LABEL,
+  IPHONE_RUN2,
   IPHONE_SETTLED_LABEL,
   PROOF_PAIR,
   PROOF_PAIR_LABEL,
   recordedNoteId,
   recordedTx,
 } from "../lib/proof-pair";
-import { formatEt } from "../lib/time";
+import { formatEt, formatEtClock } from "../lib/time";
 
 // The proof pairs (lib/proof-pair.ts) read their signatures and note ids from docs/FACTS.json.
 // The file is read again here, not through the app, so a wrong value fails instead of passing
@@ -80,6 +81,40 @@ test("each iPhone FACTS entry is measured, says how it was signed and names the 
     "Same allowance and serial signed again on that iPhone, refused by Solana: SerialUsed (6011), Sat Oct 10 4:31 PM ET",
   );
   for (const label of [IPHONE_SETTLED_LABEL, IPHONE_REFUSED_LABEL]) expect(label).not.toMatch(/\blive\b/i);
+});
+
+test("the second iPhone run: FACTS signatures, explorer links and the clock times the home status prints", () => {
+  const RUN2_SETTLED = factsFile.facts.proof_pair_iphone_run2_settled_tx;
+  const RUN2_REFUSED = factsFile.facts.proof_pair_iphone_run2_refused_tx;
+  expect(IPHONE_RUN2.settled.signature).toBe(RUN2_SETTLED.value);
+  expect(IPHONE_RUN2.refused.signature).toBe(RUN2_REFUSED.value);
+  // Typed out here, so a swap or a wrong signature in FACTS fails.
+  expect(IPHONE_RUN2.settled.explorer).toBe(
+    explorer("5bwtrE78DKhuQiANbY6e3ZceitYqtx85buWnVpPP14y5uLTQGLkWdntGKs3f7itYBMCW1Uqsb3ZoqWGpmGu6fF3T"),
+  );
+  expect(IPHONE_RUN2.refused.explorer).toBe(
+    explorer("3uBwo59QKFcXXkGJZRPZw8X8hk6x2Yr2wr69cFDuu6c45wd38N76jBoshsEgbc2SKzAHWssUmfpSf9ACgnnUT6HK"),
+  );
+  for (const entry of [RUN2_SETTLED, RUN2_REFUSED]) {
+    expect(entry.kind).toBe("measured");
+    expect(entry.status).toBe("measured");
+    expect(entry.source).toContain("getTransaction");
+    expect(entry.caveat).toContain("Second iPhone run");
+  }
+  expect(RUN2_SETTLED.source).toContain("meta.err null");
+  expect(RUN2_REFUSED.source).toContain("Custom 6011");
+  // A different run from the first iPhone pair, and later than it.
+  const firstRun = [IPHONE_PAIR.settled.signature, IPHONE_PAIR.refused.signature];
+  expect(firstRun).not.toContain(IPHONE_RUN2.settled.signature);
+  expect(firstRun).not.toContain(IPHONE_RUN2.refused.signature);
+  expect(IPHONE_PAIR.refused.blockTimeMs).toBeLessThan(IPHONE_RUN2.settled.blockTimeMs);
+  expect(IPHONE_RUN2.settled.blockTimeMs).toBeLessThan(IPHONE_RUN2.refused.blockTimeMs);
+  expect(formatEt(IPHONE_RUN2.settled.blockTimeMs)).toBe("Sat, Oct 10, 5:05:58 PM ET");
+  expect(formatEt(IPHONE_RUN2.refused.blockTimeMs)).toBe("Sat, Oct 10, 5:09:39 PM ET");
+  // The home status card's times.
+  expect(
+    [IPHONE_PAIR.settled, IPHONE_RUN2.settled, IPHONE_PAIR.refused, IPHONE_RUN2.refused].map((t) => formatEtClock(t.blockTimeMs)),
+  ).toEqual(["4:23 PM", "5:05 PM", "4:31 PM", "5:09 PM"]);
 });
 
 test("the earlier test-key pair: FACTS signatures, explorer links and block times", () => {
