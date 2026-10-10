@@ -16,7 +16,7 @@ export { computeStats, sandboxUsd, type Stats, type Figures } from './stats.js';
  */
 export async function installEvents(options: {
   app: FastifyInstance; database: Database; deployment: P.Deployment; canaryKeyHashes?: string[];
-  intervalMs?: number; maxClients?: number;
+  intervalMs?: number; maxClients?: number; maxBufferedBytes?: number;
 }): Promise<{ store: EventStore; feed: EventFeed }> {
   const canary = new Set(options.canaryKeyHashes ?? []);
   for (const hash of canary) if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('Invalid canary key hash');
@@ -24,8 +24,10 @@ export async function installEvents(options: {
   const store = new EventStore(options.database, options.deployment, sourceOf);
   await store.migrate();
   const feed = new EventFeed(store, options.intervalMs);
+  await feed.init();
   feed.start(() => options.app.log.error({ module: 'events' }, 'event projection failed'));
   options.app.addHook('onClose', async () => feed.stop());
-  registerEventRoutes(options.app, { database: options.database, store, feed, maxClients: options.maxClients });
+  registerEventRoutes(options.app, { database: options.database, store, feed, maxClients: options.maxClients,
+    maxBufferedBytes: options.maxBufferedBytes });
   return { store, feed };
 }

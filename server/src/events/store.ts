@@ -37,39 +37,58 @@ export class EventStore {
       signature text NOT NULL, explorer text NOT NULL, slot bigint NOT NULL, block_time bigint NOT NULL,
       uploaded_at bigint NOT NULL, received_at bigint
     )`);
+    // True once a row was projected with the journal's ACK present, so a later ACK refreshes it exactly once.
+    await this.db.query('ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS ack_projected boolean NOT NULL DEFAULT false');
   }
 
   /**
-   * Copies new or changed decisions from the settlement journal and returns the rows written, oldest first.
-   * A decision can be replaced once (settle/store.ts finish), so a changed signature rewrites the row with a new seq.
+   * Copies new or changed decisions from the settlement journal and returns how many rows it wrote. A row is
+   * rewritten with a new seq when its decision is replaced (settle/store.ts finish) or when an ACK arrives after
+   * settlement (settle/store.ts attachAck). Readers find written rows by seq (since), so a write that fails
+   * part way through still leaves every saved row deliverable.
    */
-  async project(limit = 200): Promise<PaymentEvent[]> {
+  async project(limit = 200): Promise<number> {
     const { rows } = await this.db.query<Record<string, unknown>>(`SELECT s.note_id AS "noteId", s.note, s.ack, s.decision
       FROM settlement_attempts s LEFT JOIN payment_events e ON e.note_id = s.note_id
-      WHERE s.decision IS NOT NULL AND (e.note_id IS NULL OR e.signature <> s.decision->>'signature')
+      WHERE s.decision IS NOT NULL AND (e.note_id IS NULL OR e.signature <> s.decision->>'signature'
+        OR (s.ack IS NOT NULL AND NOT e.ack_projected))
       ORDER BY (s.decision->>'blockTime')::bigint, s.note_id LIMIT $1`, [limit]);
-    const written: PaymentEvent[] = [];
+    let written = 0;
     for (const row of rows as unknown as JournalRow[]) {
       const fields = this.fields(row);
       if (!fields) continue;
       const result = await this.db.query<Record<string, unknown>>(`INSERT INTO payment_events
-        (note_id, seq, source, status, error, amount_units, signature, explorer, slot, block_time, uploaded_at, received_at)
-        VALUES ($1, nextval('payment_events_seq'), $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11)
+        (note_id, seq, source, status, error, amount_units, signature, explorer, slot, block_time, uploaded_at, received_at, ack_projected)
+        VALUES ($1, nextval('payment_events_seq'), $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (note_id) DO UPDATE SET seq = nextval('payment_events_seq'), status = EXCLUDED.status,
           error = EXCLUDED.error, signature = EXCLUDED.signature, explorer = EXCLUDED.explorer, slot = EXCLUDED.slot,
-          block_time = EXCLUDED.block_time, uploaded_at = EXCLUDED.uploaded_at, received_at = EXCLUDED.received_at
+          block_time = EXCLUDED.block_time, uploaded_at = EXCLUDED.uploaded_at, received_at = EXCLUDED.received_at,
+          ack_projected = EXCLUDED.ack_projected
         WHERE payment_events.signature <> EXCLUDED.signature
-        RETURNING ${columns}`, fields);
-      if (result.rows[0]) written.push(toEvent(result.rows[0]));
+          OR (EXCLUDED.ack_projected AND NOT payment_events.ack_projected)
+        RETURNING note_id`, fields);
+      written += result.rows.length;
     }
     return written;
   }
 
-  /** Newest events after `afterSeq` (oldest first), for SSE catch-up. */
+  /** The next events after `afterSeq`, oldest first: page through a gap without skipping any. */
   async since(afterSeq: number, limit: number): Promise<PaymentEvent[]> {
-    const { rows } = await this.db.query<Record<string, unknown>>(`SELECT * FROM (SELECT ${columns} FROM payment_events
-      WHERE seq > $1 ORDER BY seq DESC LIMIT $2) recent ORDER BY seq`, [afterSeq, limit]);
+    const { rows } = await this.db.query<Record<string, unknown>>(`SELECT ${columns} FROM payment_events
+      WHERE seq > $1 ORDER BY seq LIMIT $2`, [afterSeq, limit]);
     return rows.map(toEvent);
+  }
+
+  /** The newest `limit` events, oldest first: the backlog for a viewer with nothing to resume. */
+  async latest(limit: number): Promise<PaymentEvent[]> {
+    const { rows } = await this.db.query<Record<string, unknown>>(`SELECT * FROM (SELECT ${columns} FROM payment_events
+      ORDER BY seq DESC LIMIT $1) recent ORDER BY seq`, [limit]);
+    return rows.map(toEvent);
+  }
+
+  async maxSeq(): Promise<number> {
+    const { rows } = await this.db.query<{ seq: string | null }>('SELECT MAX(seq)::text AS seq FROM payment_events');
+    return Number(rows[0]?.seq ?? 0);
   }
 
   private fields(row: JournalRow): unknown[] | null {
@@ -81,6 +100,6 @@ export class EventStore {
       try { receivedAt = Number(P.verifyAckWire(P.base64urlDecode(row.ack), validated).receivedAt); } catch { receivedAt = null; }
     }
     return [row.noteId, this.sourceOf(P.toHex(validated.payerKeyHash)), d.status, d.error ?? null,
-      validated.note.amount.toString(), d.signature, d.explorer, d.slot, d.blockTime, d.uploadedAt, receivedAt];
+      validated.note.amount.toString(), d.signature, d.explorer, d.slot, d.blockTime, d.uploadedAt, receivedAt, row.ack !== null];
   }
 }

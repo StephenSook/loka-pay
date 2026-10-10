@@ -2,14 +2,20 @@ import type { EventStore, PaymentEvent } from './store.js';
 
 type Listener = (event: PaymentEvent) => void;
 
+const PAGE = 200;
+const MAX_PAGES_PER_TICK = 10;
+
 /**
  * Polls the settlement journal and fans each new event out to SSE listeners. One poller per process;
  * the 500 ms default keeps a confirmation on /live well inside the 2 s target (PLAN.md 2.10).
+ * Delivery reads payment_events from the feed's own seq position, so rows saved by a projection that
+ * later failed part way are still broadcast.
  */
 export class EventFeed {
   private readonly listeners = new Set<Listener>();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private position = 0;
 
   constructor(private readonly store: EventStore, private readonly intervalMs = 500) {}
 
@@ -20,14 +26,28 @@ export class EventFeed {
     return () => { this.listeners.delete(listener); };
   }
 
-  /** One projection pass. Exposed for tests; the timer calls it. */
+  /** Starts delivery after the newest saved event; earlier ones are served as /live backlog instead. */
+  async init(): Promise<void> { this.position = await this.store.maxSeq(); }
+
+  /** One projection and delivery pass; returns what it delivered. Exposed for tests; the timer calls it. */
   async tick(): Promise<PaymentEvent[]> {
     if (this.running) return [];
     this.running = true;
     try {
-      const events = await this.store.project();
-      for (const event of events) for (const listener of this.listeners) listener(event);
-      return events;
+      let failure: unknown = null;
+      try { await this.store.project(); } catch (error) { failure = error; }
+      const delivered: PaymentEvent[] = [];
+      for (let page = 0; page < MAX_PAGES_PER_TICK; page++) {
+        const events = await this.store.since(this.position, PAGE);
+        for (const event of events) {
+          this.position = event.seq;
+          delivered.push(event);
+          for (const listener of this.listeners) listener(event);
+        }
+        if (events.length < PAGE) break;
+      }
+      if (failure) throw failure;
+      return delivered;
     } finally { this.running = false; }
   }
 

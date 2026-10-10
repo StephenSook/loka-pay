@@ -1,3 +1,4 @@
+import type { ServerResponse } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 import type { Database } from '../settle/store.js';
 import type { EventFeed } from './feed.js';
@@ -6,15 +7,27 @@ import { computeStats } from './stats.js';
 import { RUNS } from './runs.js';
 
 const BACKLOG = 20;
-const RESUME_LIMIT = 200;
+const RESUME_PAGE = 200;
+/** A viewer more than this many events behind gets a `reset` event and continues from now. */
+const RESUME_MAX = 1000;
 const KEEPALIVE_MS = 15_000;
+/** Bytes queued for one viewer before it is disconnected; 256 KiB is several hundred events. */
+const MAX_BUFFERED_BYTES = 256 * 1024;
+/** How long a backlog replay waits for a viewer's socket to drain before dropping it. */
+const DRAIN_TIMEOUT_MS = 10_000;
 
-export interface EventRouteOptions { database: Database; store: EventStore; feed: EventFeed; maxClients?: number }
+export interface EventRouteOptions {
+  database: Database; store: EventStore; feed: EventFeed; maxClients?: number; maxBufferedBytes?: number;
+}
 
 const frame = (event: PaymentEvent) => `id: ${event.seq}\nevent: payment\ndata: ${JSON.stringify(event)}\n\n`;
 
 export function registerEventRoutes(app: FastifyInstance, options: EventRouteOptions): void {
   const maxClients = options.maxClients ?? 500;
+  const maxBuffered = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES;
+  // Open streams are ended before Fastify waits for connections to drain, so SIGTERM is not held by viewers.
+  const open = new Set<ServerResponse>();
+  app.addHook('preClose', async () => { for (const raw of open) raw.end(); open.clear(); });
 
   app.get<{ Querystring: { run?: string; include?: string } }>('/api/stats', async (request, reply) => {
     const { run, include } = request.query;
@@ -52,24 +65,57 @@ export function registerEventRoutes(app: FastifyInstance, options: EventRouteOpt
     // Subscribe before reading the backlog so nothing projected in between is lost; seq orders and dedupes.
     let lastSent = resume ?? 0;
     let pending: PaymentEvent[] | null = [];
-    const send = (event: PaymentEvent) => {
-      if (event.seq <= lastSent || raw.destroyed) return;
-      lastSent = event.seq;
-      raw.write(frame(event));
+    const write = (text: string) => {
+      if (raw.destroyed) return;
+      raw.write(text);
+      // A viewer that cannot keep up is dropped rather than buffered without bound; EventSource reconnects and resumes.
+      if (raw.writableLength > maxBuffered) raw.destroy();
     };
+    const send = (event: PaymentEvent) => {
+      if (event.seq <= lastSent) return;
+      lastSent = event.seq;
+      write(frame(event));
+    };
+    open.add(raw);
     const unsubscribe = options.feed.subscribe(event => { if (pending) pending.push(event); else send(event); });
-    const keepalive = setInterval(() => { if (!raw.destroyed) raw.write(': keepalive\n\n'); }, KEEPALIVE_MS);
+    const keepalive = setInterval(() => write(': keepalive\n\n'), KEEPALIVE_MS);
     keepalive.unref();
-    request.raw.on('close', () => { clearInterval(keepalive); unsubscribe(); });
+    raw.on('close', () => { clearInterval(keepalive); unsubscribe(); open.delete(raw); });
+
+    // Backlog replay respects backpressure: after each page it waits for the socket to drain.
+    const drained = () => new Promise<boolean>(resolve => {
+      if (raw.destroyed) return resolve(false);
+      if (!raw.writableNeedDrain) return resolve(true);
+      const done = (ok: boolean) => { clearTimeout(timer); raw.off('drain', onDrain); raw.off('close', onClose); resolve(ok); };
+      const onDrain = () => done(true), onClose = () => done(false);
+      const timer = setTimeout(() => { raw.destroy(); done(false); }, DRAIN_TIMEOUT_MS);
+      raw.on('drain', onDrain); raw.on('close', onClose);
+    });
+    const page = (events: PaymentEvent[]) => { for (const event of events) if (event.seq > lastSent) { lastSent = event.seq; raw.write(frame(event)); } };
 
     try {
-      const backlog = await options.store.since(resume ?? 0, resume === null ? BACKLOG : RESUME_LIMIT);
-      for (const event of backlog) send(event);
+      if (resume === null) {
+        page(await options.store.latest(BACKLOG));
+      } else {
+        // Page forward from the resume point so no missed payment is skipped; past RESUME_MAX, say so instead.
+        let sent = 0;
+        for (;;) {
+          const events = await options.store.since(lastSent, RESUME_PAGE);
+          page(events);
+          sent += events.length;
+          if (!(await drained()) || events.length < RESUME_PAGE) break;
+          if (sent >= RESUME_MAX) {
+            lastSent = await options.store.maxSeq();
+            write(`id: ${lastSent}\nevent: reset\ndata: {"reason":"gap_too_large","reload":"/api/stats"}\n\n`);
+            break;
+          }
+        }
+      }
     } catch {
-      raw.write('event: error\ndata: {"error":"backlog_unavailable"}\n\n');
+      write('event: error\ndata: {"error":"backlog_unavailable"}\n\n');
     }
     const queued = pending;
     pending = null;
-    for (const event of queued.sort((a, b) => a.seq - b.seq)) send(event);
+    if (!raw.destroyed) for (const event of queued.sort((a, b) => a.seq - b.seq)) send(event);
   });
 }

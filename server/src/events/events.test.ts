@@ -144,11 +144,12 @@ test('sandbox USD keeps every base unit', () => {
 });
 
 /** Reads SSE frames from a live server until `until` is satisfied or the time runs out. */
-async function readEvents(url: string, headers: Record<string, string>, until: (events: { id: number; data: Record<string, unknown> }[]) => boolean, ms = 3000) {
+type Frame = { id: number; type: string; data: Record<string, unknown> };
+async function readEvents(url: string, headers: Record<string, string>, until: (events: Frame[]) => boolean, ms = 3000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ms);
   const response = await fetch(url, { headers, signal: controller.signal });
-  const events: { id: number; data: Record<string, unknown> }[] = [];
+  const events: Frame[] = [];
   const decoder = new TextDecoder();
   let buffer = '';
   try {
@@ -157,8 +158,8 @@ async function readEvents(url: string, headers: Record<string, string>, until: (
       let end;
       while ((end = buffer.indexOf('\n\n')) >= 0) {
         const block = buffer.slice(0, end); buffer = buffer.slice(end + 2);
-        const id = /^id: (\d+)$/m.exec(block), data = /^data: (.*)$/m.exec(block);
-        if (id && data && /^event: payment$/m.test(block)) events.push({ id: Number(id[1]), data: JSON.parse(data[1]) });
+        const id = /^id: (\d+)$/m.exec(block), data = /^data: (.*)$/m.exec(block), type = /^event: (\w+)$/m.exec(block);
+        if (id && data && type) events.push({ id: Number(id[1]), type: type[1], data: JSON.parse(data[1]) });
       }
       if (until(events)) break;
     }
@@ -205,3 +206,85 @@ test('/live refuses new viewers past the cap with 503 instead of holding sockets
   const busy = await app.inject({ url: '/live' });
   expect([busy.statusCode, busy.json().error, busy.headers['retry-after']]).toEqual([503, 'busy', '30']);
 });
+
+/** Writes `count` settled rows straight into payment_events, as the projector would. */
+async function seedEvents(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, count: number, offset = 0) {
+  await db.query(`INSERT INTO payment_events (note_id, seq, source, status, error, amount_units, signature, explorer, slot, block_time, uploaded_at, received_at)
+    SELECT lpad(to_hex(n), 64, '0'), nextval('payment_events_seq'), 'phone_ble', 'settled', NULL, 1, 'sig', 'url', n, 2000 + n, 1000 + n, NULL
+    FROM generate_series($2::int + 1, $2::int + $1::int) AS n`, [count, offset]);
+}
+
+test('an ACK that arrives after settlement refreshes the event once, so the receipt timings count it', async () => {
+  const f = await fixture();
+  await f.post({ note: wire(0) });
+  const [first] = await f.events.feed.tick();
+  expect(first.receivedAt).toBeNull();
+  expect((await f.app.inject({ url: '/api/stats' })).json().totals.heldOfflineSeconds.n).toBe(0);
+  await f.post({ note: wire(0), ack: ack0 });
+  const [refreshed, ...rest] = await f.events.feed.tick();
+  expect(rest).toEqual([]);
+  expect(refreshed).toMatchObject({ noteId: first.noteId, signature: first.signature, receivedAt: Number(vectors.acks[0].fields.receivedAt) });
+  expect(refreshed.seq).toBeGreaterThan(first.seq);
+  expect(await f.events.feed.tick()).toEqual([]);
+  expect((await f.app.inject({ url: '/api/stats' })).json().totals.heldOfflineSeconds.n).toBe(1);
+});
+
+test('rows saved before a projection fails part way are still delivered, and the failure still surfaces', async () => {
+  const f = await fixture();
+  const seen: string[] = [];
+  f.events.feed.subscribe(event => seen.push(event.noteId));
+  await f.post({ note: wire(0) });
+  const project = f.events.store.project.bind(f.events.store);
+  vi.spyOn(f.events.store, 'project').mockImplementationOnce(async () => { await project(); throw new Error('write failed'); });
+  await expect(f.events.feed.tick()).rejects.toThrow('write failed');
+  expect(seen).toEqual([vectors.notes[0].noteIdHex]);
+  expect(await f.events.feed.tick()).toEqual([]);
+});
+
+test('a resume pages forward through a long gap in order, and past 1000 missed events it sends reset', async () => {
+  const f = await fixture({ listen: true });
+  const base = `http://127.0.0.1:${(f.app.server.address() as AddressInfo).port}`;
+  await seedEvents(f.db, 450);
+  const paged = await readEvents(`${base}/live`, { 'last-event-id': '1' }, list => list.length >= 449);
+  expect(paged.events.map(e => e.id)).toEqual(Array.from({ length: 449 }, (_, i) => i + 2));
+  await seedEvents(f.db, 900, 450);
+  const gap = await readEvents(`${base}/live`, { 'last-event-id': '1' }, list => list.some(e => e.type === 'reset'));
+  const payments = gap.events.filter(e => e.type === 'payment');
+  expect(payments).toHaveLength(1000);
+  expect(payments.map(e => e.id)).toEqual(Array.from({ length: 1000 }, (_, i) => i + 2));
+  expect(gap.events.at(-1)).toMatchObject({ type: 'reset', id: 1350, data: { reason: 'gap_too_large' } });
+}, 20000);
+
+test('closing the app ends open /live streams instead of waiting for viewers to leave', async () => {
+  const f = await fixture({ listen: true });
+  const base = `http://127.0.0.1:${(f.app.server.address() as AddressInfo).port}`;
+  const viewer = await fetch(`${base}/live`);
+  const reader = viewer.body!.getReader();
+  await reader.read();
+  expect(f.events.feed.size).toBe(1);
+  const started = Date.now();
+  await f.app.close();
+  expect(Date.now() - started).toBeLessThan(1000);
+  for (;;) if ((await reader.read()).done) break;
+});
+
+test('a viewer that stops reading is disconnected once its queued live bytes pass the limit', async () => {
+  const db = await testDatabase();
+  closers.push(() => db.close());
+  await new SettlementStore(db).migrate();
+  const app = Fastify({ logger: false });
+  const events = await installEvents({ app, database: db, deployment, intervalMs: 3_600_000, maxBufferedBytes: 64 * 1024 });
+  closers.push(() => app.close());
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const controller = new AbortController();
+  closers.push(async () => controller.abort());
+  // Connects, then never reads its body while 2000 live events (about 600 KB) are pushed at it.
+  const response = await fetch(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/live`, { signal: controller.signal });
+  expect(response.status).toBe(200);
+  expect(events.feed.size).toBe(1);
+  await seedEvents(db, 2000);
+  await events.feed.tick();
+  const deadline = Date.now() + 5000;
+  while (events.feed.size > 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  expect(events.feed.size).toBe(0);
+}, 15000);
