@@ -318,6 +318,32 @@ struct AllowanceImportTests {
         #expect(PayModel.defaultChoice([setup, a, b], serialsLeft: { _ in nil }) == setup)
         #expect(PayModel.defaultChoice([setup], serialsLeft: { _ in 256 }) == setup)
     }
+
+    @Test("an import that expires while the screen is open drops off the list and cannot be selected (Codex)")
+    func expiresWhileOpen() throws {
+        let clock = ImportTestClock(F.now)
+        let model = PayModel(allowanceWire: setupWire, signer: payer, serials: serials, deployment: F.deployment,
+                             serverPublicKey: F.serverKey, locale: Locale(identifier: "en_US_POSIX"), now: { clock.now })
+        model.importAllowance(text: code(allowWire(payer: payer.keyHash, id: 6_006, expiry: 1_800_000_500)))
+        model.selectAllowance(id: F.allowanceId)
+        #expect(model.allowanceChoices.map(\.certificate.allowanceId) == [F.allowanceId, 6_006])
+        clock.now = Date(timeIntervalSince1970: 1_800_000_501)
+        #expect(model.allowanceChoices.map(\.certificate.allowanceId) == [F.allowanceId])
+        model.selectAllowance(id: 6_006)
+        #expect(model.issue?.kind == .payment(.expired))
+        #expect(model.allowance?.certificate.allowanceId == F.allowanceId)
+    }
+}
+
+/// A clock a test moves forward.
+private final class ImportTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+    init(_ start: Date) { value = start }
+    var now: Date {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
 }
 
 private extension ScreenFixtures {

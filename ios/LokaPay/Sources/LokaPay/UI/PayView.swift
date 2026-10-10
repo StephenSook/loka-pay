@@ -234,10 +234,11 @@ public struct PayView: View {
 
     /// Which allowance Pay signs with, when this phone holds more than one.
     @ViewBuilder private var allowanceChooser: some View {
-        if model.allowances.count > 1 {
+        let choices = model.allowanceChoices
+        if choices.count > 1 {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Pay with").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
-                ForEach(model.allowances.reversed(), id: \.certificate.allowanceId) { choice in
+                ForEach(choices.reversed(), id: \.certificate.allowanceId) { choice in
                     let selected = choice.certificate.allowanceId == model.allowance?.certificate.allowanceId
                     Button { model.selectAllowance(id: choice.certificate.allowanceId) } label: {
                         HStack(alignment: .top, spacing: 10) {

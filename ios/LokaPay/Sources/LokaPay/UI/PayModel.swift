@@ -238,9 +238,21 @@ public final class PayModel {
     /// allowance from setup; nil until it verified.
     public var allowanceIdCodeText: String? { setupAllowanceId.map(AllowanceIdCode.encode) }
 
-    /// Pay uses the allowance with this id from `allowances`.
+    /// The "Pay with" list: the allowance from setup, the one in use, and every import still
+    /// unexpired on this phone's clock now. An import that expired while the screen was open drops off.
+    public var allowanceChoices: [PayerAllowance] {
+        let nowSeconds = Int64(now().timeIntervalSince1970)
+        return allowances.filter { choice in
+            choice.importedAt == nil || choice.certificate.allowanceId == allowance?.certificate.allowanceId
+                || nowSeconds <= choice.certificate.expiry
+        }
+    }
+
+    /// Pay uses the allowance with this id from `allowances`, unless it has expired by now.
     public func selectAllowance(id: UInt64) {
         guard canChangeAllowance, let choice = allowances.first(where: { $0.certificate.allowanceId == id }) else { return }
+        // Checked now, not only when it was added: the screen can stay open past its expiry.
+        guard Int64(now().timeIntervalSince1970) <= choice.certificate.expiry else { return report(.payment(.expired)) }
         use(choice)
         issue = nil
         importNote = nil
