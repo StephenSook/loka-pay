@@ -83,7 +83,7 @@ test('redeem targets the published deployment program and config account', () =>
   expect(redeem.keys[0].pubkey.toBase58()).toBe(pins.accounts.config);
 });
 
-test('signs one transaction, skips preflight, sets zero retries and never reads program state', async () => {
+test('signs one transaction, keeps preflight on, sets zero retries and never reads spend state', async () => {
   const payer = Keypair.generate(); // Ephemeral local signing test only.
   const connection = {
     getFeeForMessage: vi.fn(async () => ({ value: 5000 })),
@@ -99,7 +99,26 @@ test('signs one transaction, skips preflight, sets zero retries and never reads 
   expect(transaction.feePayer?.equals(payer.publicKey)).toBe(true);
   expect(transaction.instructions).toHaveLength(2);
   await chain.send(attempt);
-  expect(connection.sendRawTransaction).toHaveBeenCalledExactlyOnceWith(Buffer.from(attempt.rawTransaction, 'base64'), { skipPreflight: true, maxRetries: 0 });
+  expect(connection.sendRawTransaction).toHaveBeenCalledExactlyOnceWith(Buffer.from(attempt.rawTransaction, 'base64'), { skipPreflight: false, maxRetries: 0 });
+});
+
+test('only an explicitly selected deliberate devnet cheat skips preflight', async () => {
+  const payer = Keypair.generate();
+  const rpc = { sendRawTransaction: vi.fn(async () => 'saved') };
+  const gateway = new SolanaGateway(rpc as unknown as Connection, payer, { deliberateCheat: true });
+  await gateway.send({ signature: 'saved', rawTransaction: 'AA==', blockhash: 'unused', lastValidBlockHeight: 1 });
+  expect(rpc.sendRawTransaction).toHaveBeenCalledWith(Buffer.from('AA==', 'base64'), { skipPreflight: true, maxRetries: 0 });
+});
+
+test('measurement budgets preserve the adjacent precompile and redeem required by deployed code', () => {
+  const transaction = buildRedeemTransaction(validated, { units: 110000, loadedBytes: 65536 });
+  expect(transaction.instructions.map(ix => ix.programId.toBase58())).toEqual([
+    'ComputeBudget111111111111111111111111111111', 'ComputeBudget111111111111111111111111111111',
+    P.SECP256R1_PROGRAM_ID, new PublicKey(deployment.programId).toBase58(),
+  ]);
+  expect(transaction.instructions[0].data.readUInt32LE(1)).toBe(110000);
+  expect(transaction.instructions[1].data[0]).toBe(4);
+  expect(transaction.instructions[1].data.readUInt32LE(1)).toBe(65536);
 });
 
 test('only confirmed or finalized statuses with a real block time become decisions', async () => {

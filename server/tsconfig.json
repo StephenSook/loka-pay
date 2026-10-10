@@ -4,5 +4,5 @@
     "strict": true, "noEmit": true, "esModuleInterop": true,
     "skipLibCheck": true, "types": ["node"]
   },
-  "include": ["src/main.ts", "src/app/**/*.ts", "src/events/**/*.ts", "src/settle/**/*.ts", "src/certs/**/*.ts", "src/remit/**/*.ts", "src/notes/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "vitest.config.ts"]
 }

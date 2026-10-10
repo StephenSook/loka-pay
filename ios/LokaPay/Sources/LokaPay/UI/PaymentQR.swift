@@ -85,9 +85,6 @@ struct PaymentQRView: View {
                 .font(LokaStyle.label)
                 .foregroundStyle(LokaColor.ink)
                 .multilineTextAlignment(.center)
-            Text(String(text.utf8.count) + " characters, error correction M")
-                .font(LokaStyle.caption)
-                .foregroundStyle(LokaColor.muted)
         }
         .frame(maxWidth: .infinity)
     }

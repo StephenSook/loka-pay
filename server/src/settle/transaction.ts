@@ -3,7 +3,7 @@ import { base58 } from '@scure/base';
 import { BorshAccountsCoder } from '@anchor-lang/core';
 import * as P from '@lokapay/protocol';
 import {
-  Connection, PublicKey, Transaction, TransactionInstruction,
+  ComputeBudgetProgram, Connection, PublicKey, Transaction, TransactionInstruction,
   type Signer, type TransactionError,
 } from '@solana/web3.js';
 import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt, FeeQuote } from './types.js';
@@ -12,7 +12,7 @@ const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.js
 const redeem = idl.instructions.find((ix: { name: string }) => ix.name === 'redeem_note');
 if (!redeem || redeem.args[0]?.type?.array?.[1] !== P.SIZES.NOTE_V1) throw new Error('Unexpected redeem_note IDL');
 
-export function buildRedeemTransaction(note: P.ValidatedNote): Transaction {
+export function buildRedeemTransaction(note: P.ValidatedNote, limits?: { units: number; loadedBytes: number }): Transaction {
   const program = new PublicKey(note.note.programId);
   const pda = (...seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, program)[0];
   const id = Buffer.alloc(8);
@@ -34,7 +34,16 @@ export function buildRedeemTransaction(note: P.ValidatedNote): Transaction {
     // Anchor's fixed [u8;141] has no length prefix. The discriminator comes from the reviewed IDL.
     data: Buffer.concat([Buffer.from(redeem.discriminator), Buffer.from(note.noteBytes)]),
   });
-  return new Transaction().add(precompile, instruction);
+  const transaction = new Transaction();
+  if (limits) {
+    if (!Number.isSafeInteger(limits.units) || limits.units <= 0 || limits.units > 1400000
+      || !Number.isSafeInteger(limits.loadedBytes) || limits.loadedBytes <= 0 || limits.loadedBytes > 64 * 1024 * 1024) throw new Error('Invalid redeem budget');
+    // web3.js 1.x has no helper for this compute-budget enum variant: tag 4, then u32 LE.
+    const loaded = Buffer.alloc(5); loaded[0] = 4; loaded.writeUInt32LE(limits.loadedBytes, 1);
+    transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units: limits.units }),
+      new TransactionInstruction({ programId: ComputeBudgetProgram.programId, keys: [], data: loaded }));
+  }
+  return transaction.add(precompile, instruction);
 }
 
 export function decodeChainError(error: TransactionError | null): { error: string | null; errorCode: number | null } {
@@ -51,7 +60,8 @@ export function decodeChainError(error: TransactionError | null): { error: strin
 }
 
 export class SolanaGateway implements ChainGateway {
-  constructor(private readonly connection: Connection, private readonly feePayer: Signer) {}
+  constructor(private readonly connection: Connection, private readonly feePayer: Signer,
+    private readonly options: { deliberateCheat?: boolean } = {}) {}
 
   async checkIdentity(note: P.ValidatedNote): Promise<IdentityRefusal | null> {
     const program = new PublicKey(note.note.programId);
@@ -100,9 +110,9 @@ export class SolanaGateway implements ChainGateway {
   }
 
   async send(attempt: PreparedAttempt): Promise<void> {
-    // No simulation or state lookup. Disable RPC rebroadcast retries as well as application retries.
+    // Normal uploads use RPC preflight. Only the operator's deliberate devnet cheat bypasses it.
     const signature = await this.connection.sendRawTransaction(Buffer.from(attempt.rawTransaction, 'base64'),
-      { skipPreflight: true, maxRetries: 0 });
+      { skipPreflight: this.options.deliberateCheat === true, maxRetries: 0 });
     if (signature !== attempt.signature) throw new Error('RPC returned a different transaction signature');
   }
 

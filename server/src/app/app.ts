@@ -8,6 +8,7 @@ import { installSettlement } from '../settle/index.js';
 import { installEvents } from '../events/index.js';
 import { installRegistration, validateRegistrationPins, type Wallets, type Policy, type PoolName } from '../remit/index.js';
 import type { ShellPins } from './config.js';
+import { installPhase3, type Phase3Config } from './phase3.js';
 
 export interface ShellOptions {
   database: Database; connection: Connection; pins: ShellPins; wallets: Wallets; certificateSeed: Uint8Array;
@@ -19,6 +20,7 @@ export interface ShellOptions {
   eventIntervalMs?: number;
   /** Requests per client per minute before the burst guard answers 429. */
   burstLimit?: number;
+  phase3?: Phase3Config;
 }
 
 const BURST_WINDOW_MS = 60_000;
@@ -71,15 +73,17 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
       .send({ error: 'rate_limited', message: 'Too many requests from this network. Retry in one minute.' });
   });
   app.addHook('onResponse', async (request, reply) => {
-    request.log.info({ method: request.method, route: request.routeOptions.url ?? 'unmatched', status: reply.statusCode });
+    app.log.info({ method: request.method, route: request.routeOptions.url ?? 'unmatched', status: reply.statusCode });
   });
   app.setNotFoundHandler(async (_request, reply) => reply.code(404).send({ error: 'unknown_route', message: 'Unknown API route.' }));
   app.setErrorHandler(async (_error, _request, reply) =>
     reply.code(500).send({ error: 'internal_error', message: 'Internal error.' }));
 
   // API-V1 section 6: the slot is read live on every call; 503 with ok false when the RPC cannot be reached.
+  const phase3Routes = await installPhase3({ app, database: options.database, connection: options.connection,
+    pins: options.pins, deployment, certificateSeed: seed, config: options.phase3 });
   app.get('/api/health', async (_request, reply) => {
-    const base = { commit: options.commit, cluster: 'devnet', programId: options.pins.programId };
+    const base = { commit: options.commit, cluster: 'devnet', programId: options.pins.programId, phase3Routes };
     try {
       const slot = await Promise.race([
         options.connection.getSlot('confirmed'),

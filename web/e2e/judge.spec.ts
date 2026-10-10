@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 // Typed out here on purpose, not imported from the app, so a copy change shows up
 // as a failing test instead of passing by construction.
 const SENTENCE =
-  "When the network or the bank goes down, LOKA Pay lets phones in airplane mode pay each other over Bluetooth, and the shop's phone settles on Solana's public test network the moment it finds signal.";
+  "When the network or the bank goes down, LOKA Pay lets a phone in airplane mode pay a shop's phone directly, in one hop over Bluetooth or a QR code, and the shop's phone settles the payment on Solana devnet when it finds signal.";
 const STATUS = "Built this weekend at Hacklanta II. The payment loop is being built now.";
 
 /** Records every request the page makes and which of them left our origin. */
@@ -84,6 +84,14 @@ test("privacy: loads with no login and says what is true today", async ({
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
   await expect(main).toContainText("The settlement server at api.zerobars.us is running on Solana devnet.");
   await expect(main).not.toContainText("not live");
+  // The server is merged: the table follows its code, and nothing says it is still under review.
+  await expect(main).not.toContainText(/in\s+review/i);
+  await expect(main).toContainText(
+    "All but the last two rows of the table below are what it stores, read from its code (server/ in the repository); the last two are what the /call page handles.",
+  );
+  await expect(main).toContainText("The /proof page reads its public health check (api.zerobars.us/api/health) from our web server");
+  const addressRow = main.getByRole("row", { name: /A keyed hash of your network address/ });
+  await expect(addressRow).toContainText("never written to its database or logs");
   await expect(page.getByRole("heading", { name: "What we store" })).toBeVisible();
   await expect(main.getByRole("table")).toContainText("A merchant's display name, typed by the merchant");
   const numberRow = main.getByRole("row", { name: /Your phone number, if you ask for a call on \/call/ });

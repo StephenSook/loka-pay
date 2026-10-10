@@ -419,7 +419,15 @@ public struct SettlementClient: Sendable {
 
     /// Uploads a note and, while it is in flight, polls until the chain decides. `timeout` is one
     /// budget for the upload, every poll and every retry; `.stillPending` when it runs out.
-    public func settleAndWait(note: SignedNote, ack: Ack? = nil, timeout: TimeInterval) async throws -> SettlementDecision {
+    /// `onPending` hears each HTTP 202 for the note (the upload's, then each poll's), in order,
+    /// before the next wait: the server holds an attempt for that note id. Unsigned, so it is
+    /// never a decision. `onPoll` hears each poll just before it is sent, so a caller knows when
+    /// the latest request is still unanswered: `.stillPending` then follows either the last 202
+    /// (no further poll fit) or a poll that got no answer within the budget. A cancelled task
+    /// stops at once: no poll starts after cancellation.
+    public func settleAndWait(note: SignedNote, ack: Ack? = nil, timeout: TimeInterval,
+                              onPending: (@Sendable (PendingSettlement) async -> Void)? = nil,
+                              onPoll: (@Sendable () async -> Void)? = nil) async throws -> SettlementDecision {
         let deadline = clock.now() + timeout
         let first: PendingSettlement
         do {
@@ -430,7 +438,8 @@ public struct SettlementClient: Sendable {
         } catch is BudgetSpent {
             throw SettlementError.stillPending(Self.unknownPending(note.noteId))
         }
-        return try await poll(noteId: note.noteId, deadline: deadline, first: first)
+        await onPending?(first)
+        return try await poll(noteId: note.noteId, deadline: deadline, first: first, onPending: onPending, onPoll: onPoll)
     }
 
     // MARK: - Budgeted calls
@@ -452,7 +461,9 @@ public struct SettlementClient: Sendable {
         return try outcome(data: data, response: response, noteId: noteId)
     }
 
-    private func poll(noteId: Data, deadline: TimeInterval, first: PendingSettlement?) async throws -> SettlementDecision {
+    private func poll(noteId: Data, deadline: TimeInterval, first: PendingSettlement?,
+                      onPending: (@Sendable (PendingSettlement) async -> Void)? = nil,
+                      onPoll: (@Sendable () async -> Void)? = nil) async throws -> SettlementDecision {
         var pending = first
         var backoff: TimeInterval = 1
         while true {
@@ -463,10 +474,16 @@ public struct SettlementClient: Sendable {
                 if next > 0 { try await clock.sleep(next) }
                 backoff = min(backoff * 2, Self.maxPollInterval)
             }
+            // A cancelled wait (the screen went away) sends no further poll, even when the wait
+            // was zero or the clock's sleep did not notice the cancellation.
+            try Task.checkCancellation()
+            await onPoll?()
             do {
                 switch try await outcome(noteId: noteId, deadline: deadline) {
                 case .decided(let decision): return decision
-                case .pending(let p): pending = p
+                case .pending(let p):
+                    pending = p
+                    await onPending?(p)
                 }
             } catch is BudgetSpent {
                 throw SettlementError.stillPending(pending ?? Self.unknownPending(noteId))

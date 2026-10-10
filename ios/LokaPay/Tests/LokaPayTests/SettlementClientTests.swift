@@ -77,6 +77,52 @@ final class FakeClock: @unchecked Sendable {
     }
 }
 
+/// How long `HeldClock` and `HeldTransport` hold: far longer than any test needs, short enough that a
+/// wait that is never cancelled fails within the CI job's time instead of hanging it.
+let heldSeconds: UInt64 = 30
+
+/// Time stands still and every sleep lasts until its task is cancelled (or `heldSeconds`, so a
+/// regression fails the test instead of hanging the suite), so a wait on this clock ends by
+/// cancellation. `started` yields once each time a sleep begins.
+final class HeldClock: @unchecked Sendable {
+    let started: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() { (started, continuation) = AsyncStream<Void>.makeStream() }
+
+    var clock: SettlementClock {
+        SettlementClock(now: { 0 }, sleep: { [continuation] _ in
+            continuation.yield()
+            try await Task.sleep(nanoseconds: heldSeconds * 1_000_000_000)
+        })
+    }
+}
+
+/// A transport whose exchange does not answer: it holds each request until its task is cancelled
+/// and then fails the way URLSession does (`URLError(.cancelled)`); after `heldSeconds` it fails
+/// with `URLError(.unknown)`. `started` yields once per request.
+final class HeldTransport: HTTPTransport, @unchecked Sendable {
+    let started: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private let lock = NSLock()
+    private var count = 0
+
+    init() { (started, continuation) = AsyncStream<Void>.makeStream() }
+
+    var requests: Int { lock.withLock { count } }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        lock.withLock { count += 1 }
+        continuation.yield()
+        do {
+            try await Task.sleep(nanoseconds: heldSeconds * 1_000_000_000)
+        } catch {
+            throw URLError(.cancelled)
+        }
+        throw URLError(.unknown)
+    }
+}
+
 /// Serves scripted responses to a real URLSession, so `URLSessionTransport` is tested without a
 /// network. Each script has its own URL, so tests running in parallel do not share one.
 final class ScriptedURLProtocol: URLProtocol, @unchecked Sendable {
@@ -604,6 +650,49 @@ struct SettlementPendingTests {
         #expect(stub.requests.map(\.httpMethod) == ["POST", "GET"])
         #expect(clock.sleeps == [1])
     }
+
+    @Test("settleAndWait reports each 202 to onPending and each poll to onPoll, in order, and never the decision")
+    func settleAndWaitReportsPending() async throws {
+        let stub = StubTransport([APIFixtures.pending(retryAfter: 1), APIFixtures.pending(retryAfter: 3),
+                                  APIFixtures.settled()])
+        let seen = PendingLog()
+        let decision = try await APIFixtures.client(stub, clock: FakeClock())
+            .settleAndWait(note: APIFixtures.note(0), timeout: 30,
+                           onPending: { seen.append($0) }, onPoll: { seen.poll() })
+        #expect(decision.status == .settled)
+        #expect(seen.values.map(\.retryAfter) == [1, 3])
+        #expect(seen.values.allSatisfy { $0.noteId == APIFixtures.note(0).noteId })
+        // The upload's 202, a poll, its 202, the poll that brought the decision.
+        #expect(seen.events == ["202", "poll", "202", "poll"])
+    }
+
+    @Test("a cancelled wait sends no further poll, even when the clock's sleep does not notice the cancellation")
+    func cancelledWaitStopsPolling() async throws {
+        // FakeClock's sleep returns at once and ignores cancellation; the task is cancelled when the
+        // upload's 202 arrives, so only the poll's own cancellation check can stop the next request.
+        let stub = StubTransport([APIFixtures.pending(retryAfter: 1), APIFixtures.settled()])
+        let client = APIFixtures.client(stub, clock: FakeClock())
+        // Its own task, so cancelling it never cancels the test.
+        let wait = Task {
+            try await client.settleAndWait(note: APIFixtures.note(0), timeout: 30) { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        let result = await wait.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(stub.requests.map(\.httpMethod) == ["POST"])
+    }
+}
+
+/// Collects the pending bodies and polls `settleAndWait` reports, in order.
+final class PendingLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var log: [PendingSettlement] = []
+    private var order: [String] = []
+    var values: [PendingSettlement] { lock.withLock { log } }
+    var events: [String] { lock.withLock { order } }
+    func append(_ pending: PendingSettlement) { lock.withLock { log.append(pending); order.append("202") } }
+    func poll() { lock.withLock { order.append("poll") } }
 }
 
 @Suite("settlement client: one time budget")

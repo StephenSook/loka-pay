@@ -14,6 +14,9 @@ public final class SerialReservations: @unchecked Sendable {
         self.url = url
     }
 
+    /// The counters' file, so stores bound to the same key can sit in the same folder.
+    var fileURL: URL { url }
+
     /// Returns the next unused serial for `allowanceId` (0 to 255) after persisting the
     /// reservation. Throws `serialsExhausted` once all 256 are used: open a new allowance.
     public func reserve(allowanceId: UInt64) throws -> UInt8 {

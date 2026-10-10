@@ -6,10 +6,14 @@ import Observation
 public struct PayerAllowance: Equatable, Sendable {
     public let certificate: AllowanceCertificate
     public let wire: Data
+    /// Phone-clock unix seconds when this phone imported it from a sender's code (Script B); nil for
+    /// the allowance from setup (`POST /v1/payers`).
+    public let importedAt: Int64?
 
-    public init(wire: Data, deployment: Deployment, serverPublicKey: Data) throws {
+    public init(wire: Data, deployment: Deployment, serverPublicKey: Data, importedAt: Int64? = nil) throws {
         certificate = try AllowanceCertificate.verify(wire: wire, deployment: deployment, serverPublicKey: serverPublicKey)
         self.wire = Data(wire)
+        self.importedAt = importedAt
     }
 }
 
@@ -92,7 +96,21 @@ public final class PayModel {
     }
 
     public private(set) var phase: Phase = .unavailable
+    /// The allowance Pay signs with now: one of `allowances`.
     public private(set) var allowance: PayerAllowance?
+    /// Every allowance Pay can use: the one from setup first, then those imported from senders'
+    /// codes (Script B), oldest import first. Each verified with the pinned server key, naming this
+    /// phone's key and unexpired when it was added here.
+    public private(set) var allowances: [PayerAllowance] = []
+    /// The id of the allowance from setup (`POST /v1/payers`), the one a sender types or scans on
+    /// zerobars.us/send. It stays the same whichever allowance Pay uses.
+    public private(set) var setupAllowanceId: UInt64?
+    /// What the last import added, in plain words with the verified certificate's numbers; nil
+    /// otherwise.
+    public private(set) var importNote: String?
+    /// Display names from merchant certificates this screen verified with the pinned server key,
+    /// by merchant key hash, so an earmark list can name the merchants it allows.
+    public private(set) var knownMerchantNames: [Data: String] = [:]
     public private(set) var merchant: MerchantCertificate?
     public private(set) var payment: SignedPayment?
     public private(set) var receipt: VerifiedReceipt?
@@ -116,6 +134,11 @@ public final class PayModel {
     public let deployment: Deployment
     private let signer: (any PaymentSigner)?
     private let serials: SerialReservations
+    private let imported: ImportedAllowances
+    /// Every stored import that verifies with the pinned server key, by allowance id, including
+    /// ones not offered (expired, another key), so an import never stores a second certificate for
+    /// an id this phone already holds.
+    @ObservationIgnored private var storedCertificates: [UInt64: AllowanceCertificate] = [:]
     private let serverPublicKey: Data?
     private let meshSend: (@MainActor (String) -> Void)?
     private let now: @Sendable () -> Date
@@ -126,14 +149,18 @@ public final class PayModel {
     ///   - allowanceWire: the allowance wire from `POST /v1/payers` (verified here before use).
     ///   - meshSend: Bluetooth glue that sends one transport text; nil hides the Bluetooth button.
     ///   - locale: whose decimal separator the amount field accepts (the decimal pad types it).
+    ///   - importedAllowances: where scanned allowance certificates are kept; nil keeps them next to
+    ///     the serial counters (`ImportedAllowances(nextTo:)`), so the app needs no new wiring.
     public init(allowanceWire: Data?, signer: (any PaymentSigner)?, serials: SerialReservations,
                 deployment: Deployment, serverPublicKey: Data?,
                 meshSend: (@MainActor (String) -> Void)? = nil,
                 locale: Locale = .current,
+                importedAllowances: ImportedAllowances? = nil,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.deployment = deployment
         self.signer = signer
         self.serials = serials
+        self.imported = importedAllowances ?? ImportedAllowances(nextTo: serials)
         self.serverPublicKey = serverPublicKey
         self.meshSend = meshSend
         self.decimalSeparator = locale.decimalSeparator ?? "."
@@ -150,12 +177,156 @@ public final class PayModel {
             let verified = try PayerAllowance(wire: allowanceWire, deployment: deployment, serverPublicKey: serverPublicKey)
             allowance = verified
             guard verified.certificate.payerKeyHash == signer.keyHash else { return .keyMismatch }
+            allowances = [verified]
+            setupAllowanceId = verified.certificate.allowanceId
         } catch {
             return Self.kind(of: error)
         }
+        // A store that cannot be read is reported, and Pay still works with the setup allowance.
+        let problem = loadImported(serverPublicKey: serverPublicKey, keyHash: signer.keyHash)
+        if let choice = Self.defaultChoice(allowances, serialsLeft: { try? self.serials.remaining(allowanceId: $0) }) {
+            allowance = choice
+        }
         refreshNotesSigned()
         phase = .scanMerchant
+        return problem
+    }
+
+    // MARK: - Allowances (Script B: a sender's allowance, imported by scanning its code)
+
+    /// Adds the stored imports that verify with the pinned server key, name this phone's key and are
+    /// unexpired now. Each wire is checked again here: the file is never trusted.
+    private func loadImported(serverPublicKey: Data, keyHash: Data) -> MoneyIssueKind? {
+        let stored: [ImportedAllowances.Stored]
+        do {
+            stored = try imported.load()
+        } catch {
+            return .importRefused(.storeUnreadable)
+        }
+        let nowSeconds = Int64(now().timeIntervalSince1970)
+        for entry in stored {
+            guard let verified = try? PayerAllowance(wire: entry.wire, deployment: deployment,
+                                                     serverPublicKey: serverPublicKey, importedAt: entry.importedAt)
+            else { continue }
+            let certificate = verified.certificate
+            if storedCertificates[certificate.allowanceId] == nil { storedCertificates[certificate.allowanceId] = certificate }
+            guard certificate.payerKeyHash == keyHash, nowSeconds <= certificate.expiry,
+                  !allowances.contains(where: { $0.certificate.allowanceId == certificate.allowanceId })
+            else { continue }
+            allowances.append(verified)
+        }
         return nil
+    }
+
+    /// The allowance Pay starts on: the newest import (latest import time, later in the file on a
+    /// tie) that still has a serial left, else the allowance from setup (the first choice).
+    static func defaultChoice(_ choices: [PayerAllowance], serialsLeft: (UInt64) -> Int?) -> PayerAllowance? {
+        let usable = choices.enumerated().filter { _, choice in
+            choice.importedAt != nil && (serialsLeft(choice.certificate.allowanceId) ?? 0) > 0
+        }
+        let newest = usable.max { a, b in
+            (a.element.importedAt ?? 0, a.offset) < (b.element.importedAt ?? 0, b.offset)
+        }
+        return newest?.element ?? choices.first
+    }
+
+    /// True while Pay can switch allowances or import one: no note is being signed or shown, so a
+    /// payment on screen always belongs to the allowance it was signed with.
+    public var canChangeAllowance: Bool { phase == .scanMerchant || phase == .enterAmount }
+
+    /// The allowance id code a sender scans on zerobars.us/send (`AllowanceIdCode`), for the
+    /// allowance from setup; nil until it verified.
+    public var allowanceIdCodeText: String? { setupAllowanceId.map(AllowanceIdCode.encode) }
+
+    /// The "Pay with" list: the allowance from setup, the one in use, and every import still
+    /// unexpired on this phone's clock now. An import that expired while the screen was open drops off.
+    public var allowanceChoices: [PayerAllowance] {
+        let nowSeconds = Int64(now().timeIntervalSince1970)
+        return allowances.filter { choice in
+            choice.importedAt == nil || choice.certificate.allowanceId == allowance?.certificate.allowanceId
+                || nowSeconds <= choice.certificate.expiry
+        }
+    }
+
+    /// Pay uses the allowance with this id from `allowances`, unless it has expired by now.
+    public func selectAllowance(id: UInt64) {
+        guard canChangeAllowance, let choice = allowances.first(where: { $0.certificate.allowanceId == id }) else { return }
+        // Checked now, not only when it was added: the screen can stay open past its expiry.
+        guard Int64(now().timeIntervalSince1970) <= choice.certificate.expiry else { return report(.payment(.expired)) }
+        use(choice)
+        issue = nil
+        importNote = nil
+    }
+
+    /// Scanned or pasted `L1|P|1|A|...` from a sender (Script B). Added only when the certificate
+    /// verifies with the pinned server key, binds this deployment's program, cluster and mint, names
+    /// this phone's payment key and is unexpired. It is stored next to the others (never replacing
+    /// one), and Pay then uses it. Every number shown about it comes from the verified certificate.
+    public func importAllowance(text: String) {
+        guard canChangeAllowance, let serverPublicKey, let signer else { return }
+        importNote = nil
+        let wire: Data
+        switch ScanParser.parse(text, accepting: [.allowance]) {
+        case .failure(.wrongKind(let expected, let got)):
+            return report(.wrongKind(expected: expected, got: got))
+        case .failure:
+            return report(.importRefused(.malformed))
+        case .success(let decoded):
+            wire = decoded.payload
+        }
+        let nowSeconds = Int64(now().timeIntervalSince1970)
+        let candidate: PayerAllowance
+        do {
+            candidate = try PayerAllowance(wire: wire, deployment: deployment, serverPublicKey: serverPublicKey,
+                                           importedAt: nowSeconds)
+        } catch {
+            return report(.importRefused(AllowanceImportRefusal(verifying: error)))
+        }
+        let certificate = candidate.certificate
+        guard certificate.payerKeyHash == signer.keyHash else { return report(.importRefused(.otherKey)) }
+        guard nowSeconds <= certificate.expiry else { return report(.importRefused(.expired)) }
+        if let held = allowances.first(where: { $0.certificate.allowanceId == certificate.allowanceId }) {
+            // The same certificate again (for example this phone's own code 1) is not a new allowance.
+            guard held.certificate == certificate else { return report(.importRefused(.conflict)) }
+            use(held)
+            issue = nil
+            importNote = "Allowance #" + String(certificate.allowanceId) + " is already on this phone. Pay uses it now."
+            return
+        }
+        if let stored = storedCertificates[certificate.allowanceId], stored != certificate {
+            return report(.importRefused(.conflict))
+        }
+        do {
+            try imported.add(wire, importedAt: nowSeconds)
+        } catch {
+            return report(.importRefused(.storage))
+        }
+        storedCertificates[certificate.allowanceId] = certificate
+        allowances.append(candidate)
+        use(candidate)
+        issue = nil
+        importNote = "Added allowance #" + String(certificate.allowanceId) + " from a sender: up to $"
+            + Money.display(baseUnits: certificate.cap) + " sandbox. " + Self.earmarkLine(certificate, names: knownMerchantNames)
+            + ". Pay uses it now."
+    }
+
+    /// "Any merchant", or "Only for: " and each earmarked merchant: its name from a merchant
+    /// certificate this screen verified, else the start of its key hash.
+    public static func earmarkLine(_ certificate: AllowanceCertificate, names: [Data: String]) -> String {
+        guard !certificate.earmarks.isEmpty else { return "Any merchant" }
+        let entries = certificate.earmarks.map { hash in names[hash] ?? "key " + String(hash.hex.prefix(8)) + "..." }
+        return "Only for: " + entries.joined(separator: ", ")
+    }
+
+    /// Switches to `choice`. A merchant it cannot pay is cleared, back to the merchant scan.
+    private func use(_ choice: PayerAllowance) {
+        allowance = choice
+        refreshNotesSigned()
+        if let merchant, !choice.certificate.allows(merchantKeyHash: merchant.merchantKeyHash) {
+            self.merchant = nil
+            amountText = ""
+            phase = .scanMerchant
+        }
     }
 
     // MARK: - Merchant
@@ -171,6 +342,7 @@ public final class PayModel {
             do {
                 let verified = try MerchantCertificate.verify(wire: decoded.payload, deployment: deployment,
                                                               serverPublicKey: serverPublicKey)
+                knownMerchantNames[verified.merchantKeyHash] = verified.displayName
                 guard certificate.allows(merchantKeyHash: verified.merchantKeyHash) else {
                     return report(.payment(.notEarmarked))
                 }
@@ -374,6 +546,7 @@ public final class PayModel {
             do {
                 let verified = try MerchantCertificate.verify(wire: decoded.payload, deployment: deployment,
                                                               serverPublicKey: serverPublicKey)
+                knownMerchantNames[verified.merchantKeyHash] = verified.displayName
                 guard verified.merchantKeyHash != original.note.payeeKeyHash else { return report(.cheatSameMerchant) }
                 guard certificate.allows(merchantKeyHash: verified.merchantKeyHash) else {
                     return report(.payment(.notEarmarked))
