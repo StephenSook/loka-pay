@@ -1,0 +1,45 @@
+# Solana toolchain
+
+Verified on 2026-10-09 in Ubuntu 24.04 on WSL 2, x86_64.
+Build in the Linux home filesystem, not on `/mnt/c`.
+
+| Tool | Exact version |
+|---|---|
+| Rust | 1.99.0, b940084d7 |
+| Cargo | 1.99.0, 5f94df478 |
+| Solana CLI / Agave | 3.1.10, 7bc9c805 |
+| solana-test-validator | 3.1.10, 7bc9c805 |
+| Anchor CLI | 1.1.2 |
+| AVM | 1.1.2, Anchor repository tag v1.1.2 |
+| Node.js | 22.23.3 |
+| pnpm | 12.3.4, matching protocol/lib/package.json |
+| Surfpool | 1.6.0, version checked only |
+
+The approved [Solana installer](https://solana-install.solana.workers.dev)
+was downloaded and read before execution. Its SHA-256 was
+`075e7efda0546e18e3efe394b45cb27bdc95a6b0fed13e568e6fc18d75921942`.
+It initially installed Solana 4.3.0; AVM selected 3.1.10 when Anchor started.
+The final verified Solana pin is 3.1.10. The installer's Node 24 default was
+replaced with Node 22 to match PLAN.md D5. Surfpool installed successfully,
+but the installer reported failure before its new PATH was loaded.
+
+Gate B must pin Anchor 1.1.2 and Solana 3.1.10 in the workspace configuration,
+and use the matching Anchor Rust crates and TypeScript client.
+Use `anchor test --validator legacy` for the tested solana-test-validator
+backend. The program has not been scaffolded, built, tested, or deployed yet.
+
+## Task 0.4 evidence
+
+- CLI RPC: `https://api.devnet.solana.com`; commitment: `confirmed`.
+- An isolated local validator on port 18899 produced slot 2 and was stopped.
+- Feature `srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q`,
+  SIMD-0075 (secp256r1 precompile), reported active locally from epoch 0.
+- A read-only devnet query reported the same feature active from epoch 881,
+  activation slot 380592000.
+- The existing protocol package passed all 13 tests and its TypeScript
+  typecheck using Node 22 and pnpm 12.3.4. No lockfile changed.
+- The upgrade-authority key was generated outside both checkouts with mode
+  0600. Its encrypted team-vault backup remains a human step.
+- No faucet request, funding transaction, or deployment was sent. Funding,
+  the required devnet transfer, and the VPS keys remain outstanding, so task
+  0.4 is not complete.
