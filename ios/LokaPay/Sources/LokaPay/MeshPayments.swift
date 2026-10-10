@@ -420,6 +420,14 @@ public enum MeshReturns {
         [ack, receipt].compactMap { $0 }.filter { !sent.contains(replyKey($0, presentation: presentation)) }
     }
 
+    /// How long to wait before offering a reply again after a passing failure (a locked phone, a
+    /// full queue), by attempt: 5, 20 and 60 seconds, then no more timed tries. Showing Receive
+    /// again, or a local link coming up, still offers it.
+    public static func replyRetryDelay(attempt: Int) -> TimeInterval? {
+        let delays: [TimeInterval] = [5, 20, 60]
+        return delays.indices.contains(attempt) ? delays[attempt] : nil
+    }
+
     /// What `repliesDue` remembers for a reply that went (or has no Bluetooth route).
     public static func replyKey(_ text: String, presentation: UInt64) -> String { String(presentation) + "|" + text }
 }

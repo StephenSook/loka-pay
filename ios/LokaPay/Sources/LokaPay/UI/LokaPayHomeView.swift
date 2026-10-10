@@ -36,16 +36,21 @@ public struct LokaPayDependencies {
     /// (`ReceivedPayment.meshOrigin`: camera, a first delivery, or unknown). The glue sends a text only to the
     /// sender of that one delivery (`MeshPaymentRouter.replyTarget`). It returns true when the reply
     /// is settled (queued, or there is no Bluetooth route for it) and false on a passing failure (a
-    /// locked phone, a full queue), so the reply is offered again when the screen next appears.
+    /// locked phone, a full queue), so the reply is offered again: when Receive is shown again, when
+    /// a local link comes up, and on a short bounded timer (`MeshReturns.replyRetryDelay`).
     /// nil: replies go by camera only.
     public var meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
+    /// The mesh layer's report that a local LOKA link is up; nil when not reported. A change to true
+    /// offers waiting replies again.
+    public var meshLinkReady: Bool?
 
     public init(deployment: Deployment, serverPublicKey: Data?, signer: (any PaymentSigner)?,
                 allowanceWire: Data?, merchantWire: Data?, serials: SerialReservations, ledger: OfflineLedger,
                 settlementClient: SettlementClient?, connectivity: ConnectivityMonitor,
                 meshSend: (@MainActor (String) -> Void)? = nil, meshInbox: PaymentInbox? = nil,
                 bluetoothOn: Bool? = nil, meshReturns: PaymentInbox? = nil,
-                meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)? = nil) {
+                meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)? = nil,
+                meshLinkReady: Bool? = nil) {
         self.deployment = deployment
         self.serverPublicKey = serverPublicKey
         self.signer = signer
@@ -60,6 +65,7 @@ public struct LokaPayDependencies {
         self.bluetoothOn = bluetoothOn
         self.meshReturns = meshReturns
         self.meshReply = meshReply
+        self.meshLinkReady = meshLinkReady
     }
 }
 
@@ -84,6 +90,10 @@ public struct LokaPayHomeView: View {
     /// tab). The screens are then unmounted, so Receive detaches its Bluetooth inbox and nothing is
     /// accepted, reserved or signed unseen; codes wait in the inbox. The models keep their state.
     private let isActive: Bool
+    private let meshLinkReady: Bool?
+    /// The timed retry for replies that failed for a passing reason, and how many have run.
+    @State private var replyRetry: Task<Void, Never>?
+    @State private var replyRetryAttempt = 0
     /// Reply keys (`MeshReturns.replyKey`) `meshReply` settled, newest last and bounded, so each reply
     /// goes once per presentation of its payment.
     @State private var repliesSent: [String] = []
@@ -104,6 +114,7 @@ public struct LokaPayHomeView: View {
         bluetoothOn = d.bluetoothOn
         meshReturns = d.meshReturns
         meshReply = d.meshReply
+        meshLinkReady = d.meshLinkReady
         self.isActive = isActive
     }
 
@@ -134,7 +145,15 @@ public struct LokaPayHomeView: View {
         .onDisappear {
             connectivity.stop()
             meshReturns?.detach(payModel)
+            replyRetry?.cancel()
+            replyRetry = nil
         }
+        // A reply that could not be queued is offered again when Receive is shown again and when a
+        // local link or the radio comes back.
+        .onChange(of: tab) { if tab == .receive { sendDueReplies() } }
+        .onChange(of: isActive) { if isActive { sendDueReplies() } }
+        .onChange(of: meshLinkReady) { if meshLinkReady == true { sendDueReplies() } }
+        .onChange(of: bluetoothOn) { if bluetoothOn == true { sendDueReplies() } }
         .onChange(of: receiveModel.payment?.ackText) { sendDueReplies() }
         .onChange(of: receiveModel.paymentPresentation) { sendDueReplies() }
         .onChange(of: receiveModel.settlement?.receiptText) { sendDueReplies() }
@@ -148,9 +167,24 @@ public struct LokaPayHomeView: View {
         let presentation = receiveModel.paymentPresentation
         let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText, receipt: receiveModel.settlement?.receiptText,
                                          presentation: presentation, sent: repliesSent)
-        let settled = due.filter { meshReply($0, origin) }.map { MeshReturns.replyKey($0, presentation: presentation) }
-        guard !settled.isEmpty else { return }
-        repliesSent = Array((repliesSent + settled).suffix(32))
+        let settled = due.filter { meshReply($0, origin) }
+        repliesSent = Array((repliesSent + settled.map { MeshReturns.replyKey($0, presentation: presentation) }).suffix(32))
+        guard settled.count < due.count else {
+            // Nothing waits: the next failure starts the timer from its first step.
+            replyRetry?.cancel()
+            replyRetry = nil
+            replyRetryAttempt = 0
+            return
+        }
+        // A passing failure: try again on a short bounded timer, unless one is already set.
+        guard replyRetry == nil, let delay = MeshReturns.replyRetryDelay(attempt: replyRetryAttempt) else { return }
+        replyRetryAttempt += 1
+        replyRetry = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            replyRetry = nil
+            sendDueReplies()
+        }
     }
 }
 

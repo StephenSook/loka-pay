@@ -449,6 +449,15 @@ struct MeshPaymentTests {
         #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 2, sent: [y1]) == ["Y1"])
     }
 
+    @Test("a reply that failed for a passing reason is retried on a short, bounded timer")
+    func replyRetryIsBounded() {
+        #expect(MeshReturns.replyRetryDelay(attempt: 0) == 5)
+        #expect(MeshReturns.replyRetryDelay(attempt: 1) == 20)
+        #expect(MeshReturns.replyRetryDelay(attempt: 2) == 60)
+        #expect(MeshReturns.replyRetryDelay(attempt: 3) == nil)
+        #expect(MeshReturns.replyRetryDelay(attempt: -1) == nil)
+    }
+
     @Test("a resend that brings a payment back re-offers its stored ack to the first sender")
     func resendReoffersStoredAck() async throws {
         let router = MeshPaymentRouter()

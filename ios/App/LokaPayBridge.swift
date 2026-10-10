@@ -320,7 +320,7 @@ final class LokaPayStore: ObservableObject {
     /// What `LokaPayHomeView` needs, or nil until setup is complete. Camera codes always work; the
     /// Bluetooth glue sends over LOKA's mesh to one contact at a time (`queueMeshSend`,
     /// `sendMeshReply`). `bluetoothOn` is the radio state LOKA's BleLink reports, or nil.
-    func homeDependencies(bluetoothOn: Bool?) -> LokaPayDependencies? {
+    func homeDependencies(bluetoothOn: Bool?, meshLinkReady: Bool? = nil) -> LokaPayDependencies? {
         guard isReady, case .ready(let deployment, let serverKey?) = pins, let signer, let serials, let ledger else {
             return nil
         }
@@ -331,7 +331,8 @@ final class LokaPayStore: ObservableObject {
                                    meshSend: { [weak self] text in self?.queueMeshSend(text) },
                                    meshInbox: mesh.receiveInbox, bluetoothOn: bluetoothOn,
                                    meshReturns: mesh.payInbox,
-                                   meshReply: { [weak self] text, origin in self?.sendMeshReply(text, origin: origin) ?? true })
+                                   meshReply: { [weak self] text, origin in self?.sendMeshReply(text, origin: origin) ?? true },
+                                   meshLinkReady: meshLinkReady)
     }
 
     // MARK: Bluetooth over LOKA's mesh (tasks 2.1, 2.2 glue, 2.7)
@@ -1195,7 +1196,7 @@ struct LokaPayTab<OfflineCorner: View>: View {
                 payBar
                 LokaPayMeshBanner(notes: store.meshNotes, store: store, contacts: contacts, chat: chat)
                 // Pay and Receive are live only while shown: not behind the Offline corner, not on another tab.
-                LokaPayHomeHost(store: store, link: chat.link, isActive: tabActive && !showOfflineCorner)
+                LokaPayHomeHost(store: store, link: chat.link, isActive: tabActive && !showOfflineCorner, chat: chat)
             }
             .background(LokaColor.paper.ignoresSafeArea())
             .opacity(showOfflineCorner ? 0 : 1)
@@ -1266,17 +1267,21 @@ private struct LokaPayHomeHost: View {
     let link: BleLink
     /// Pay and Receive are on screen (`LokaPayHomeView`'s `isActive`).
     let isActive: Bool
+    /// LOKA's own report that a local link is up, so waiting replies are offered again.
+    let chat: ChatStore
     @State private var bluetoothOn: Bool?
+    @State private var linkReady: Bool?
 
     var body: some View {
         Group {
-            if let dependencies = store.homeDependencies(bluetoothOn: bluetoothOn) {
+            if let dependencies = store.homeDependencies(bluetoothOn: bluetoothOn, meshLinkReady: linkReady) {
                 LokaPayHomeView(dependencies: dependencies, isActive: isActive).id(store.wiresVersion)
             } else {
                 LokaPaySetupView(store: store)
             }
         }
         .onReceive(link.$bluetoothState.map(LokaPayHomeHost.bluetoothOn).removeDuplicates()) { bluetoothOn = $0 }
+        .onReceive(chat.$localConnectionReady.removeDuplicates()) { linkReady = $0 }
     }
 
     /// On or off only when the radio says so; unknown and resetting leave Bluetooth unmentioned.
