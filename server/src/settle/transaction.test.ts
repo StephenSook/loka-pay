@@ -86,11 +86,13 @@ test('redeem targets the published deployment program and config account', () =>
 test('signs one transaction, skips preflight, sets zero retries and never reads program state', async () => {
   const payer = Keypair.generate(); // Ephemeral local signing test only.
   const connection = {
+    getFeeForMessage: vi.fn(async () => ({ value: 5000 })),
     getLatestBlockhash: vi.fn(async () => ({ blockhash: base58.encode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 100 })),
     sendRawTransaction: vi.fn(async (bytes: Buffer) => base58.encode(Transaction.from(bytes).signature!)),
   };
   const chain = new SolanaGateway(connection as unknown as Connection, payer);
-  const attempt = await chain.prepare(validated);
+  const quote = await chain.quoteFee(validated);
+  const attempt = await chain.prepare(validated, quote);
   const transaction = Transaction.from(Buffer.from(attempt.rawTransaction, 'base64'));
   expect(transaction.verifySignatures()).toBe(true);
   expect(base58.encode(transaction.signature!)).toBe(attempt.signature);
@@ -143,3 +145,17 @@ test.each([{ InstructionError: [0, { Custom: 6011 }] }, { InstructionError: [1, 
     expect(await chain.lookup('saved')).toEqual({ found: true,
       decision: { slot: 55, blockTime: 1800000000, error: 'TransactionFailed', errorCode: null } });
   });
+
+test('a changed fee quote is refused before invoking the local signer', async () => {
+  const payer = Keypair.generate();
+  const sign = vi.spyOn(Transaction.prototype, 'sign');
+  const connection = {
+    getFeeForMessage: vi.fn(async () => ({ value: 5000 })),
+    getLatestBlockhash: vi.fn(async () => ({ blockhash: base58.encode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 100 })),
+  };
+  const chain = new SolanaGateway(connection as unknown as Connection, payer);
+  const quote = await chain.quoteFee(validated);
+  expect(quote.feePayer).toBe(payer.publicKey.toBase58()); expect(quote.lamports).toBe('5000');
+  await expect(chain.prepare(validated, { ...quote, message: 'changed' })).rejects.toThrow('Quoted transaction changed');
+  expect(sign).not.toHaveBeenCalled(); sign.mockRestore();
+});

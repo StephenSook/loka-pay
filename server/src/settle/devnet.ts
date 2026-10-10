@@ -19,10 +19,10 @@ import type { Outcome } from './types.js';
 
 const { values } = parseArgs({ options: {
   'run-devnet': { type: 'boolean' }, 'note-request': { type: 'string' }, 'cheat-request': { type: 'string' },
-  'fee-payer': { type: 'string' }, journal: { type: 'string' },
+  'fee-payer': { type: 'string' }, 'daily-fee-budget': { type: 'string' }, journal: { type: 'string' },
 } });
 assert(values['run-devnet'], 'Explicit --run-devnet is required. This command spends devnet transaction fees.');
-for (const flag of ['note-request', 'cheat-request', 'fee-payer', 'journal'] as const) assert(values[flag], `Missing --${flag}`);
+for (const flag of ['note-request', 'cheat-request', 'fee-payer', 'journal', 'daily-fee-budget'] as const) assert(values[flag], `Missing --${flag}`);
 assert(isAbsolute(values.journal!), '--journal must be an absolute directory path for persistent attempt storage');
 const deployment = {
   programId: new PublicKey('HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG').toBytes(), clusterId: 0,
@@ -44,7 +44,7 @@ const database = new PGlite(values.journal!);
 try {
   const store = new SettlementStore(database);
   await store.migrate();
-  const service = new SettlementService({ deployment, store,
+  const service = new SettlementService({ deployment, store, feeBudget: { feePayer: feePayer.publicKey.toBase58(), dailyLamports: values['daily-fee-budget']! },
     chain: new SolanaGateway(new Connection('https://api.devnet.solana.com', 'confirmed'), feePayer),
     signConfirmation: fields => P.signConfWire(fields, seed),
   });

@@ -1,3 +1,4 @@
+import { migrateFeeBudget, reserveFee, type FeeBudget } from './fee-budget.js';
 import { BroadcastLease } from './broadcast.js';
 import { randomUUID } from 'node:crypto';
 import { admitSubmission, migrateRateLimit, type AllowanceRateLimit } from './rate-limit.js';
@@ -15,7 +16,19 @@ export class SettlementStore {
     return new BroadcastLease(this.db, this.clock).send(`note:${noteId}`, attempt, send);
   }
 
+  async reserveFee(noteId: string, policy: FeeBudget, cost: string, owner: { token?: string; originalSignature?: string }): Promise<boolean> {
+    return reserveFee(this.db, noteId, policy, cost, owner, this.clock?.());
+  }
+  async releaseUnsigned(noteId: string, token: string): Promise<boolean> {
+    const { rows } = await this.db.query(`DELETE FROM settlement_attempts WHERE note_id=$1 AND claim_token=$2
+      AND attempt IS NULL AND decision IS NULL
+      AND lease_expires_at>COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())) RETURNING note_id`,
+    [noteId, token, this.clock?.() ?? null]);
+    return rows.length === 1;
+  }
+
   async migrate(): Promise<void> {
+    await migrateFeeBudget(this.db);
     await new BroadcastLease(this.db, this.clock).migrate();
     await migrateRateLimit(this.db);
     await this.db.query(`CREATE TABLE IF NOT EXISTS settlement_attempts (

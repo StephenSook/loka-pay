@@ -1,3 +1,4 @@
+import { validateFeeBudget, type FeeBudget } from './fee-budget.js';
 import { base58 } from '@scure/base';
 import * as P from '@lokapay/protocol';
 import type { AttemptRow, ChainDecision, ChainGateway, ConfirmationSigner, Decision, Outcome, PendingStage } from './types.js';
@@ -7,6 +8,7 @@ import { DEFAULT_NOTE_RATE_LIMIT, validateRateLimit, type AllowanceRateLimit } f
 
 export interface SettlementOptions {
   deployment: P.Deployment;
+  feeBudget: FeeBudget;
   store: SettlementStore;
   chain: ChainGateway;
   signConfirmation: ConfirmationSigner;
@@ -16,8 +18,11 @@ export interface SettlementOptions {
 
 export class SettlementService {
   private readonly rateLimit: AllowanceRateLimit;
+  private readonly feeBudget: FeeBudget;
   constructor(private readonly options: SettlementOptions) {
     if (options.deployment.clusterId !== 0) throw new Error('This settlement module is devnet sandbox only');
+    validateFeeBudget(options.feeBudget);
+    this.feeBudget = { ...options.feeBudget };
     this.rateLimit = { ...(options.allowanceRateLimit ?? DEFAULT_NOTE_RATE_LIMIT) };
     validateRateLimit(this.rateLimit);
   }
@@ -45,7 +50,16 @@ export class SettlementService {
   private async execute(row: AttemptRow, validated: P.ValidatedNote, token: string, replayed: boolean): Promise<Outcome> {
     let stage: PendingStage = 'prepare';
     try {
-      const attempt = await this.options.chain.prepare(validated);
+      stage = 'fee_quote';
+      const quote = await this.options.chain.quoteFee(validated);
+      if (quote.feePayer !== this.feeBudget.feePayer) throw new Error('Fee quote payer mismatch');
+      stage = 'fee_admission';
+      if (!await this.options.store.reserveFee(row.noteId, this.feeBudget, quote.lamports, { token })) {
+        if (await this.options.store.releaseUnsigned(row.noteId, token)) throw new HttpError(429, 'budget_exhausted');
+        return this.pending((await this.options.store.get(row.noteId))!);
+      }
+      stage = 'prepare';
+      const attempt = await this.options.chain.prepare(validated, quote);
       // Commit before broadcast. This claim's winner alone sends the original transaction.
       stage = 'save_attempt';
       // A lease takeover fences out old workers. Never broadcast unless this token saved the attempt.
@@ -56,7 +70,8 @@ export class SettlementService {
       row = { ...row, attempt };
       stage = 'send';
       await this.options.store.broadcast(row.noteId, attempt, a => this.options.chain.send(a));
-    } catch {
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       // A timeout cannot tell us whether it landed. Only the expiry/history gate can allow a rebuild.
       return this.pending(row, stage, true);
     }
@@ -76,7 +91,10 @@ export class SettlementService {
         const upload = validateUpload({ note: row.note, ...(row.ack ? { ack: row.ack } : {}) }, this.options.deployment);
         if (await this.options.chain.checkIdentity(upload.validated) !== null) return this.pending(row, 'prepare', true);
         return await this.execute((await this.options.store.get(noteId))!, upload.validated, token, true);
-      } catch { return this.pending((await this.options.store.get(noteId))!, 'prepare', true); }
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        return this.pending((await this.options.store.get(noteId))!, 'prepare', true);
+      }
     }
     return this.resolve(row, true);
   }
@@ -137,7 +155,14 @@ export class SettlementService {
       if (beforeSign.found) return this.pending(row);
       stage = 'rebuild_prepare';
       const upload = validateUpload({ note: row.note, ...(row.ack ? { ack: row.ack } : {}) }, this.options.deployment);
-      const replacement = await this.options.chain.prepare(upload.validated);
+      stage = 'fee_quote';
+      const quote = await this.options.chain.quoteFee(upload.validated);
+      if (quote.feePayer !== this.feeBudget.feePayer) throw new Error('Fee quote payer mismatch');
+      stage = 'fee_admission';
+      if (!await this.options.store.reserveFee(row.noteId, this.feeBudget, quote.lamports,
+        { originalSignature: row.attempt.signature })) return this.pending(row, stage);
+      stage = 'rebuild_prepare';
+      const replacement = await this.options.chain.prepare(upload.validated, quote);
       if (replacement.signature === row.attempt!.signature || replacement.blockhash === row.attempt!.blockhash
         || replacement.lastValidBlockHeight <= height) throw new Error('Replacement requires a fresh blockhash');
       stage = 'rebuild_save';

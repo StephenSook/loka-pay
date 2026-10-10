@@ -6,7 +6,7 @@ import {
   Connection, PublicKey, Transaction, TransactionInstruction,
   type Signer, type TransactionError,
 } from '@solana/web3.js';
-import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt } from './types.js';
+import type { ChainDecision, ChainGateway, IdentityRefusal, PreparedAttempt, FeeQuote } from './types.js';
 
 const idl = JSON.parse(readFileSync(new URL('../../../programs/idl/loka_vault.json', import.meta.url), 'utf8'));
 const redeem = idl.instructions.find((ix: { name: string }) => ix.name === 'redeem_note');
@@ -77,15 +77,26 @@ export class SolanaGateway implements ChainGateway {
     return P.equalBytes(Uint8Array.from(allowance.payer_key), note.payerPublicKey) ? null : 'payer_mismatch';
   }
 
-  async prepare(note: P.ValidatedNote): Promise<PreparedAttempt> {
+  async quoteFee(note: P.ValidatedNote): Promise<FeeQuote> {
     const latest = await this.connection.getLatestBlockhash('confirmed');
     const transaction = buildRedeemTransaction(note);
-    transaction.feePayer = this.feePayer.publicKey;
-    transaction.recentBlockhash = latest.blockhash;
+    transaction.feePayer = this.feePayer.publicKey; transaction.recentBlockhash = latest.blockhash;
+    const fee = (await this.connection.getFeeForMessage(transaction.compileMessage(), 'confirmed')).value;
+    if (fee === null || !Number.isSafeInteger(fee) || fee <= 0) throw new Error('Unavailable settlement fee quote');
+    return { ...latest, message: transaction.serializeMessage().toString('base64'),
+      feePayer: this.feePayer.publicKey.toBase58(), lamports: String(fee) };
+  }
+
+  async prepare(note: P.ValidatedNote, quote: FeeQuote): Promise<PreparedAttempt> {
+    const transaction = buildRedeemTransaction(note);
+    transaction.feePayer = this.feePayer.publicKey; transaction.recentBlockhash = quote.blockhash;
+    if (quote.feePayer !== this.feePayer.publicKey.toBase58()
+      || transaction.serializeMessage().toString('base64') !== quote.message
+      || !Number.isSafeInteger(quote.lastValidBlockHeight) || quote.lastValidBlockHeight < 0) throw new Error('Quoted transaction changed');
     transaction.sign(this.feePayer);
     if (!transaction.signature) throw new Error('Missing transaction signature');
     return { signature: base58.encode(transaction.signature), rawTransaction: transaction.serialize().toString('base64'),
-      blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight };
+      blockhash: quote.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight };
   }
 
   async send(attempt: PreparedAttempt): Promise<void> {

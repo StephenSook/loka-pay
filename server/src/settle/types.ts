@@ -6,7 +6,10 @@ export interface PreparedAttempt {
   blockhash: string;
   lastValidBlockHeight: number;
 }
-export type PendingStage = 'prepare' | 'save_attempt' | 'send' | 'lookup' | 'height_lookup'
+export interface FeeQuote {
+  message: string; blockhash: string; lastValidBlockHeight: number; feePayer: string; lamports: string;
+}
+export type PendingStage = 'prepare' | 'fee_quote' | 'fee_admission' | 'save_attempt' | 'send' | 'lookup' | 'height_lookup'
   | 'rebuild_claim' | 'rebuild_prepare' | 'rebuild_save' | 'rebuild_send' | 'sign_confirmation'
   | 'save_decision' | 'awaiting_confirmation' | 'missing_attempt' | 'rebuild_consumed';
 export interface ChainDecision {
@@ -19,7 +22,8 @@ export interface ChainGateway {
   checkIdentity(note: ValidatedNote): Promise<IdentityRefusal | null>;
   blockHeight(): Promise<number>;
   lookup(signature: string): Promise<{ found: boolean; decision: ChainDecision | null }>;
-  prepare(note: ValidatedNote): Promise<PreparedAttempt>;
+  quoteFee(note: ValidatedNote): Promise<FeeQuote>;
+  prepare(note: ValidatedNote, quote: FeeQuote): Promise<PreparedAttempt>;
   send(attempt: PreparedAttempt): Promise<void>;
   observe(signature: string): Promise<ChainDecision | null>;
 }

@@ -30,6 +30,8 @@ async function fixture() {
   const store = new SettlementStore(db, clock); await store.migrate();
   const chain = {
     checkIdentity: vi.fn(async (): Promise<IdentityRefusal | null> => null), blockHeight: vi.fn(async () => 0),
+    quoteFee: vi.fn(async () => ({ message: 'unsigned', blockhash: 'quote', lastValidBlockHeight: 100,
+      feePayer: base58.encode(new Uint8Array(32).fill(7)), lamports: '10' })),
     prepare: vi.fn(async (upload: P.ValidatedNote): Promise<PreparedAttempt> => ({
       signature: base58.encode(new Uint8Array([...upload.noteId, ...upload.noteId])),
       rawTransaction: 'test-only', blockhash: base58.encode(new Uint8Array(32).fill(1)), lastValidBlockHeight: 100,
@@ -38,7 +40,7 @@ async function fixture() {
     lookup: vi.fn(async () => ({ found: true, decision: { slot: 1, blockTime: 1800000000, error: null as string | null, errorCode: 0 } })),
   } satisfies ChainGateway;
   const seed = randomBytes(32); const sign = vi.fn((fields: P.ConfFields) => P.signConfWire(fields, seed));
-  const options = { deployment, store, chain, signConfirmation: sign, now: clock,
+  const options = { feeBudget: { feePayer: base58.encode(new Uint8Array(32).fill(7)), dailyLamports: '1000000' }, deployment, store, chain, signConfirmation: sign, now: clock,
     allowanceRateLimit: { limit: 2, windowSeconds: 60 } };
   const service = new SettlementService(options);
   const app = Fastify({ logger: false }); registerSettlementRoutes(app, service); closers.push(() => app.close());

@@ -21,6 +21,7 @@ const deployment: P.Deployment = {
   programId: P.fromHex(vectors.constants.programIdHex), clusterId: 0,
   mint: P.fromHex(vectors.constants.mintHex),
 };
+const feeBudget = { feePayer: base58.encode(new Uint8Array(32).fill(7)), dailyLamports: '1000000' };
 const note = P.base64urlEncode(P.fromHex(vectors.notes[0].wireHex));
 const ack = P.base64urlEncode(P.fromHex(vectors.acks[0].wireHex));
 const noteId = P.toHex(P.noteId(P.fromHex(vectors.notes[0].noteHex)));
@@ -28,6 +29,7 @@ const closers: (() => Promise<unknown>)[] = [];
 afterEach(async () => { while (closers.length) await closers.pop()!(); });
 
 class Chain implements ChainGateway {
+  quoteFee = vi.fn(async () => ({ message: 'unsigned', blockhash: 'quote', lastValidBlockHeight: 100, feePayer: feeBudget.feePayer, lamports: '10' }));
   checkIdentity = vi.fn(async (_note: P.ValidatedNote): Promise<IdentityRefusal | null> => null);
   blockHeight = vi.fn(async () => 0);
   lookup = vi.fn(async (signature: string) => ({ found: this.decision !== null, decision: await this.observe(signature) }));
@@ -50,7 +52,7 @@ async function fixture() {
   const chain = new Chain();
   const seed = randomBytes(32);
   const sign = vi.fn((fields: P.ConfFields) => P.signConfWire(fields, seed));
-  const service = new SettlementService({ deployment, store, chain, signConfirmation: sign, now: clock });
+  const service = new SettlementService({ feeBudget, deployment, store, chain, signConfirmation: sign, now: clock });
   const app = Fastify({ logger: false });
   registerSettlementRoutes(app, service);
   closers.push(() => app.close());
@@ -153,7 +155,7 @@ test('two service instances sharing the database prepare and send only once', as
   let release!: () => void;
   const barrier = new Promise<void>(resolve => { release = resolve; });
   f.chain.send.mockImplementation(async () => { await barrier; });
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
   const first = f.service.submit({ note });
   await vi.waitFor(() => expect(f.chain.send).toHaveBeenCalledTimes(1));
   f.chain.decision = null;
@@ -175,7 +177,7 @@ test('signature is durable before broadcast; uncertain send remains pending acro
     throw new Error('timeout after broadcast');
   });
   expect((await f.post()).statusCode).toBe(202);
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
   for (let i = 0; i < 3; i++) {
     expect((await other.submit({ note })).statusCode).toBe(202);
     expect((await other.get(noteId)).statusCode).toBe(202);
@@ -211,7 +213,7 @@ test('an expired unsigned claim is taken over exactly once by concurrent uploads
   const f = await fixture();
   await f.store.claim({ noteId, note, ack: null, uploadedAt: 1800000001 });
   f.advance(30);
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db, f.clock),
     chain: f.chain, signConfirmation: f.sign, now: f.clock });
   await Promise.all([f.service.submit({ note, ack }), other.submit({ note }), f.service.submit({ note })]);
   expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
@@ -224,7 +226,7 @@ test('a crash before saving or broadcasting recovers on the next upload after th
   const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('crashed before saving'));
   expect((await f.post()).statusCode).toBe(202); expect(f.chain.send).not.toHaveBeenCalled();
   f.advance(30);
-  const restarted = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+  const restarted = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db, f.clock),
     chain: f.chain, signConfirmation: f.sign, now: f.clock });
   expect((await restarted.submit({ note })).statusCode).toBe(200);
   expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(1);
@@ -294,7 +296,7 @@ test('a disk journal survives database restart and still never rebroadcasts', as
   try {
     let store = new SettlementStore(database);
     await store.migrate();
-    const options = { deployment, chain, signConfirmation: (fields: P.ConfFields) => P.signConfWire(fields, seed) };
+    const options = { feeBudget, deployment, chain, signConfirmation: (fields: P.ConfFields) => P.signConfWire(fields, seed) };
     expect((await new SettlementService({ ...options, store }).submit({ note })).statusCode).toBe(202);
     await database.close();
     database = new PGlite(directory);
@@ -338,7 +340,7 @@ test('expired and not found rebuilds exactly once, including concurrent polls', 
     return { signature: base58.encode(new Uint8Array(64).fill(candidate)), rawTransaction: `replacement-${candidate}`,
       blockhash: base58.encode(new Uint8Array(32).fill(candidate)), lastValidBlockHeight: 200 };
   });
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
   await Promise.all([f.service.get(noteId), other.get(noteId), f.service.get(noteId)]);
   expect(f.chain.prepare.mock.calls.length).toBeGreaterThanOrEqual(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
   const saved = await f.store.get(noteId); expect(saved?.attempt?.signature).toBe(original);
@@ -400,7 +402,7 @@ test('failed rebuild preparation leaves the replacement available across restart
   expect((await f.store.get(noteId))!.rebuildClaimed).toBe(false);
   f.chain.prepare.mockResolvedValue({ signature: base58.encode(new Uint8Array(64).fill(8)), rawTransaction: 'replacement',
     blockhash: 'fresh', lastValidBlockHeight: 200 });
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db), chain: f.chain, signConfirmation: f.sign });
   expect((await other.get(noteId)).statusCode).toBe(202); expect(f.chain.prepare).toHaveBeenCalledTimes(3);
   expect(f.chain.send).toHaveBeenCalledTimes(2);
 });
@@ -463,7 +465,7 @@ test('a saved replacement whose send failed resends identical bytes under the le
   expect((await f.service.get(noteId)).statusCode).toBe(202);
   await f.service.get(noteId); expect(f.chain.send).toHaveBeenCalledTimes(2);
   f.advance(30);
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock), chain: f.chain, signConfirmation: f.sign });
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db, f.clock), chain: f.chain, signConfirmation: f.sign });
   await Promise.all([f.service.get(noteId), other.get(noteId)]);
   expect(f.chain.send).toHaveBeenCalledTimes(3); expect(f.chain.send.mock.calls[2][0]).toEqual(replacement);
   expect(f.chain.prepare).toHaveBeenCalledTimes(2);
@@ -489,7 +491,7 @@ test('GET recovers a failed unsigned preparation only after lease expiry and pre
 test('concurrent GET recovery has one winner and rechecks stored payer identity', async () => {
   const f = await fixture(); f.chain.prepare.mockRejectedValueOnce(new Error('failed'));
   await f.service.submit({ note }); f.advance(30);
-  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock),
+  const other = new SettlementService({ feeBudget, deployment, store: new SettlementStore(f.db, f.clock),
     chain: f.chain, signConfirmation: f.sign, now: f.clock });
   await Promise.all([f.service.get(noteId), other.get(noteId), f.service.get(noteId)]);
   expect(f.chain.prepare).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(1);
@@ -511,4 +513,40 @@ test('generic confirmed transaction failure signs failed CONF with absent-code s
   const conf = P.verifyConfWire(P.base64urlDecode(result.body.conf), ed25519.getPublicKey(f.seed));
   expect(conf.status).toBe(2); expect(conf.errorCode).toBe(0);
   expect(base58.encode(conf.txSignature)).toBe(result.body.signature);
+});
+
+test('settlement budget exhaustion returns unsigned 429 and releases the original claim', async () => {
+  const f = await fixture();
+  const service = new SettlementService({ deployment, store: f.store, chain: f.chain, signConfirmation: f.sign,
+    now: f.clock, feeBudget: { feePayer: feeBudget.feePayer, dailyLamports: '0' } });
+  await expect(service.submit({ note })).rejects.toMatchObject({ statusCode: 429, code: 'budget_exhausted' });
+  expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.chain.send).not.toHaveBeenCalled();
+  expect(f.sign).not.toHaveBeenCalled(); expect(await f.count()).toBe(0);
+});
+
+test('unknown fee admission outcome remains unsigned pending without refunding', async () => {
+  const f = await fixture(); const reserve = f.store.reserveFee.bind(f.store);
+  vi.spyOn(f.store, 'reserveFee').mockImplementationOnce(async (...args) => { await reserve(...args); throw new Error('lost commit reply'); });
+  expect((await f.service.submit({ note })).body.signature).toBeNull();
+  expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.chain.send).not.toHaveBeenCalled();
+  f.advance(30); expect((await f.service.get(noteId)).statusCode).toBe(200);
+  const spent = await f.db.query<{ spent: string }>('SELECT spent::text FROM settlement_fee_budgets');
+  expect(spent.rows[0].spent).toBe('20');
+});
+
+test('replacement fee exhaustion remains pending with the original signature and never signs a replacement', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  const service = new SettlementService({ deployment, store: f.store, chain: f.chain, signConfirmation: f.sign,
+    now: f.clock, feeBudget: { feePayer: feeBudget.feePayer, dailyLamports: '10' } });
+  const original = await service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  expect((await service.get(noteId)).body.signature).toBe(original.body.signature);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect((await f.store.get(noteId))?.rebuildClaimed).toBe(false);
+});
+
+test('fee quote for another payer fails before signing', async () => {
+  const f = await fixture(); f.chain.quoteFee.mockResolvedValue({ message: 'unsigned', blockhash: 'quote',
+    lastValidBlockHeight: 100, feePayer: base58.encode(new Uint8Array(32).fill(9)), lamports: '10' });
+  expect((await f.service.submit({ note })).body.signature).toBeNull();
+  expect(f.chain.prepare).not.toHaveBeenCalled(); expect(f.chain.send).not.toHaveBeenCalled();
 });
