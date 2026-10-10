@@ -30,6 +30,7 @@ type Phase =
   | { kind: "rate_limited"; retryAfterSeconds: number; limit: RateLimitReason | null }
   | { kind: "no_payment" }
   | { kind: "too_old" }
+  | { kind: "wrong_code" }
   | { kind: "off" }
   | { kind: "failed"; reason: string };
 
@@ -48,12 +49,22 @@ function phaseOf(status: number, body: CallAnswer | null, retryAfter: string | n
       return { kind: "no_payment" };
     case "too_old":
       return { kind: "too_old" };
+    case "wrong_code":
+      return { kind: "wrong_code" };
     default:
       return { kind: "failed", reason: body.reason ? `${body.error}, ${body.reason}` : body.error };
   }
 }
 
-async function postCall(body: { to: string; lang: CallLang; signature?: string }, setPhase: (p: Phase) => void): Promise<void> {
+interface CallBody {
+  to: string;
+  lang: CallLang;
+  signature?: string;
+  /** The desk code, sent only when this site asks for one. */
+  code?: string;
+}
+
+async function postCall(body: CallBody, setPhase: (p: Phase) => void): Promise<void> {
   setPhase({ kind: "sending" });
   let response: Response;
   try {
@@ -96,15 +107,19 @@ function connectionWords(c: Connection): string {
   }
 }
 
-export function CallPanel({ programId, enabled }: { programId: string; enabled: boolean }) {
+export function CallPanel({ programId, enabled, codeRequired }: { programId: string; enabled: boolean; codeRequired: boolean }) {
   const numberId = useId();
   const numberHelpId = useId();
   const langId = useId();
+  const codeId = useId();
+  const codeHelpId = useId();
   const [draft, setDraft] = useState("");
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [lang, setLang] = useState<CallLang>("en");
   const [numberError, setNumberError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>(enabled ? { kind: "idle" } : { kind: "off" });
-  const [watch, setWatch] = useState<{ to: string; lang: CallLang } | null>(null);
+  const [watch, setWatch] = useState<CallBody | null>(null);
   const [connection, setConnection] = useState<Connection>({ kind: "connecting" });
 
   // Armed: watch the program from this browser until a new settlement is read in full, then
@@ -123,7 +138,7 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
       if (hit) {
         fired = true;
         setWatch(null);
-        void postCall({ to: watch.to, lang: watch.lang, signature: hit.signature }, setPhase);
+        void postCall({ ...watch, signature: hit.signature }, setPhase);
         return;
       }
       setConnection(state.connection);
@@ -137,23 +152,28 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
 
   const busy = phase.kind === "sending" || watch !== null;
 
-  function readNumber(): string | null {
+  /** The request body from the fields, or null after saying on the page what is missing. */
+  function readForm(): CallBody | null {
     const to = normalizeUsNumber(draft);
     setNumberError(to === null ? "Enter a US number: 10 digits, with or without +1. Other countries, toll-free and premium numbers cannot be called." : null);
-    return to;
+    const deskCode = code.trim();
+    const codeMissing = codeRequired && deskCode === "";
+    setCodeError(codeMissing ? "Enter the desk code from the LOKA Pay table." : null);
+    if (to === null || codeMissing) return null;
+    return codeRequired ? { to, lang, code: deskCode } : { to, lang };
   }
 
   function callNow() {
-    const to = readNumber();
-    if (to !== null) void postCall({ to, lang }, setPhase);
+    const body = readForm();
+    if (body !== null) void postCall(body, setPhase);
   }
 
   function arm() {
-    const to = readNumber();
-    if (to === null) return;
+    const body = readForm();
+    if (body === null) return;
     setConnection({ kind: "connecting" });
     setPhase({ kind: "waiting", sinceMs: Date.now() });
-    setWatch({ to, lang });
+    setWatch(body);
   }
 
   function disarm() {
@@ -202,6 +222,30 @@ export function CallPanel({ programId, enabled }: { programId: string; enabled: 
             </select>
           </div>
         </div>
+        {codeRequired ? (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor={codeId} className="font-bold">
+              Desk code (from the LOKA Pay table)
+            </label>
+            <input
+              id={codeId}
+              type="text"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              disabled={watch !== null}
+              maxLength={64}
+              aria-describedby={codeHelpId}
+              aria-invalid={codeError !== null}
+              className={`${FIELD} font-mono`}
+            />
+            <p id={codeHelpId} className={codeError ? "text-sm font-bold" : "text-sm text-muted"} data-testid="code-help">
+              {codeError ?? "Calls need the code we give out at the table, so our number cannot be used to ring anyone."}
+            </p>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           <button type="button" onClick={callNow} disabled={!enabled || busy} className={`${BUTTON_PRIMARY} disabled:opacity-50`}>
             Call me now about the latest settled payment
@@ -288,6 +332,13 @@ function PhaseView({ phase, connection }: { phase: Phase; connection: Connection
         <>
           <StateChip state="warning" label="Too old" />
           <p>That payment settled more than {SIGNATURE_MAX_AGE_MS / 60_000} minutes ago, so no call was placed.</p>
+        </>
+      );
+    case "wrong_code":
+      return (
+        <>
+          <StateChip state="warning" label="Wrong desk code" />
+          <p>That desk code is not right, so no call was placed. Ask at the LOKA Pay table for the code.</p>
         </>
       );
     case "off":

@@ -2,21 +2,28 @@
 //
 // These are WEAK limits on a serverless host, and nothing should rely on them alone: every
 // instance keeps its own counts, a new instance starts at zero, and a restart forgets them.
-// The real bounds on calls are the Vonage account's balance and destination settings and the
-// LOKA_CALLS_OFF kill switch (lib/call-server.ts). These caps only stop one instance from
-// being used as a fast dialer. No database, on purpose.
+// The real bounds on calls are the desk code (LOKA_CALL_CODE), the Vonage account's balance
+// and destination settings, and the LOKA_CALLS_OFF kill switch (lib/call-server.ts). These
+// caps only stop one instance from being used as a fast dialer. No database, on purpose.
 //
-// - per number: at most NUMBER_LIMIT accepted requests in NUMBER_WINDOW_MS, keyed by the
-//   number's HMAC (lib/call-crypto.ts numberKey), never the number itself;
-// - site (per instance): at most SITE_LIMIT accepted requests in SITE_WINDOW_MS;
+// CallLimits, for requests that passed every check including the desk code:
+// - per number: at most NUMBER_LIMIT requests in NUMBER_WINDOW_MS, keyed by the number's HMAC
+//   (lib/call-crypto.ts numberKey), never the number itself. The slot is taken before any
+//   devnet read and stays taken whatever happens next (a bad signature, no payment, a
+//   refused call), so a flood of failing requests from one number runs into it;
+// - site (per instance): at most SITE_LIMIT calls we actually try to place in SITE_WINDOW_MS;
+//   it is checked before any devnet read and counted just before Vonage is asked;
 // - per number and payment: one call, remembered for PAYMENT_MEMORY_MS.
-// A request counts when it is taken, before any devnet read or upstream call, and it stays
-// counted whatever happens next (a bad signature, no payment, a refused call), so a flood of
-// failing requests runs into the caps like any other.
+//
+// DeskCodeFailures, for wrong or missing desk codes, which never touch the caps above (so
+// nobody can lock judges out by sending bad codes): at most FAILURE_LIMIT failures in
+// FAILURE_WINDOW_MS per client, keyed by HMAC-SHA256(a random secret made when the server
+// starts, the client's address), never the address itself. Clients behind one address share
+// a key, so the limit is loose enough for typos at a venue.
 //
 // Every map is bounded: entries expire with their window, and a map at its maximum size drops
-// its oldest entry. With the site cap far below those maximums, nothing is dropped in
-// practice; the bound only keeps memory finite. The clock is injected for unit/call.test.ts.
+// its oldest entry. With the caps far below those maximums, nothing is dropped in practice;
+// the bound only keeps memory finite. The clock is injected for unit/call.test.ts.
 
 import type { RateLimitReason } from "./call-shared";
 
@@ -27,6 +34,9 @@ export const SITE_LIMIT = 30;
 export const SITE_WINDOW_MS = 60 * 60_000;
 export const MAX_NUMBER_KEYS = 1000;
 export const MAX_PAYMENT_PAIRS = 2000;
+export const FAILURE_LIMIT = 10;
+export const FAILURE_WINDOW_MS = 10 * 60_000;
+export const MAX_CLIENT_KEYS = 2000;
 
 export interface LimitSettings {
   numberLimit: number;
@@ -42,6 +52,15 @@ const seconds = (ms: number) => Math.max(1, Math.ceil(ms / 1000));
 /** Drops a map's oldest entries (insertion order) until it has room for one more. */
 function makeRoom<V>(map: Map<string, V>, max: number): void {
   while (map.size >= max) map.delete(map.keys().next().value as string);
+}
+
+/** Keeps only the times inside the window for each key; a key with none left is removed. */
+function pruneTimes(map: Map<string, number[]>, nowMs: number, windowMs: number): void {
+  for (const [key, times] of map) {
+    const kept = times.filter((t) => nowMs - t < windowMs);
+    if (kept.length === 0) map.delete(key);
+    else map.set(key, kept);
+  }
 }
 
 export class CallLimits {
@@ -65,46 +84,40 @@ export class CallLimits {
 
   private prune(nowMs: number): void {
     this.site = this.site.filter((t) => nowMs - t < SITE_WINDOW_MS);
-    for (const [key, times] of this.byNumber) {
-      const kept = times.filter((t) => nowMs - t < NUMBER_WINDOW_MS);
-      if (kept.length === 0) this.byNumber.delete(key);
-      else this.byNumber.set(key, kept);
-    }
+    pruneTimes(this.byNumber, nowMs, NUMBER_WINDOW_MS);
     for (const [pair, at] of this.byPayment) {
       if (nowMs - at >= PAYMENT_MEMORY_MS) this.byPayment.delete(pair);
     }
   }
 
-  private checkAt(key: string, nowMs: number): LimitCheck {
-    this.prune(nowMs);
-    const times = this.byNumber.get(key) ?? [];
-    if (times.length >= this.settings.numberLimit) {
-      return { ok: false, limit: "number", retryAfterSeconds: seconds(times[0] + NUMBER_WINDOW_MS - nowMs) };
-    }
+  private siteAt(nowMs: number): LimitCheck {
     if (this.site.length >= this.settings.siteLimit) {
       return { ok: false, limit: "site", retryAfterSeconds: seconds(this.site[0] + SITE_WINDOW_MS - nowMs) };
     }
     return { ok: true };
   }
 
-  /** The per-number and site caps, without counting anything. */
-  check(key: string): LimitCheck {
-    return this.checkAt(key, this.now());
+  /** Whether the site may try another call now. Counts nothing. */
+  checkSite(): LimitCheck {
+    const nowMs = this.now();
+    this.prune(nowMs);
+    return this.siteAt(nowMs);
   }
 
-  /** Counts one request for this number and for the site when both caps allow it. */
-  take(key: string): LimitCheck {
+  /** Takes one of the number's slots when its cap allows it. The slot stays taken. */
+  takeNumber(key: string): LimitCheck {
     const nowMs = this.now();
-    const result = this.checkAt(key, nowMs);
-    if (!result.ok) return result;
+    this.prune(nowMs);
     const times = this.byNumber.get(key);
+    if (times && times.length >= this.settings.numberLimit) {
+      return { ok: false, limit: "number", retryAfterSeconds: seconds(times[0] + NUMBER_WINDOW_MS - nowMs) };
+    }
     if (times) {
       times.push(nowMs);
     } else {
       makeRoom(this.byNumber, this.settings.maxNumberKeys);
       this.byNumber.set(key, [nowMs]);
     }
-    this.site.push(nowMs);
     return { ok: true };
   }
 
@@ -121,8 +134,54 @@ export class CallLimits {
     return { ok: true };
   }
 
+  /** Counts a call we are about to try to place, when the site cap allows it. */
+  takeSite(): LimitCheck {
+    const nowMs = this.now();
+    this.prune(nowMs);
+    const result = this.siteAt(nowMs);
+    if (result.ok) this.site.push(nowMs);
+    return result;
+  }
+
   /** How many entries each map holds, for the tests that check the bounds. */
   sizes(): { numbers: number; payments: number; site: number } {
     return { numbers: this.byNumber.size, payments: this.byPayment.size, site: this.site.length };
+  }
+}
+
+export class DeskCodeFailures {
+  private readonly byClient = new Map<string, number[]>();
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly limit: number = FAILURE_LIMIT,
+    private readonly maxClients: number = MAX_CLIENT_KEYS,
+  ) {}
+
+  /** Refused when this client has had `limit` failures inside the window. Counts nothing. */
+  check(clientKey: string): LimitCheck {
+    const nowMs = this.now();
+    pruneTimes(this.byClient, nowMs, FAILURE_WINDOW_MS);
+    const times = this.byClient.get(clientKey);
+    if (times && times.length >= this.limit) {
+      return { ok: false, limit: "desk_code", retryAfterSeconds: seconds(times[0] + FAILURE_WINDOW_MS - nowMs) };
+    }
+    return { ok: true };
+  }
+
+  /** Counts one wrong or missing desk code for this client. */
+  record(clientKey: string): void {
+    const nowMs = this.now();
+    const times = this.byClient.get(clientKey);
+    if (times) {
+      times.push(nowMs);
+    } else {
+      makeRoom(this.byClient, this.maxClients);
+      this.byClient.set(clientKey, [nowMs]);
+    }
+  }
+
+  get size(): number {
+    return this.byClient.size;
   }
 }

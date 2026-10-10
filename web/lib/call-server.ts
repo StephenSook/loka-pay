@@ -9,8 +9,8 @@
 // (lib/call-speech.ts) and returns the MP3.
 //
 // The in-memory caps are per server instance and weak on a serverless host; the real bounds
-// are the Vonage account's balance and destination settings and the LOKA_CALLS_OFF kill
-// switch. Every in-memory map here and in lib/call-limits.ts has a maximum size and expiry.
+// are the desk code (LOKA_CALL_CODE, given out at the LOKA Pay table), the Vonage account's
+// balance and destination settings, and the LOKA_CALLS_OFF kill switch. Every in-memory map here and in lib/call-limits.ts has a maximum size and expiry.
 //
 // Privacy: the number is used for one Vonage request and one HMAC (the caps' key). It is never
 // written to disk, never put in a response, and nothing here logs anything: no console call
@@ -22,9 +22,9 @@
 // LOKA_ELEVENLABS_API_URL may replace the real APIs only with a local endpoint, only in the e2e
 // test mode, never in a deployed production build; the same holds for a local LOKA_PUBLIC_ORIGIN.
 
-import { createPrivateKey, type KeyObject } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, randomBytes, timingSafeEqual, type KeyObject } from "node:crypto";
 import { AUDIO_LINK_SECONDS, numberKey, signAudioParams, verifyAudioParams, vonageJwt } from "./call-crypto";
-import { CallLimits, type LimitCheck } from "./call-limits";
+import { CallLimits, DeskCodeFailures, type LimitCheck } from "./call-limits";
 import { latestSettlement, settlementBySignature, type SettledPayment } from "./call-payment";
 import {
   SIGNATURE_MAX_AGE_MS,
@@ -62,6 +62,8 @@ export interface CallConfig {
   origin: string;
   vonageBase: string;
   elevenLabsBase: string;
+  /** LOKA_CALL_CODE: the desk code every request must carry, or null when unset (local development). */
+  deskCode: string | null;
 }
 
 /** Calls are off unless every required variable is set and readable; `reason` names variables, never values. */
@@ -157,6 +159,7 @@ export function callConfig(): CallConfigResult {
         origin: publicOrigin(),
         vonageBase: vonageApiBase(),
         elevenLabsBase: elevenLabsApiBase(),
+        deskCode: process.env.LOKA_CALL_CODE?.trim() || null,
       },
     };
   } catch (e) {
@@ -229,12 +232,33 @@ export class AudioCache {
 export interface CallDeps {
   now: () => number;
   limits: CallLimits;
+  failures: DeskCodeFailures;
+  /** Keys the desk-code failure limiter's client hashes; random per server process. */
+  clientSecret: string;
   chain: ChainMemo;
   audio: AudioCache;
 }
 
 /** One set per server process: the caps and caches live in memory only (see lib/call-limits.ts). */
-export const PROCESS_DEPS: CallDeps = { now: () => Date.now(), limits: new CallLimits(), chain: new ChainMemo(), audio: new AudioCache() };
+export const PROCESS_DEPS: CallDeps = {
+  now: () => Date.now(),
+  limits: new CallLimits(),
+  failures: new DeskCodeFailures(),
+  clientSecret: randomBytes(32).toString("hex"),
+  chain: new ChainMemo(),
+  audio: new AudioCache(),
+};
+
+/**
+ * The desk-code failure limiter's key for this request: HMAC-SHA256(per-process secret, the
+ * client's address), where the address is the first x-forwarded-for value (Vercel sets it to
+ * the client's address), or one shared key when there is none. The address itself is never
+ * kept, logged or returned.
+ */
+export function clientKey(request: Request, clientSecret: string): string {
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0].trim();
+  return createHmac("sha256", clientSecret).update(forwarded || "no-forwarded-for", "utf8").digest("hex");
+}
 
 const NO_STORE = { "cache-control": "no-store" };
 
@@ -304,6 +328,22 @@ interface CallRequest {
   to: string;
   lang: "en" | "fr";
   signature: string | null;
+  code: string | null;
+}
+
+const MAX_CODE_CHARS = 64;
+
+/** The desk code compared in constant time: both sides hashed to the same length first. */
+export function deskCodeMatches(expected: string, given: string): boolean {
+  const a = createHash("sha256").update(expected, "utf8").digest();
+  const b = createHash("sha256").update(given, "utf8").digest();
+  return timingSafeEqual(a, b);
+}
+
+/** For the /call page: whether this deployment asks for the desk code. */
+export function callCodeRequired(): boolean {
+  const config = callConfig();
+  return config.ok && config.config.deskCode !== null;
 }
 
 /** The request body, checked; a refusal Response otherwise. The body is never echoed. */
@@ -321,13 +361,16 @@ async function readCallRequest(request: Request): Promise<CallRequest | Response
     return refuse(400, "bad_request", "the body is not JSON");
   }
   if (typeof body !== "object" || body === null || Array.isArray(body)) return refuse(400, "bad_request", "the body is not a JSON object");
-  const { to, lang, signature } = body as { to?: unknown; lang?: unknown; signature?: unknown };
+  const { to, lang, signature, code } = body as { to?: unknown; lang?: unknown; signature?: unknown; code?: unknown };
   if (!isCallableUsNumber(to)) return refuse(400, "bad_number", "a US geographic number in the form +1 and 10 digits");
   if (!isCallLang(lang)) return refuse(400, "bad_lang", "lang is en or fr");
   if (signature !== undefined && signature !== null && !isPlausibleSignature(signature)) {
     return refuse(400, "bad_signature", "a Solana transaction signature in base58");
   }
-  return { to, lang, signature: typeof signature === "string" ? signature : null };
+  if (code !== undefined && code !== null && (typeof code !== "string" || code.length > MAX_CODE_CHARS)) {
+    return refuse(400, "bad_request", "code is the desk code, as text");
+  }
+  return { to, lang, signature: typeof signature === "string" ? signature : null, code: typeof code === "string" ? code : null };
 }
 
 async function findPayment(signature: string | null, deps: CallDeps): Promise<SettledPayment | null> {
@@ -343,22 +386,40 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
 }
 
 /**
- * The order is the point: every cheap check comes before any work that costs something. The
- * body is read and checked, then the kill switch and the configuration, then the caps, which
- * count this request (lib/call-limits.ts); only a counted request reads devnet, and only then
- * is Vonage asked. A counted request stays counted whatever happens next.
+ * The order is the point: every cheap check comes before any work that costs something.
+ * 1. The body is read and checked, then the kill switch and the configuration.
+ * 2. The desk code. A wrong or missing code counts only against this client's failure limit
+ *    (lib/call-limits.ts DeskCodeFailures), never against a number or the site, so bad codes
+ *    cannot lock anyone else out; a client over that limit gets 429 without its code checked.
+ * 3. The site cap is checked, then the number's slot is taken; that slot stays taken whatever
+ *    happens next, so failing requests from one number run into its cap.
+ * 4. Only then is devnet read; then one call per number and payment; then the site counts the
+ *    call and Vonage is asked.
  */
 async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   const read = await readCallRequest(request);
   if (read instanceof Response) return read;
-  const { to, lang, signature } = read;
+  const { to, lang, signature, code } = read;
 
   const config = callConfig();
   if (!config.ok) return refuse(503, "calls_off", config.reason);
   const { secret, origin } = config.config;
 
+  const { deskCode } = config.config;
+  if (deskCode !== null) {
+    const client = clientKey(request, deps.clientSecret);
+    const blocked = deps.failures.check(client);
+    if (!blocked.ok) return limited(blocked);
+    if (code === null || !deskCodeMatches(deskCode, code)) {
+      deps.failures.record(client);
+      return refuse(403, "wrong_code", "the desk code from the LOKA Pay table is needed");
+    }
+  }
+
+  const site = deps.limits.checkSite();
+  if (!site.ok) return limited(site);
   const key = numberKey(secret, to);
-  const taken = deps.limits.take(key);
+  const taken = deps.limits.takeNumber(key);
   if (!taken.ok) return limited(taken);
 
   let payment: SettledPayment | null;
@@ -374,6 +435,9 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   }
   const once = deps.limits.claimPayment(key, payment.signature);
   if (!once.ok) return limited(once);
+  // The site cap counts the calls we actually try to place.
+  const placing = deps.limits.takeSite();
+  if (!placing.ok) return limited(placing);
 
   const nowSeconds = Math.floor(nowMs / 1000);
   const { p, m } = signAudioParams(secret, {

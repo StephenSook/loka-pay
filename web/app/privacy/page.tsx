@@ -135,6 +135,12 @@ export default function PrivacyPage() {
           restarts.
         </p>
         <p>
+          Calls need a desk code we give out at the LOKA Pay table. If a request carries a wrong or
+          missing code, our server&apos;s memory keeps a keyed hash of your network address (not the
+          address, and made with a random key that changes whenever the server restarts) for up to
+          10 minutes, to limit guessing. It is never written to disk or logged.
+        </p>
+        <p>
           The voice is made by ElevenLabs from public payment details only: the amount, how long ago
           the payment settled, and that the chain checked the payer phone&apos;s signature. Your number
           is never sent to ElevenLabs.

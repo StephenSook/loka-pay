@@ -22,6 +22,8 @@ export const E2E_VONAGE_APP_ID = "e2e-stand-in-application";
 export const E2E_FROM_NUMBER = "12025550100";
 /** The ElevenLabs key the healthy e2e server sends to the stand-in; not a secret. */
 export const E2E_ELEVENLABS_KEY = "e2e-stand-in-elevenlabs-key-not-a-secret";
+/** The desk code the healthy e2e server asks for (LOKA_CALL_CODE); a test value. */
+export const E2E_CALL_CODE = "e2e-desk-code";
 
 /**
  * A Vonage-style RSA key and a call secret for this test run, made in memory and never written

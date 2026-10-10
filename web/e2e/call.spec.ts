@@ -2,7 +2,7 @@ import { createPrivateKey, createPublicKey, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { E2E_ELEVENLABS_KEY, E2E_FROM_NUMBER, E2E_VONAGE_APP_ID, FAILING_URL } from "./fixtures/ports";
+import { E2E_CALL_CODE, E2E_ELEVENLABS_KEY, E2E_FROM_NUMBER, E2E_VONAGE_APP_ID, FAILING_URL } from "./fixtures/ports";
 import { E2E_AUDIO, EXPECTED, UPSTREAM } from "./fixtures/upstream";
 
 // /call (PLAN.md 3.9). The healthy e2e server places its calls through the local stand-in's
@@ -71,6 +71,8 @@ test("/call: loads with no login and no cookies, shows the consent text, and mak
   await expect(page.getByRole("button", { name: "Call me now about the latest settled payment" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Call me when the next payment settles" })).toBeEnabled();
   await expect(page.getByLabel("Language")).toHaveValue("en");
+  // The healthy e2e server asks for a desk code (LOKA_CALL_CODE).
+  await expect(page.getByLabel("Desk code (from the LOKA Pay table)")).toBeVisible();
   await expect(page.getByTestId("call-state")).toHaveAttribute("data-state", "idle");
   await page.waitForLoadState("networkidle");
   // Floor: the document plus its CSS and scripts, so "none foreign" is not vacuous.
@@ -105,6 +107,7 @@ test("/call: Call me now calls through the stand-in, shows Calling and the explo
   const seen = watchRequests(page, baseURL!);
   await open(page, "/call");
   await page.getByLabel("US phone number").fill(`(404) 555-01${n.national.slice(-2)}`);
+  await page.getByLabel("Desk code (from the LOKA Pay table)").fill(E2E_CALL_CODE);
   await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
 
   const state = page.getByTestId("call-state");
@@ -116,7 +119,7 @@ test("/call: Call me now calls through the stand-in, shows Calling and the explo
   // The browser sent the number once, to this site; nothing went anywhere else.
   const posts = seen.own.filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/call");
   expect(posts).toHaveLength(1);
-  expect(JSON.parse(posts[0].body)).toEqual({ to: n.e164, lang: "en" });
+  expect(JSON.parse(posts[0].body)).toEqual({ to: n.e164, lang: "en", code: E2E_CALL_CODE });
   expect(seen.foreign).toEqual([]);
   expect(seen.own.filter((r) => r !== posts[0] && (r.url.includes(n.national) || r.body.includes(n.national)))).toEqual([]);
 
@@ -196,6 +199,7 @@ test("/call: armed, a new settlement over the WebSocket posts its signature; the
 
   await open(page, "/call");
   await page.getByLabel("US phone number").fill(n.e164);
+  await page.getByLabel("Desk code (from the LOKA Pay table)").fill(E2E_CALL_CODE);
   await page.getByRole("button", { name: "Call me when the next payment settles" }).click();
   const state = page.getByTestId("call-state");
   await expect(state).toHaveAttribute("data-state", "waiting");
@@ -210,12 +214,30 @@ test("/call: armed, a new settlement over the WebSocket posts its signature; the
   await expect(state).toContainText("Too old");
   const posts = seen.own.filter((r) => r.method === "POST" && new URL(r.url).pathname === "/api/call");
   expect(posts).toHaveLength(1);
-  expect(JSON.parse(posts[0].body)).toEqual({ to: n.e164, lang: "en", signature: redeemSig });
+  expect(JSON.parse(posts[0].body)).toEqual({ to: n.e164, lang: "en", code: E2E_CALL_CODE, signature: redeemSig });
   // Devnet saw reads and subscriptions, never the number.
   expect(seen.foreign.length).toBeGreaterThan(0);
   for (const r of seen.foreign) expect(`${r.url} ${r.body}`).not.toContain(n.national);
   for (const m of socketMessages) expect(m).not.toContain(n.national);
   // Refused before any call: the phone company never heard of this number.
+  expect((await standInSeen(page)).vonage.filter((v) => v.body.to[0]?.number === n.digits)).toEqual([]);
+});
+
+test("/call: a missing or wrong desk code is said on the page, and no call is placed", async ({ page, baseURL }, testInfo) => {
+  const n = numberFor(testInfo.project.name, 2);
+  const seen = watchRequests(page, baseURL!);
+  await open(page, "/call");
+  await page.getByLabel("US phone number").fill(n.e164);
+  // Missing: the page asks for it and sends nothing.
+  await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
+  await expect(page.getByTestId("code-help")).toHaveText("Enter the desk code from the LOKA Pay table.");
+  expect(seen.own.filter((r) => new URL(r.url).pathname === "/api/call")).toEqual([]);
+  // Wrong: the server refuses it before reading devnet or calling anyone.
+  await page.getByLabel("Desk code (from the LOKA Pay table)").fill("not-the-code");
+  await page.getByRole("button", { name: "Call me now about the latest settled payment" }).click();
+  const state = page.getByTestId("call-state");
+  await expect(state).toHaveAttribute("data-state", "wrong_code");
+  await expect(state).toContainText("Wrong desk code");
   expect((await standInSeen(page)).vonage.filter((v) => v.body.to[0]?.number === n.digits)).toEqual([]);
 });
 

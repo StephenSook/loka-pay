@@ -95,10 +95,11 @@ export type CallErrorCode =
   | "too_old"
   | "rate_limited"
   | "chain_read_failed"
-  | "call_failed";
+  | "call_failed"
+  | "wrong_code";
 
-/** Which cap a rate-limited answer hit. */
-export type RateLimitReason = "number" | "payment" | "site";
+/** Which cap a rate-limited answer hit; "desk_code" is too many wrong desk codes from one client. */
+export type RateLimitReason = "number" | "payment" | "site" | "desk_code";
 
 export interface CalledPayment {
   signature: string;

@@ -4,7 +4,7 @@ import { connection } from "next/server";
 import { CallPanel } from "@/components/call-panel";
 import { SandboxChip } from "@/components/chips";
 import { CARD, PAGE } from "@/components/judge-ui";
-import { callsEnabled } from "@/lib/call-server";
+import { callCodeRequired, callsEnabled } from "@/lib/call-server";
 import { NUMBER_LIMIT, NUMBER_WINDOW_MS, SITE_LIMIT } from "@/lib/call-limits";
 import { SIGNATURE_MAX_AGE_MS } from "@/lib/call-shared";
 import { PINS } from "@/lib/pins";
@@ -22,6 +22,7 @@ export const metadata: Metadata = {
 export default async function CallPage() {
   await connection();
   const enabled = callsEnabled();
+  const codeRequired = callCodeRequired();
   return (
     <main className={PAGE}>
       <header className="flex flex-col gap-4">
@@ -51,6 +52,7 @@ export default async function CallPage() {
           The two buttons
         </h2>
         <p>
+          {codeRequired ? <>Both need the desk code we give out at the LOKA Pay table. </> : null}
           <strong>Call me now</strong> asks our server for the program&apos;s most recent settled payment on devnet and
           calls you about it.
         </p>
@@ -61,10 +63,14 @@ export default async function CallPage() {
           settled within the last {SIGNATURE_MAX_AGE_MS / 60_000} minutes before calling.
         </p>
         <p className="text-sm text-muted">
-          A refused or failed transaction is never read out as paid. US numbers only. Each request counts against these
-          limits, failed ones too: {NUMBER_LIMIT} per number every {NUMBER_WINDOW_MS / 60_000} minutes, one call per
-          number for each payment, and {SITE_LIMIT} an hour. They are weak limits: each server instance keeps its own
-          count in memory. The real bounds are the phone company account&apos;s balance and an off switch. More in the{" "}
+          A refused or failed transaction is never read out as paid. US numbers only. Limits: {NUMBER_LIMIT} requests per
+          number every {NUMBER_WINDOW_MS / 60_000} minutes (failed ones count too), one call per number for each payment,
+          and {SITE_LIMIT} calls placed an hour.{" "}
+          {codeRequired ? (
+            <>Wrong desk codes are limited separately, per network address, and never count against anyone&apos;s calls. </>
+          ) : null}
+          These are weak limits: each server instance keeps its own count in memory. The real bounds are the desk code,
+          the phone company account&apos;s balance and an off switch. More in the{" "}
           <Link prefetch={false} href="/privacy" className="font-bold underline">
             privacy policy
           </Link>
@@ -72,7 +78,7 @@ export default async function CallPage() {
         </p>
       </section>
 
-      <CallPanel programId={PINS.programId} enabled={enabled} />
+      <CallPanel programId={PINS.programId} enabled={enabled} codeRequired={codeRequired} />
     </main>
   );
 }

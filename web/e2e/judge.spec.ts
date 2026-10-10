@@ -80,6 +80,7 @@ test("privacy: loads with no login and says what is true today", async ({
   await expect(main).toContainText("/call connects to the same server to watch for the next settled payment, only after you press");
   await expect(main).toContainText("keeps a keyed hash of the number (not the number) for up to 24 hours");
   await expect(main).toContainText("Your number is never sent to ElevenLabs.");
+  await expect(main).toContainText("keeps a keyed hash of your network address (not the address, and made with a random key");
   await expect(main).toContainText("sets no cookies and runs no analytics or tracking");
   await expect(main).toContainText("The settlement server at api.zerobars.us is running on Solana devnet.");
   await expect(main).not.toContainText("not live");

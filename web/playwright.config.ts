@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import {
   CLOSED_PORT,
+  E2E_CALL_CODE,
   E2E_ELEVENLABS_KEY,
   E2E_FROM_NUMBER,
   E2E_GITHUB_TOKEN,
@@ -25,6 +26,7 @@ const CALLS_OFF = {
   ELEVENLABS_API_KEY: "",
   LOKA_CALL_SECRET: "",
   LOKA_CALLS_OFF: "",
+  LOKA_CALL_CODE: "",
   LOKA_ELEVENLABS_VOICE_ID: "",
   LOKA_PUBLIC_ORIGIN: "",
   LOKA_VONAGE_API_URL: "",
@@ -73,6 +75,7 @@ export default defineConfig({
         LOKA_VONAGE_FROM_NUMBER: E2E_FROM_NUMBER,
         ELEVENLABS_API_KEY: E2E_ELEVENLABS_KEY,
         LOKA_CALL_SECRET: callKeys.secret,
+        LOKA_CALL_CODE: E2E_CALL_CODE,
         LOKA_PUBLIC_ORIGIN: baseURL,
         LOKA_VONAGE_API_URL: `${UPSTREAM}/vonage`,
         LOKA_ELEVENLABS_API_URL: `${UPSTREAM}/elevenlabs`,
