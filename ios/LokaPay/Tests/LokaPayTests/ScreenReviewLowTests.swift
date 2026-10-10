@@ -131,3 +131,79 @@ struct WaitingNoteKeptTests {
         #expect(model.waitingNote == nil)
     }
 }
+
+@Suite("Bluetooth drop and ignore counts start again at Next payment (low finding 3)")
+@MainActor
+struct InboxCountSnapshotTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    var allowanceText: String { PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)) }
+    var markerText: String { PaymentTransport.encode(.marker, Data(repeating: 7, count: 238 + 153)) }
+
+    func makeModel(_ inbox: PaymentInbox) -> ReceiveModel {
+        ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                     ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                     deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+    }
+
+    /// Takes one payment over Bluetooth, leaving the screen on that payment.
+    func pay(_ model: ReceiveModel, _ inbox: PaymentInbox, serial: UInt8) async throws {
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 100_000, serial: serial)
+        inbox.deliver(allowanceText)
+        inbox.deliver(PaymentTransport.encode(.note, note.wire))
+        await model.inboxDrained()
+        #expect(model.phase == .received)
+    }
+
+    @Test("one payer's drop and ignored marker are not shown to the next payer; new ones are")
+    func countsSinceNextPayment() async throws {
+        let inbox = PaymentInbox()
+        let model = makeModel(inbox)
+        model.startInbox()
+        try await pay(model, inbox, serial: 0)
+
+        // During the payment: a marker, and one more held code than the inbox can keep.
+        let allowance = allowanceText
+        inbox.deliver(markerText)
+        for _ in 0...PaymentInbox.capacity { inbox.deliver(allowance) }
+        await model.inboxDrained()
+        #expect(model.inboxDropped == 1)
+        #expect(model.inboxIgnored == 1)
+        #expect(model.inboxWaiting == PaymentInbox.capacity)
+        #expect(model.inboxLine != nil)
+
+        model.nextPayment()
+        await model.inboxDrained()
+        #expect(model.inboxDropped == 0)
+        #expect(model.inboxIgnored == 0)
+        #expect(model.inboxLine == nil, "the last payer's drop is still on the next payer's screen")
+
+        // The next payer's own drop and marker are counted from zero.
+        try await pay(model, inbox, serial: 1)
+        inbox.deliver(markerText)
+        for _ in 0...PaymentInbox.capacity { inbox.deliver(allowance) }
+        await model.inboxDrained()
+        #expect(model.inboxDropped == 1)
+        #expect(model.inboxIgnored == 1)
+        #expect(inbox.droppedWhileDetached == 2)
+    }
+
+    @Test("a held code that expires as Next payment releases it counts for the next payer")
+    func expiryAtReleaseCounts() async throws {
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        let model = makeModel(inbox)
+        model.startInbox()
+        try await pay(model, inbox, serial: 0)
+        inbox.deliver(allowanceText)
+        await model.inboxDrained()
+        #expect(model.inboxWaiting == 1)
+        clock.now += 301
+        model.nextPayment()
+        await model.inboxDrained()
+        #expect(model.inboxWaiting == 0)
+        #expect(model.inboxDropped == 1)
+        #expect(model.inboxLine?.hasPrefix("Bluetooth codes dropped before this screen could check them: 1 ") == true)
+    }
+}

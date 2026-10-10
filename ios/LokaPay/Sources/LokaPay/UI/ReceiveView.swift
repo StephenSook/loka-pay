@@ -180,10 +180,7 @@ public struct ReceiveView: View {
             }
             Text("Settling needs internet. The status changes only when a server-signed confirmation verifies on this phone.")
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
-            if model.inboxWaiting > 0 {
-                Text("Bluetooth codes waiting for Next payment: " + String(model.inboxWaiting) + ".")
-                    .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
-            }
+            inboxNotes
             Text(ReceiveModel.unsettledNextPaymentText)
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.ink)
             Button("Next payment") { model.nextPayment() }
@@ -207,9 +204,23 @@ public struct ReceiveView: View {
                         .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
                 }
                 PaymentQRView(text: settlement.receiptText, caption: "Settled receipt for the payer")
+                inboxNotes
                 Button("Next payment") { model.nextPayment() }.buttonStyle(LokaButtonStyle())
             }
             .lokaCard()
+        }
+    }
+
+    /// On a payment's cards: Bluetooth codes held for Next payment, and any dropped or ignored
+    /// since the last Next payment (those counts start again for the next payer).
+    @ViewBuilder private var inboxNotes: some View {
+        if model.inboxWaiting > 0 {
+            Text("Bluetooth codes waiting for Next payment: " + String(model.inboxWaiting) + ".")
+                .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+        }
+        if let line = model.inboxLine {
+            Label(line, systemImage: "antenna.radiowaves.left.and.right")
+                .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
         }
     }
 }

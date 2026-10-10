@@ -70,8 +70,12 @@ public final class ReceiveModel {
     /// which checks it against the allowance on screen.
     public private(set) var conflictAllowanceId: UInt64?
     /// Bluetooth texts of kinds this screen does not use (spend markers, receipts, confirmations),
-    /// counted instead of reported: nobody at the till asked for them.
+    /// counted instead of reported: nobody at the till asked for them. Counted since the last
+    /// Next payment, like `inboxDropped`.
     public private(set) var inboxIgnored = 0
+    /// The inbox's drop count when Next payment was last tapped: drops before it were shown during
+    /// an earlier payment, so they are not the next payer's.
+    private var inboxDroppedBefore = 0
     public private(set) var isWorking = false
     /// This merchant's pending total for the allowance on screen (OfflineLedger); nil when the
     /// ledger could not be read. Read it through `unsettled(for:)`, which checks the pairing.
@@ -197,13 +201,14 @@ public final class ReceiveModel {
     public var receivesOverBluetooth: Bool { inbox != nil }
 
     /// Bluetooth codes the inbox dropped before any screen could check them (it was full, or they
-    /// waited longer than its age limit).
-    public var inboxDropped: Int { inbox?.droppedWhileDetached ?? 0 }
+    /// waited longer than its age limit), since the last Next payment.
+    public var inboxDropped: Int { max(0, (inbox?.droppedWhileDetached ?? 0) - inboxDroppedBefore) }
 
     /// Bluetooth codes held in the inbox until this screen is ready for the next payer.
     public var inboxWaiting: Int { inbox?.held.count ?? 0 }
 
-    /// The ready card's line about Bluetooth texts that were not checked; nil when there are none.
+    /// The line about Bluetooth texts that were not checked since the last Next payment; nil when
+    /// there are none.
     public var inboxLine: String? {
         Self.inboxLine(dropped: inboxDropped, ignored: inboxIgnored, maxAge: inbox?.maxAge ?? PaymentInbox.defaultMaxAge)
     }
@@ -516,6 +521,10 @@ public final class ReceiveModel {
         unsettledAllowanceId = nil
         phase = .ready
         if waitingNote != nil { report(.allowanceNeeded) }
+        // Drops and ignored texts so far were shown during that payment; the next payer's counts
+        // start here. Taken before release(), so a held code that expires now counts for them.
+        inboxDroppedBefore = inbox?.droppedWhileDetached ?? 0
+        inboxIgnored = 0
         inbox?.release()
     }
 
