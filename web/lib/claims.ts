@@ -17,8 +17,12 @@ import { explorerAddress, explorerTx } from "./solana";
 import { SECP256R1_FEATURE } from "./vault";
 import { formatAge, formatEt } from "./time";
 
-/** LIVE (evidence linked), BUILDING (no link) or NOT CHECKED (the read behind it failed). */
-export type ClaimStatus = "live" | "building" | "unchecked";
+/**
+ * LIVE (a current read backs it, evidence linked), AVAILABLE (a shipped page you run yourself,
+ * linked, which this server does not observe), BUILDING (no link) or NOT CHECKED (the read
+ * behind it failed or cannot be made).
+ */
+export type ClaimStatus = "live" | "available" | "building" | "unchecked";
 
 export interface Evidence {
   href: string;
@@ -186,8 +190,11 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
     {
       id: "verify",
       text: "A receipt's three signatures are checked in your browser, with nothing sent to a server.",
-      status: "live",
+      // A shipped page, not an observation: the check runs in the visitor's browser, so no read
+      // of this server's backs it and it is never called Live.
+      status: "available",
       evidence: { href: "/verify", label: "/verify and its labelled test receipt", internal: true },
+      note: "A page you run yourself: the check happens in your browser, so this server does not observe it and does not call it Live.",
     },
     precompileClaim(facts),
     programCiClaim(checks),

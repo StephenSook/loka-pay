@@ -115,8 +115,8 @@ export default async function JudgePage() {
 
         <Step n={4} title="Proof" minutes="About 30 seconds">
           <p className="leading-relaxed">
-            Each claim marked Live links to its evidence and says when that evidence was read; the rest say Not checked
-            or Building. Then the vault&apos;s tokens against everything it owes, read at one slot, and what this team
+            Each claim marked Live links to its evidence and says when that evidence was read; the verifier is Available
+            to run yourself, and the rest say Not checked or Building. Then the vault&apos;s tokens against everything it owes, read at one slot, and what this team
             committed since hacking started.
           </p>
           <GoLink href="/proof">Open /proof</GoLink>

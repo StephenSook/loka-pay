@@ -58,8 +58,9 @@ export default async function ProofPage() {
           <SandboxChip />
         </div>
         <p className="text-xl leading-relaxed">
-          A claim says Live only when a read made for this page backs it, and then it links to evidence you can open. Not
-          checked means that read failed or could not be made; Building means it is not built yet. Neither has a link.
+          A claim says Live only when a current read backs it, and then it links to evidence you can open and says when
+          it was read. Available means a page you open and run yourself, which this server does not observe. Not checked
+          means the read failed or cannot be made; Building means it is not built yet. Neither of those has a link.
         </p>
       </header>
 
@@ -74,7 +75,7 @@ export default async function ProofPage() {
                 <p className="min-w-0 flex-1 basis-64 font-bold leading-relaxed">{c.text}</p>
                 <ClaimChip status={c.status} />
               </div>
-              {c.status === "live" && c.evidence ? <EvidenceLink evidence={c.evidence} /> : null}
+              {(c.status === "live" || c.status === "available") && c.evidence ? <EvidenceLink evidence={c.evidence} /> : null}
               {c.status === "live" && c.evidence && c.more ? <EvidenceLink evidence={c.more} testId="claim-evidence-more" /> : null}
               {c.status === "live" && c.checked ? (
                 <p className="text-sm text-muted" data-testid="claim-checked">

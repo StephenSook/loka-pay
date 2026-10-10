@@ -189,6 +189,37 @@ test.describe("claims decided by named evidence, never Live unconditionally", ()
     expect(rateLimited["program-ci"].note).toBe("GitHub's limit for requests without a token is used up");
   });
 
+  test("the verifier is Available, linked, never Live, and claims no read", () => {
+    for (const reads of [
+      [fresh(facts()), fresh(reserves()), fresh(checks())],
+      [failed<ProgramFacts>("x"), failed<ReservesRead>("x"), failed<MainChecks>("x")],
+    ] as const) {
+      const v = byId(claimsFrom(reads[0], reads[1], reads[2])).verify;
+      expect(v.status).toBe("available");
+      expect(v.evidence?.href).toBe("/verify");
+      expect(v.checked).toBeUndefined();
+      expect(v.note).toContain("this server does not observe it");
+    }
+  });
+
+  test("every Live claim has a read behind it, whatever the reads", () => {
+    const factsReads = [fresh(facts()), cached(facts(), 60_000), stale(facts(), 30_000, "node is behind"), failed<ProgramFacts>("down")];
+    const reservesReads = [fresh(reserves()), cached(reserves(), 60_000), failed<ReservesRead>("down")];
+    const checksReads = [fresh(checks()), cached(checks(), 90_000), failed<MainChecks>("down")];
+    let live = 0;
+    for (const f of factsReads)
+      for (const r of reservesReads)
+        for (const k of checksReads)
+          for (const c of claimsFrom(f, r, k)) {
+            if (c.status !== "live") continue;
+            live += 1;
+            expect(c.checked, c.id).toBeDefined();
+          }
+    expect(live).toBeGreaterThan(0);
+    // With every read failed, nothing is Live.
+    expect(claimsFrom(failed("a"), failed("b"), failed("c")).filter((c) => c.status === "live")).toEqual([]);
+  });
+
   test("the live feed claim is never Live: this server cannot see a visitor's connection", () => {
     const c = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks())));
     expect(c.live.status).toBe("unchecked");

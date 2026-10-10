@@ -141,9 +141,10 @@ export function ReadFailure({ what, reason, ms, testId = "read-failure" }: { wha
   );
 }
 
-/** LIVE (evidence linked), BUILDING (no link) or NOT CHECKED (the read behind it failed). */
+/** LIVE (a current read backs it), AVAILABLE (a page you run yourself), BUILDING or NOT CHECKED (lib/claims.ts). */
 export function ClaimChip({ status }: { status: ClaimStatus }) {
   if (status === "live") return <StateChip state="paid" label="Live" testId="claim-status" />;
+  if (status === "available") return <OutlineChip label="Available" Icon={ArrowUpRightIcon} testId="claim-status" />;
   if (status === "building") return <OutlineChip label="Building" Icon={CircleIcon} testId="claim-status" />;
   return <StateChip state="warning" label="Not checked" testId="claim-status" />;
 }

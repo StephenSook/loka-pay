@@ -255,17 +255,21 @@ test("/proof: Live claims link their evidence and the current read behind it, ot
     if (status === "live") {
       await expect(evidence).toHaveCount(1);
       await expect(claim.getByTestId("claim-status")).toHaveText("Live");
+      // Every Live claim has a read behind it: the read that decided it, by source, with an
+      // age inside that read's window.
       const backing = READ_BACKED[id];
-      if (backing) {
-        // The read that decided it, by source, with an age inside that read's window.
-        const text = await checked.innerText();
-        const m = text.match(/^Checked against (.+) at .+ ET, (\d+) s before this page loaded\.$/);
-        expect(m, `${id}: "${text}"`).not.toBeNull();
-        expect(m![1]).toBe(backing.source);
-        expect(Number(m![2])).toBeLessThanOrEqual(backing.maxAgeS);
-      } else {
-        await expect(checked).toHaveCount(0);
-      }
+      expect(backing, `${id} is Live without a read behind it`).toBeDefined();
+      const text = await checked.innerText();
+      const m = text.match(/^Checked against (.+) at .+ ET, (\d+) s before this page loaded\.$/);
+      expect(m, `${id}: "${text}"`).not.toBeNull();
+      expect(m![1]).toBe(backing.source);
+      expect(Number(m![2])).toBeLessThanOrEqual(backing.maxAgeS);
+    } else if (status === "available") {
+      // A page to run yourself: linked, never called Live, no read claimed, and it says why.
+      await expect(evidence).toHaveCount(1);
+      await expect(checked).toHaveCount(0);
+      await expect(claim.getByTestId("claim-status")).toHaveText("Available");
+      await expect(claim.getByTestId("claim-note")).not.toBeEmpty();
     } else {
       await expect(evidence).toHaveCount(0);
       await expect(claim.getByTestId("claim-evidence-more")).toHaveCount(0);
@@ -276,8 +280,10 @@ test("/proof: Live claims link their evidence and the current read behind it, ot
     }
   }
   for (const id of Object.keys(READ_BACKED)) expect(statusOf[id], id).toBeDefined();
-  // This server cannot see a visitor's WebSocket, so the live feed claim is never Live.
+  // This server cannot see a visitor's WebSocket, so the live feed claim is never Live, and
+  // the verifier runs in the visitor's browser, so it is Available, not Live.
   expect(statusOf.live).toBe("unchecked");
+  expect(statusOf.verify).toBe("available");
   // A redeemed note is evidenced by the first settled redeem itself, which cannot scroll off
   // /live's newest rows; /live is the second link.
   const redeemed = page.getByTestId("claim-redeemed");
