@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 import type { ProgramFacts, ReservesRead } from "../lib/chain";
-import { authoritySentence, claimsFrom, upgradeability, type Claim } from "../lib/claims";
+import { authoritySentence, claimsFrom as claimsFromAll, upgradeability, type Claim } from "../lib/claims";
 import { PROGRAM_JOB, type MainChecks } from "../lib/github";
 import { PINS } from "../lib/pins";
 import type { Read } from "../lib/read-state";
+import type { ServerHealth } from "../lib/settlement";
 
 // The /proof claims (lib/claims.ts). The reads below are TEST FIXTURES shaped like what
 // lib/chain.ts returns; only the fields the claims read matter. A claim says Live only from
@@ -81,6 +82,15 @@ const stale = <T>(data: T, ageMs: number, reason: string, notMade = false): Read
   currentForMs: CURRENT_FOR,
 });
 const failed = <T>(reason: string): Read<T> => ({ ok: false, reason, atMs: NOW });
+
+/** TEST FIXTURE: a health answer in the shape server/src/app/app.ts sends (API-V1 section 6). */
+function health(over: Partial<ServerHealth> = {}): ServerHealth {
+  return { ok: true, commit: MAIN_SHA, cluster: "devnet", programId: PINS.programId, slot: 600_000_123, ...over };
+}
+
+/** The claims, with a current health read unless a test passes its own. */
+const claimsFrom = (f: Read<ProgramFacts>, r: Read<ReservesRead>, k: Read<MainChecks>, h: Read<ServerHealth> = fresh(health())) =>
+  claimsFromAll(f, r, k, h);
 
 const byId = (claims: Claim[]) => Object.fromEntries(claims.map((c) => [c.id, c]));
 const CHAIN_CLAIMS = ["deployed", "initialized", "precompile", "reserves", "redeemed"];
@@ -206,18 +216,69 @@ test.describe("claims decided by named evidence, never Live unconditionally", ()
     const factsReads = [fresh(facts()), cached(facts(), 60_000), stale(facts(), 30_000, "node is behind"), failed<ProgramFacts>("down")];
     const reservesReads = [fresh(reserves()), cached(reserves(), 60_000), failed<ReservesRead>("down")];
     const checksReads = [fresh(checks()), cached(checks(), 90_000), failed<MainChecks>("down")];
+    const healthReads = [fresh(health()), cached(health(), 30_000), fresh(health({ ok: false, slot: null })), failed<ServerHealth>("down")];
     let live = 0;
     for (const f of factsReads)
       for (const r of reservesReads)
         for (const k of checksReads)
-          for (const c of claimsFrom(f, r, k)) {
-            if (c.status !== "live") continue;
-            live += 1;
-            expect(c.checked, c.id).toBeDefined();
-          }
+          for (const h of healthReads)
+            for (const c of claimsFrom(f, r, k, h)) {
+              if (c.status !== "live") continue;
+              live += 1;
+              expect(c.checked, c.id).toBeDefined();
+            }
     expect(live).toBeGreaterThan(0);
     // With every read failed, nothing is Live.
-    expect(claimsFrom(failed("a"), failed("b"), failed("c")).filter((c) => c.status === "live")).toEqual([]);
+    expect(claimsFrom(failed("a"), failed("b"), failed("c"), failed("d")).filter((c) => c.status === "live")).toEqual([]);
+  });
+
+  test("the server claim is Live only from a current health read naming devnet and the pinned program, linking the health check", () => {
+    const live = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), fresh(health(), 3_000))).server;
+    expect(live.status).toBe("live");
+    expect(live.evidence).toEqual({ href: "https://api.zerobars.us/api/health", label: "The server's health check (slot 600000123, commit 62c401a)" });
+    expect(live.more?.href).toBe("https://github.com/StephenSook/loka-pay/tree/main/server");
+    expect(live.checked).toEqual({ source: "api.zerobars.us", readAtMs: NOW - 3_000, ageMs: 3_000 });
+    expect(live.text).toContain("api.zerobars.us");
+
+    // A commit that is not a sha is shown as the server reports it.
+    const uncommitted = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), fresh(health({ commit: "uncommitted" })))).server;
+    expect(uncommitted.evidence?.label).toBe("The server's health check (slot 600000123, commit uncommitted)");
+
+    // 503: the server answered but cannot reach devnet. Never Live, no link.
+    const down = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), fresh(health({ ok: false, slot: null })))).server;
+    expect(down.status).toBe("unchecked");
+    expect(down.evidence).toBeUndefined();
+    expect(down.note).toBe("The server answered its health check with HTTP 503: it says it cannot reach devnet right now.");
+
+    const otherProgram = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), fresh(health({ programId: PINS.wallets.canary })))).server;
+    expect(otherProgram.status).toBe("unchecked");
+    expect(otherProgram.note).toContain(`program ${PINS.wallets.canary}, not devnet and the program in config/pins.json`);
+
+    const mainnet = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), fresh(health({ cluster: "mainnet-beta" })))).server;
+    expect(mainnet.status).toBe("unchecked");
+    expect(mainnet.note).toContain('names cluster "mainnet-beta"');
+  });
+
+  test("a failed, stale or older health read leaves the server claim Not checked with the reason, never a value", () => {
+    const failedRead = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), failed("could not reach api.zerobars.us"))).server;
+    expect(failedRead.status).toBe("unchecked");
+    expect(failedRead.note).toBe("could not reach api.zerobars.us");
+    expect(failedRead.evidence).toBeUndefined();
+    expect(failedRead.checked).toBeUndefined();
+
+    const old = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), cached(health(), 45_000))).server;
+    expect(old.status).toBe("unchecked");
+    expect(old.note).toContain("The last good api.zerobars.us read");
+    expect(old.note).toContain("was 45 s old");
+    expect(old.note).not.toContain("600000123");
+
+    const staleRead = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), stale(health(), 20_000, "api.zerobars.us answered HTTP 502"))).server;
+    expect(staleRead.status).toBe("unchecked");
+    expect(staleRead.note).toContain("failed: api.zerobars.us answered HTTP 502");
+
+    // The server claim depends on its own read only: a dead health check leaves the chain claims Live.
+    const c = byId(claimsFrom(fresh(facts()), fresh(reserves()), fresh(checks()), failed("down")));
+    for (const id of CHAIN_CLAIMS) expect(c[id].status, id).toBe("live");
   });
 
   test("the live feed claim is never Live: this server cannot see a visitor's connection", () => {

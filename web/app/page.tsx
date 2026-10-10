@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SandboxChip } from "@/components/chips";
 import { ArrowUpRightIcon } from "@/components/icons";
+import { ProofPair } from "@/components/proof-pair";
 import { REPO_URL, SENTENCE } from "@/lib/site";
 
 const PAGES = [
@@ -29,6 +30,8 @@ export default function Home() {
         Judge door: three minutes, no login
         <span aria-hidden="true">→</span>
       </Link>
+
+      <ProofPair />
 
       <section aria-label="Status and links" className="grid gap-6 sm:grid-cols-2">
         <div className="min-w-0 rounded-card border-3 border-ink bg-surface p-5 shadow-hard">

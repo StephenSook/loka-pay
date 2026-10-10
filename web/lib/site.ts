@@ -2,7 +2,7 @@
 // feature that is not built and tested.
 
 export const SENTENCE =
-  "When the network or the bank goes down, LOKA Pay lets phones in airplane mode pay each other over Bluetooth, and the shop's phone settles on Solana's public test network the moment it finds signal.";
+  "When the network or the bank goes down, LOKA Pay lets a phone in airplane mode pay a shop's phone directly, in one hop over Bluetooth or a QR code, and the shop's phone settles the payment on Solana devnet when it finds signal.";
 
 export const REPO_URL = "https://github.com/StephenSook/loka-pay";
 

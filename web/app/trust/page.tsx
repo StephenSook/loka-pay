@@ -221,8 +221,9 @@ export default async function TrustPage() {
             proves it.
           </li>
           <li className="leading-relaxed">
-            <strong>Payments are not hidden from the public chain.</strong> Relaying phones cannot read or change a
-            payment, but devnet stores key hashes, amounts and times for anyone to read.
+            <strong>Payments are not hidden.</strong> Devnet stores key hashes, amounts and times for anyone to read,
+            and a payment shown as a QR code is plain text that anyone who sees it can read. Changing it breaks the
+            payer&apos;s signature, which the program checks.
           </li>
           <li className="leading-relaxed">
             <strong>Warnings and repayment are not built yet.</strong> Each allowance records a bond, held in the vault,
