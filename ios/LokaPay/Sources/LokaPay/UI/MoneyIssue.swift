@@ -53,6 +53,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// Try to cheat (task 2.13): the scanned merchant is the one the original note already pays,
     /// so signing again would not be a double spend.
     case cheatSameMerchant
+    /// A scanned allowance certificate (Script B) was not added; the allowance Pay uses is unchanged.
+    case importRefused(AllowanceImportRefusal)
 
     /// A normal next step on the way to a payment, not a failure: the screen shows it in a neutral
     /// banner instead of a red "Stopped" one.
@@ -87,6 +89,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
         case .ledgerNotUpdated: return "ledger_not_updated"
         case .cheatSameMerchant: return "cheat_same_merchant"
+        case .importRefused(let refusal): return refusal.rawValue
         }
     }
 
@@ -132,6 +135,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .cheatSameMerchant:
             return "That is the merchant the original note already pays, so signing again would not be a double "
                 + "spend. Scan a different merchant's code (merchant B)."
+        case .importRefused(let refusal): return refusal.message
         }
     }
 
@@ -142,8 +146,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// an earlier upload still undecided) says so through `MoneyIssue(_:at:refusedBy:)`.
     public var refusedBy: RefusalLayer? {
         switch self {
-        case .payment(.storage): return nil
-        case .payment, .overCap, .damagedRecord, .cheatSameMerchant: return .thisPhone
+        case .payment(.storage), .importRefused(.storage), .importRefused(.storeUnreadable): return nil
+        case .payment, .overCap, .damagedRecord, .cheatSameMerchant, .importRefused: return .thisPhone
         case .settlement(let e):
             switch e {
             case .refused, .badJSON, .badBase64url, .badPubkey, .nameLength, .rateLimited, .budgetExhausted:

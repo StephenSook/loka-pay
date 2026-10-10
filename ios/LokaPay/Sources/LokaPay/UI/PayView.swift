@@ -8,6 +8,7 @@ public struct PayView: View {
     @State private var scanningMerchant = false
     @State private var scanningReturn = false
     @State private var scanningCheatMerchant = false
+    @State private var scanningAllowance = false
 
     public init(model: PayModel, connectivity: ConnectivityMonitor? = nil) {
         self.model = model
@@ -25,8 +26,18 @@ public struct PayView: View {
             }
             if let allowance = model.allowance {
                 AllowanceCard(certificate: allowance.certificate, usage: model.notesSigned.map { .notesSigned($0) })
+                if allowance.importedAt != nil || !allowance.certificate.earmarks.isEmpty {
+                    Text((allowance.importedAt != nil ? "Imported from a sender's code. " : "")
+                         + PayModel.earmarkLine(allowance.certificate, names: model.knownMerchantNames) + ".")
+                        .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             phaseContent
+            if model.canChangeAllowance {
+                allowanceChooser
+                receiveFromSenderCard
+            }
             if let issue = model.issue { IssueBanner(issue) }
         }
         .padding(16)
@@ -51,6 +62,12 @@ public struct PayView: View {
             ScanSheet(title: "Scan merchant B's code", issue: model.issue) { text in
                 model.acceptCheatMerchant(text: text)
                 if model.cheatStep == .confirm { scanningCheatMerchant = false }
+            }
+        }
+        .sheet(isPresented: $scanningAllowance) {
+            ScanSheet(title: "Scan the sender's allowance code", issue: model.issue) { text in
+                model.importAllowance(text: text)
+                if model.importNote != nil { scanningAllowance = false }
             }
         }
         // A haptic when a verified ack or receipt lands (Received or Paid), not when this phone signs.
@@ -211,6 +228,76 @@ public struct PayView: View {
             }
             .lokaCard()
         }
+    }
+
+    // MARK: - Allowances from senders (Script B)
+
+    /// Which allowance Pay signs with, when this phone holds more than one.
+    @ViewBuilder private var allowanceChooser: some View {
+        let choices = model.allowanceChoices
+        if choices.count > 1 {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pay with").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+                ForEach(choices.reversed(), id: \.certificate.allowanceId) { choice in
+                    let selected = choice.certificate.allowanceId == model.allowance?.certificate.allowanceId
+                    Button { model.selectAllowance(id: choice.certificate.allowanceId) } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(LokaColor.ink)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 3) {
+                                // String(...) keeps the id verbatim: a localized interpolation would print "1,001".
+                                Text("Allowance #" + String(choice.certificate.allowanceId)
+                                     + (choice.importedAt == nil ? " (from setup)" : " (from a sender)"))
+                                    .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                                Text("Up to $" + Money.display(baseUnits: choice.certificate.cap) + " sandbox. "
+                                     + PayModel.earmarkLine(choice.certificate, names: model.knownMerchantNames) + ".")
+                                    .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .lokaCard()
+        }
+    }
+
+    /// The setup allowance's id for a sender (text and code), and the scan that imports the
+    /// allowance a sender's payment opened for this phone.
+    private var receiveFromSenderCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Get money from a sender (sandbox)").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+            if let id = model.setupAllowanceId, let code = model.allowanceIdCodeText {
+                Text("Your allowance id (a sender needs this)").font(LokaStyle.label).foregroundStyle(LokaColor.ink)
+                Text(String(id))
+                    .font(LokaStyle.display.monospacedDigit())
+                    .foregroundStyle(LokaColor.ink)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Allowance id " + String(id))
+                PaymentQRView(text: code, caption: "Allowance id code for zerobars.us/send")
+            }
+            Text("A sender's payment opens a new sandbox allowance for this phone. Scan the code their page shows; "
+                 + "this phone checks the server's signature and that it names this phone's key before adding it.")
+                .font(LokaStyle.body).foregroundStyle(LokaColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button { scanningAllowance = true } label: {
+                Label("Scan the sender's allowance code", systemImage: "qrcode.viewfinder")
+            }
+            .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+            CodeEntryField(prompt: "Or paste the allowance code (L1|P|1|A|...)") { model.importAllowance(text: $0) }
+            if let note = model.importNote {
+                Label(note, systemImage: "checkmark.seal.fill")
+                    .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .lokaCard()
     }
 
     // MARK: - Try to cheat (task 2.13, sandbox demo)
