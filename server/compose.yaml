@@ -1,0 +1,61 @@
+# Settlement API on the VPS (docs/RUNBOOK-KEYS.md). Run through scripts/deploy.sh from the repository root.
+# Secrets come from /etc/loka-pay/api.env on the VPS (never committed); server/.env.example lists the names.
+# DATABASE_URL may point at Tiger Cloud instead; the db service is the local fallback sized for a 1 GB VPS.
+services:
+  db:
+    image: postgres:17.6-alpine
+    container_name: loka-pay-db
+    restart: unless-stopped
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=20", "-c", "log_connections=off",
+      "-c", "log_min_error_statement=panic"]
+    environment:
+      POSTGRES_USER: loka
+      POSTGRES_DB: loka
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /etc/loka-pay/api.env}
+    volumes:
+      - /var/lib/loka-pay/postgres:/var/lib/postgresql/data
+    # No published port: reachable only from the api container on the compose network.
+    logging: &logging
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "loka", "-d", "loka"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: loka-pay-api:local
+    container_name: loka-pay-api
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - /etc/loka-pay/keys:/run/keys:ro
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://loka:${POSTGRES_PASSWORD}@db:5432/loka}
+      COMMIT_SHA: ${COMMIT_SHA:-uncommitted}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
+      TEAM_KEY_HASHES: ${TEAM_KEY_HASHES:-}
+      TEAM_DAILY_BUDGET_UNITS: ${TEAM_DAILY_BUDGET_UNITS:-10000000}
+      PUBLIC_DAILY_BUDGET_UNITS: ${PUBLIC_DAILY_BUDGET_UNITS:-10000000}
+      TEAM_DAILY_FUNDER_LAMPORTS: ${TEAM_DAILY_FUNDER_LAMPORTS:-80000000}
+      PUBLIC_DAILY_FUNDER_LAMPORTS: ${PUBLIC_DAILY_FUNDER_LAMPORTS:-80000000}
+      TEAM_DAILY_FEE_LAMPORTS: ${TEAM_DAILY_FEE_LAMPORTS:-100000000}
+      PUBLIC_DAILY_FEE_LAMPORTS: ${PUBLIC_DAILY_FEE_LAMPORTS:-100000000}
+      NOTE_DAILY_FEE_LAMPORTS: ${NOTE_DAILY_FEE_LAMPORTS:-200000000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://zerobars.us,https://www.zerobars.us}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
