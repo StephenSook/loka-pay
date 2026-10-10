@@ -8,7 +8,7 @@
       "A number that is not in this file does not appear on any judge-facing surface."
     ],
     "schema_version": 1,
-    "updated_at": "2026-10-10T20:45:00+00:00"
+    "updated_at": "2026-10-10T22:17:00+00:00"
   },
   "facts": {
     "zero_bar_payments_settled": {
@@ -988,6 +988,30 @@
       "as_of": "2026-10-10T20:31:16+00:00",
       "surfaces": [
         "/judge",
+        "home"
+      ]
+    },
+    "proof_pair_iphone_run2_settled_tx": {
+      "value": "5bwtrE78DKhuQiANbY6e3ZceitYqtx85buWnVpPP14y5uLTQGLkWdntGKs3f7itYBMCW1Uqsb3ZoqWGpmGu6fF3T",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 6:17 PM ET: slot 509670289, meta.err null, loka_vault logged \"Instruction: RedeemNote\", fee 10000 lamports, fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries a 141-byte note. The team's second two-phone iPhone run, Sat Oct 10, handed over by camera QR; the chain shows the payer's P-256 key, not the device",
+      "as_of": "2026-10-10T21:05:58+00:00",
+      "caveat": "Second iPhone run, paid offline by camera QR, Sat Oct 10 5:05 PM ET. Sandbox tokens on devnet.",
+      "surfaces": [
+        "home"
+      ]
+    },
+    "proof_pair_iphone_run2_refused_tx": {
+      "value": "3uBwo59QKFcXXkGJZRPZw8X8hk6x2Yr2wr69cFDuu6c45wd38N76jBoshsEgbc2SKzAHWssUmfpSf9ACgnnUT6HK",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 6:17 PM ET: slot 509671212, meta.err InstructionError [1, Custom 6011], loka_vault logged \"Error Code: SerialUsed. Error Number: 6011\", fee 10000 lamports, fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries a 141-byte note. The cheat of the team's second two-phone iPhone run, Sat Oct 10",
+      "as_of": "2026-10-10T21:09:39+00:00",
+      "caveat": "Second iPhone run: a reused serial refused by Solana, SerialUsed (6011), Sat Oct 10 5:09 PM ET.",
+      "surfaces": [
         "home"
       ]
     }

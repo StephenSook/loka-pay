@@ -1,8 +1,21 @@
 import Link from "next/link";
 import { SandboxChip } from "@/components/chips";
 import { ArrowUpRightIcon } from "@/components/icons";
+import { OutLink } from "@/components/judge-ui";
 import { ProofPair } from "@/components/proof-pair";
-import { REPO_URL, SENTENCE } from "@/lib/site";
+import { IPHONE_PAIR, IPHONE_RUN2, type RecordedTx } from "@/lib/proof-pair";
+import { BLUETOOTH_STATUS, REPO_URL, SENTENCE } from "@/lib/site";
+import { formatEtClock } from "@/lib/time";
+
+// The status card's times and links are the recorded iPhone runs in docs/FACTS.json
+// (lib/proof-pair.ts), so the sentence cannot drift from the transactions it links.
+const clock = (tx: RecordedTx) => formatEtClock(tx.blockTimeMs);
+const RUNS = [
+  { word: "Payment settled", tx: IPHONE_PAIR.settled },
+  { word: "Cheat refused", tx: IPHONE_PAIR.refused },
+  { word: "Payment settled", tx: IPHONE_RUN2.settled },
+  { word: "Cheat refused", tx: IPHONE_RUN2.refused },
+] as const;
 
 const PAGES = [
   { href: "/live", title: "Live", text: "The program's transactions, read by your browser straight from devnet." },
@@ -21,7 +34,10 @@ export default function Home() {
 
       <p className="text-xl leading-relaxed sm:text-2xl">{SENTENCE}</p>
 
-      <p className="text-muted">Sandbox only: test tokens on Solana devnet with no value. No real money moves.</p>
+      <p className="text-muted">
+        Sandbox only: test tokens on Solana devnet with no value. No real money moves.{" "}
+        <span data-testid="bluetooth-status">{BLUETOOTH_STATUS}</span>
+      </p>
 
       <Link
         href="/judge"
@@ -34,11 +50,22 @@ export default function Home() {
       <ProofPair />
 
       <section aria-label="Status and links" className="grid gap-6 sm:grid-cols-2">
-        <div className="min-w-0 rounded-card border-3 border-ink bg-surface p-5 shadow-hard">
+        <div className="min-w-0 rounded-card border-3 border-ink bg-surface p-5 shadow-hard" data-testid="home-status">
           <h2 className="text-2xl">Status</h2>
-          <p className="mt-2 leading-relaxed">
-            Built this weekend at Hacklanta II. The payment loop is being built now.
+          <p className="mt-2 leading-relaxed" data-testid="home-status-text">
+            Built this weekend at Hacklanta II. Real iPhone payments settled on Solana devnet at {clock(IPHONE_PAIR.settled)} and{" "}
+            {clock(IPHONE_RUN2.settled)} ET on Sat Oct 10. Each time, the same serial signed again was refused on chain, at{" "}
+            {clock(IPHONE_PAIR.refused)} and {clock(IPHONE_RUN2.refused)} ET.
           </p>
+          <ul className="mt-3 flex flex-col gap-1 text-sm" aria-label="The four transactions on Solana Explorer">
+            {RUNS.map((r) => (
+              <li key={r.tx.signature} className="min-w-0">
+                <OutLink href={r.tx.explorer} testId="home-status-tx">
+                  {r.word}, {clock(r.tx)}
+                </OutLink>
+              </li>
+            ))}
+          </ul>
         </div>
 
         <div className="flex min-w-0 flex-col items-start justify-center gap-4">

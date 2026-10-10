@@ -16,6 +16,17 @@ export function formatEt(ms: number): string {
   return `${ET.format(new Date(ms))} ET`;
 }
 
+const ET_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/** "4:23 PM" (Atlanta time, no date, no seconds) for a time in milliseconds since the epoch. */
+export function formatEtClock(ms: number): string {
+  return ET_CLOCK.format(new Date(ms));
+}
+
 /** The ISO 8601 UTC instant for a <time dateTime> attribute. */
 export function isoUtc(ms: number): string {
   return new Date(ms).toISOString();
