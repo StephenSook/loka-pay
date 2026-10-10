@@ -112,6 +112,12 @@ export interface TxSummary {
   failed: boolean;
   /** What ran, for the row title: loka_vault instructions, or a loader action. */
   actions: string[];
+  /**
+   * Amounts from the program's events and the open_allowance arguments. Always empty for a
+   * failed transaction: a failed transaction moved nothing, its events were rolled back,
+   * and its instruction data was never checked by the program, so anyone could type any
+   * amount into it.
+   */
   amounts: Amount[];
   error: ProgramError | null;
   /** The transaction error object as the node sent it, as text, when failed. */
@@ -138,13 +144,14 @@ export function summarizeLogs(
   const parsed = parseProgramLogs(logs, programId);
   const actions = [...parsed.instructions];
   if (parsed.loader) actions.push(parsed.loader === "deployed" ? "program deployed" : "program upgraded");
+  const failed = err !== null && err !== undefined;
   return {
     signature,
     slot,
     blockTime: null,
-    failed: err !== null && err !== undefined,
+    failed,
     actions,
-    amounts: amountsFromEvents(parsed.events),
+    amounts: failed ? [] : amountsFromEvents(parsed.events),
     error: parsed.error,
     errText: err === null || err === undefined ? null : JSON.stringify(err),
     truncated: parsed.truncated,
@@ -204,7 +211,9 @@ export function summarizeTransaction(value: unknown, programId: string): TxSumma
     if (program === programId) {
       const name = instructionNameOf(data);
       if (name) fromData.push(name);
-      if (name === "open_allowance") {
+      // Only a transaction that succeeded deposited anything; the data of a failed one is
+      // whatever the sender typed.
+      if (name === "open_allowance" && !base.failed) {
         try {
           const args = decodeOpenAllowanceArgs(data);
           base.amounts.push({ label: "Deposited (cap + bond)", units: (args.cap + args.bond).toString() });

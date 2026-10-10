@@ -178,6 +178,77 @@ test("open_allowance: the deposit (cap + bond) comes from the instruction data (
   expect(s?.blockTime).toBe(1_791_700_000);
 });
 
+// A failed transaction moved nothing. Its instruction data is whatever the sender typed and
+// its events were rolled back, so no amount from either may reach /live or /judge.
+function openAllowanceTx(err: unknown) {
+  const data = concat(
+    [...INSTRUCTION_DISCRIMINATORS.open_allowance],
+    le64(43),
+    concat([0x02], filled(32, 0x78)),
+    le64(999_000_000_000),
+    le64(1),
+    le64(1_760_400_000),
+    le64(1),
+    le32(0),
+  );
+  return {
+    slot: 601,
+    blockTime: 1_791_700_100,
+    meta: {
+      err,
+      logMessages: [
+        `Program ${P} invoke [1]`,
+        "Program log: Instruction: OpenAllowance",
+        `Program ${P} failed: custom program error: 0x1`,
+      ],
+    },
+    transaction: {
+      signatures: ["fixture-failed-open"],
+      message: {
+        accountKeys: [PINS.wallets.tableDemo, P],
+        instructions: [{ programIdIndex: 1, accounts: [0], data: encodeBase58(data) }],
+      },
+    },
+  };
+}
+
+test("a failed open_allowance shows no deposit, whatever its instruction data says (test fixture transaction)", () => {
+  const s = summarizeTransaction(openAllowanceTx({ InstructionError: [0, { Custom: 1 }] }), P);
+  expect(s?.failed).toBe(true);
+  expect(s?.actions).toEqual(["open_allowance"]);
+  expect(s?.amounts).toEqual([]);
+  // The same transaction, had it succeeded, would show the amount: the guard is the failure.
+  expect(summarizeTransaction(openAllowanceTx(null), P)?.amounts).toEqual([
+    { label: "Deposited (cap + bond)", units: "999000000001" },
+  ]);
+});
+
+test("a failed redeem shows no amount from its rolled-back event (test fixture logs)", () => {
+  const logs = [
+    `Program ${P} invoke [1]`,
+    "Program log: Instruction: RedeemNote",
+    `Program data: ${redeemEvent}`,
+    `Program ${P} failed: custom program error: 0x177b`,
+  ];
+  const err = { InstructionError: [0, { Custom: 6011 }] };
+  const fromLogs = summarizeLogs("sig", 10, err, logs, P);
+  expect(fromLogs.failed).toBe(true);
+  expect(fromLogs.amounts).toEqual([]);
+  // The event is still parsed (the logs say it was emitted); it is only not shown as money.
+  expect(parseProgramLogs(logs, P).events).toHaveLength(1);
+  const fromTx = summarizeTransaction(
+    {
+      slot: 602,
+      blockTime: null,
+      meta: { err, logMessages: logs },
+      transaction: { signatures: ["fixture-failed-redeem"], message: { accountKeys: [P], instructions: [] } },
+    },
+    P,
+  );
+  expect(fromTx?.failed).toBe(true);
+  expect(fromTx?.amounts).toEqual([]);
+});
+
 test("summarizeTransaction refuses an answer of the wrong shape", () => {
   expect(summarizeTransaction(null, P)).toBeNull();
   expect(summarizeTransaction({ slot: 1 }, P)).toBeNull();

@@ -161,7 +161,8 @@ function TxRow({ row, kiosk }: { row: Row; kiosk: boolean }) {
           <TxStatusChip failed={row.failed} errorName={row.error?.name} />
         </span>
       </div>
-      {row.amounts.length > 0 ? (
+      {/* A failed transaction moved nothing, so no amount is shown for it (lib/logs.ts). */}
+      {!row.failed && row.amounts.length > 0 ? (
         <ul className="flex flex-col gap-1" data-testid="tx-amounts">
           {row.amounts.map((a, i) => (
             <li key={i} className="font-bold">
