@@ -1,4 +1,5 @@
-// Devnet reads for /judge, /proof and /trust, cached for 30 seconds (lib/cached-read.ts).
+// Devnet reads for /judge, /proof and /trust, cached for 30 seconds and bounded per server
+// process (CHAIN_READS, lib/cached-read.ts).
 // Server only. Every value here comes from the chain; config/pins.json only names the
 // addresses to read and the values to compare against. Every call goes to the server's
 // endpoint with the options from lib/server-rpc.ts (SOLANA_RPC_URL, never inlined into a page).
@@ -11,7 +12,7 @@
 // discriminator here; the fixed accounts are read together with getMultipleAccounts; a
 // batch never names the same method twice.
 
-import { cachedRead, type CachedReadOptions, type Read } from "./cached-read";
+import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { INIT_TX_SIGNATURE } from "./facts";
 import { summarizeTransaction } from "./logs";
 import { PINS } from "./pins";
@@ -36,7 +37,17 @@ import {
 
 export type { FailedRead, Read } from "./cached-read";
 
-export const REVALIDATE_SECONDS = 30;
+/**
+ * Devnet reads: cached 30 s; current (a claim may be Live from it) for 10 s; at most 3 reads
+ * of each kind per 10 s in one server process; 10 s without that read after a rate-limited
+ * answer (public devnet answers 429 with Retry-After: 10). Each facts read makes one
+ * getProgramAccounts call and each reserves read two, against devnet's 10 per 10 s.
+ */
+export const CHAIN_READS: ReadPolicy = {
+  revalidateSeconds: 30,
+  currentForMs: 10_000,
+  limits: { reads: 3, perMs: 10_000, rateLimitPauseMs: 10_000 },
+};
 
 /** One part of a read that may fail on its own; the page says which part and why. */
 export type Part<T> = { ok: true; value: T } | { ok: false; reason: string };
@@ -270,9 +281,9 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
   };
 }
 
-/** `readFirst` for a page whose claims say Live: a read made for this page view (lib/cached-read.ts). */
+/** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readProgramFacts(options: CachedReadOptions = {}): Promise<Read<ProgramFacts>> {
-  return cachedRead(`program-facts:${PINS.programId}`, REVALIDATE_SECONDS, () => readProgramFactsUncached(), options);
+  return cachedRead(`program-facts:${PINS.programId}`, CHAIN_READS, () => readProgramFactsUncached(), options);
 }
 
 // ---------- proof of reserves (/proof, PLAN.md 3.24) ----------
@@ -323,8 +334,9 @@ export async function readReservesUncached(options: RpcOptions = serverReadOptio
     try {
       check = await listProgramAccounts(options, slot);
     } catch (e) {
-      // A node still behind the balances' slot refuses minContextSlot; ask once more.
-      if (!(e instanceof RpcError && e.kind === "rpc")) throw e;
+      // A node still behind the balances' slot refuses minContextSlot; ask once more. A
+      // rate-limited answer is never asked again (lib/read-state.ts pauses the read).
+      if (!(e instanceof RpcError && e.kind === "rpc") || e.code === 429) throw e;
       await new Promise((resolve) => setTimeout(resolve, 600));
       check = await listProgramAccounts(options, slot);
     }
@@ -384,7 +396,7 @@ export async function readReservesUncached(options: RpcOptions = serverReadOptio
   throw new Error("program accounts kept changing during the read; reload to try again");
 }
 
-/** `readFirst` for a page whose claims say Live: a read made for this page view (lib/cached-read.ts). */
+/** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
 export function readReserves(options: CachedReadOptions = {}): Promise<Read<ReservesRead>> {
-  return cachedRead(`reserves:${PINS.programId}`, REVALIDATE_SECONDS, () => readReservesUncached(), options);
+  return cachedRead(`reserves:${PINS.programId}`, CHAIN_READS, () => readReservesUncached(), options);
 }

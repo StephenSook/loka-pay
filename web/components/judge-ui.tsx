@@ -66,18 +66,18 @@ export function YesNo({ value, yes = "Yes", no = "No", testId }: { value: boolea
 }
 
 /**
- * Where and when a value was read: the slot and the time, and whether the read was made for
- * this page or is a cached read, with its age (`fresh`, `askedAtMs` from lib/read-state.ts).
- * `stale` is required so every page that stamps a cached read decides what to show when the
- * latest read failed: then the stamp becomes a warning that names the last good read, its
- * age and the failed one.
+ * Where and when a value was read: the slot, the time and its exact age, and whether it is
+ * current (younger than its read's window, lib/read-state.ts) or a cached read. `stale` is
+ * required so every page that stamps a cached read decides what to show when the latest read
+ * failed or was not made: then the stamp becomes a warning that names the last good read, its
+ * age, and the read that failed and why.
  */
 export function ReadStamp({
   source,
   slot,
   ms,
   stale,
-  fresh,
+  current,
   askedAtMs,
   testId,
 }: {
@@ -85,7 +85,7 @@ export function ReadStamp({
   slot?: string;
   ms: number;
   stale: FailedRead | null;
-  fresh: boolean;
+  current: boolean;
   askedAtMs: number;
   testId?: string;
 }) {
@@ -96,25 +96,26 @@ export function ReadStamp({
         role="status"
         data-testid={testId}
         data-stale="true"
-        data-fresh="false"
+        data-current="false"
         className="flex min-w-0 gap-3 rounded-card border-3 border-warning-line bg-warning p-4 text-sm text-on-state"
       >
         <AlertIcon className="mt-0.5 h-5 w-5 shrink-0" />
         <p className="min-w-0 break-words">
           <strong>Not current.</strong> Last good read from {source}
           {slot ? <> at {slot}</> : null}, <When ms={ms} />, {age} old when this page loaded. The latest read, at{" "}
-          <When ms={stale.atMs} />, failed: {stale.reason}. The values shown are from the last good read.
+          <When ms={stale.atMs} />, {stale.notMade ? "was not made" : "failed"}: {stale.reason}. The values shown are
+          from the last good read.
         </p>
       </div>
     );
   }
   return (
-    <p className="flex items-start gap-2 text-sm text-muted" data-testid={testId} data-stale="false" data-fresh={fresh ? "true" : "false"}>
+    <p className="flex items-start gap-2 text-sm text-muted" data-testid={testId} data-stale="false" data-current={current ? "true" : "false"}>
       <ClockIcon className="mt-0.5 h-4 w-4 shrink-0" />
       <span className="min-w-0 break-words">
         Read from {source}
         {slot ? <> at {slot}</> : null}, <When ms={ms} />
-        {fresh ? ", for this page." : <>: a cached read, {age} old when this page loaded.</>}
+        {current ? <>, {age} before this page loaded.</> : <>: a cached read, {age} old when this page loaded.</>}
       </span>
     </p>
   );

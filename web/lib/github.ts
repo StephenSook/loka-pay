@@ -3,14 +3,23 @@
 // (lib/cached-read.ts). A rate-limited or failed read is never replaced by an old or
 // typed-in number: the page shows the compare link and says the count is unavailable.
 
-import { cachedRead, type Read } from "./cached-read";
+import { cachedRead, type Read, type ReadPolicy } from "./cached-read";
 import { KIT_TAG } from "./facts";
 import { REPO_URL } from "./site";
 
 export const REPO = "StephenSook/loka-pay";
 export const COMPARE_API_URL = `https://api.github.com/repos/${REPO}/compare/${KIT_TAG}...main`;
 export const COMPARE_PAGE_URL = `${REPO_URL}/compare/${KIT_TAG}...main`;
-export const REVALIDATE_SECONDS = 300;
+/**
+ * GitHub reads: cached 5 minutes; current for 60 s; at most 3 reads of each kind per minute
+ * in one server process, and a minute without that read after GitHub says the limit for
+ * requests without a token (60 an hour) is used up.
+ */
+export const GITHUB_READS: ReadPolicy = {
+  revalidateSeconds: 300,
+  currentForMs: 60_000,
+  limits: { reads: 3, perMs: 60_000, rateLimitPauseMs: 60_000 },
+};
 
 /** GitHub lists at most this many changed files in a compare answer. */
 export const FILES_CAP = 300;
@@ -34,9 +43,12 @@ export interface BuiltThisWeekend {
 }
 
 export class GitHubError extends Error {
-  constructor(message: string) {
+  /** True when GitHub refused for its rate limit: the read is paused, never retried (lib/read-state.ts). */
+  readonly rateLimited: boolean;
+  constructor(message: string, rateLimited = false) {
     super(message);
     this.name = "GitHubError";
+    this.rateLimited = rateLimited;
   }
 }
 
@@ -109,7 +121,7 @@ export async function readCompareUncached(url: string = COMPARE_API_URL, timeout
     const reset = Number(response.headers.get("x-ratelimit-reset"));
     if (remaining === "0" || response.status === 429) {
       const when = Number.isFinite(reset) && reset > 0 ? ` until ${new Date(reset * 1000).toISOString()}` : "";
-      throw new GitHubError(`GitHub's limit for requests without a token is used up${when}`);
+      throw new GitHubError(`GitHub's limit for requests without a token is used up${when}`, true);
     }
   }
   if (!response.ok) throw new GitHubError(`GitHub answered HTTP ${response.status}`);
@@ -128,5 +140,5 @@ export async function readCompareUncached(url: string = COMPARE_API_URL, timeout
 }
 
 export function readBuiltThisWeekend(): Promise<Read<BuiltThisWeekend>> {
-  return cachedRead(`github-compare:${REPO}:${KIT_TAG}`, REVALIDATE_SECONDS, () => readCompareUncached());
+  return cachedRead(`github-compare:${REPO}:${KIT_TAG}`, GITHUB_READS, () => readCompareUncached());
 }

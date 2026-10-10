@@ -6,7 +6,8 @@ import type { Read } from "../lib/read-state";
 
 // The /proof claims (lib/claims.ts). The reads below are TEST FIXTURES shaped like what
 // lib/chain.ts returns; only the fields the claims read matter. A claim says Live only from
-// a read made for this page view: a failed, stale or cached read leaves it Not checked.
+// a current read (younger than its window), and then carries that read's time and age; a
+// failed, stale or older cached read leaves it Not checked.
 
 const NOW = 1_791_700_000_000;
 
@@ -37,43 +38,68 @@ function reserves(redeemedUnits = "2500000"): ReservesRead {
   };
 }
 
-const fresh = <T>(data: T): Read<T> => ({ ok: true, data, readAtMs: NOW, staleBecause: null, fresh: true, askedAtMs: NOW });
+const CURRENT_FOR = 10_000;
+const fresh = <T>(data: T, ageMs = 0): Read<T> => ({
+  ok: true,
+  data,
+  readAtMs: NOW - ageMs,
+  staleBecause: null,
+  current: true,
+  askedAtMs: NOW,
+  currentForMs: CURRENT_FOR,
+});
 const cached = <T>(data: T, ageMs: number): Read<T> => ({
   ok: true,
   data,
   readAtMs: NOW - ageMs,
   staleBecause: null,
-  fresh: false,
+  current: false,
   askedAtMs: NOW,
+  currentForMs: CURRENT_FOR,
 });
-const stale = <T>(data: T, ageMs: number, reason: string): Read<T> => ({
+const stale = <T>(data: T, ageMs: number, reason: string, notMade = false): Read<T> => ({
   ok: true,
   data,
   readAtMs: NOW - ageMs,
-  staleBecause: { reason, atMs: NOW },
-  fresh: false,
+  staleBecause: notMade ? { reason, atMs: NOW, notMade: true } : { reason, atMs: NOW },
+  current: false,
   askedAtMs: NOW,
+  currentForMs: CURRENT_FOR,
 });
 const failed = <T>(reason: string): Read<T> => ({ ok: false, reason, atMs: NOW });
 
 const byId = (claims: Claim[]) => Object.fromEntries(claims.map((c) => [c.id, c]));
 const CHAIN_CLAIMS = ["deployed", "initialized", "reserves", "redeemed"];
 
-test("reads made for this page make the chain claims Live, each with its evidence", () => {
-  const c = byId(claimsFrom(fresh(facts()), fresh(reserves())));
+test("current reads make the chain claims Live, each with its evidence and the read's time and exact age", () => {
+  const c = byId(claimsFrom(fresh(facts(), 4_000), fresh(reserves(), 0)));
   for (const id of CHAIN_CLAIMS) {
     expect(c[id].status, id).toBe("live");
     expect(c[id].evidence, id).toBeDefined();
   }
+  expect(c.deployed.checked).toEqual({ source: "Solana devnet", readAtMs: NOW - 4_000, ageMs: 4_000 });
+  expect(c.redeemed.checked).toEqual({ source: "Solana devnet", readAtMs: NOW, ageMs: 0 });
+  // A claim no read decides carries no read stamp.
+  expect(c.verify.checked).toBeUndefined();
 });
 
-test("a cached read, however recent, never makes a claim Live: Not checked, with the read's age", () => {
+test("a cached read older than the window never makes a claim Live: Not checked, with the read's age", () => {
   const c = byId(claimsFrom(cached(facts(), 60_000), cached(reserves(), 12_000)));
+  for (const id of CHAIN_CLAIMS) {
+    expect(c[id].status, id).toBe("unchecked");
+    expect(c[id].checked, id).toBeUndefined();
+  }
+  expect(c.deployed.note).toContain("was 60 s old");
+  expect(c.reserves.note).toContain("was 12 s old");
+  expect(c.reserves.note).toContain("a Live claim needs one no older than 10 s");
+});
+
+test("a read not made (budget or rate-limit pause) says so, with the last good read's age", () => {
+  const reason = "the last read was rate limited, so this server waits 8 s more before reading again";
+  const c = byId(claimsFrom(stale(facts(), 25_000, reason, true), stale(reserves(), 25_000, reason, true)));
   for (const id of CHAIN_CLAIMS) expect(c[id].status, id).toBe("unchecked");
-  expect(c.deployed.note).toContain("Only a cached devnet read");
-  expect(c.deployed.note).toContain("60 s old");
-  expect(c.reserves.note).toContain("12 s old");
-  expect(c.reserves.note).toContain("Live needs a read made for this page");
+  expect(c.deployed.note).toContain(`was not made: ${reason}`);
+  expect(c.deployed.note).toContain("was 25 s old");
 });
 
 test("a failed read for this page with an older good read: Not checked, naming the failure and the older read's age", () => {

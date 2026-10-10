@@ -68,7 +68,7 @@ export default async function TrustPage() {
       slot={facts.data.slots.min === facts.data.slots.max ? `slot ${facts.data.slots.min}` : `slots ${facts.data.slots.min} to ${facts.data.slots.max}`}
       ms={facts.readAtMs}
       stale={facts.staleBecause}
-      fresh={facts.fresh}
+      current={facts.current}
       askedAtMs={facts.askedAtMs}
       testId="trust-read-stamp"
     />

@@ -2,6 +2,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expect, test } from "@playwright/test";
 import { readProgramFactsUncached, readReservesUncached } from "../lib/chain";
+import { GitHubError, readCompareUncached } from "../lib/github";
+import { isRateLimited } from "../lib/read-state";
 import { SERVER_READ_DEADLINE_MS, SERVER_RPC_URL, serverReadOptions } from "../lib/server-rpc";
 import {
   DEFAULT_RPC_URL,
@@ -155,6 +157,56 @@ test.describe("server reads have a total time limit and no retries", () => {
     const started = Date.now();
     await expect(readReservesUncached({ ...serverReadOptions(400), url })).rejects.toThrow(/limit/);
     expect(Date.now() - started).toBeLessThan(2500);
+    expect(requests).toBe(1);
+  });
+});
+
+// A node and a GitHub stand-in that answer every request with their rate limit (TEST
+// FIXTURES on 127.0.0.1). A rate-limited answer is never retried: retrying only spends more
+// of the same limit (lib/read-state.ts pauses the read instead).
+test.describe("a rate-limited answer is not retried", () => {
+  let server: Server;
+  let url = "";
+  let requests = 0;
+
+  test.beforeAll(async () => {
+    server = createServer((req, res) => {
+      requests += 1;
+      req.resume();
+      if (req.url?.startsWith("/github")) {
+        res.writeHead(403, { "content-type": "application/json", "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1791703600" });
+        res.end(JSON.stringify({ message: "API rate limit exceeded" }));
+        return;
+      }
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "10" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: 0, error: { code: 429, message: "Too many requests" } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  test.afterAll(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  test.beforeEach(() => {
+    requests = 0;
+  });
+
+  test("an RPC call answered with HTTP 429 sends one request even with a retry allowed", async () => {
+    const error = await rpc("getSlot", [], { url, retries: 1 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RpcError);
+    expect((error as RpcError).code).toBe(429);
+    expect(isRateLimited(error)).toBe(true);
+    expect(requests).toBe(1);
+  });
+
+  test("GitHub's used-up limit is a rate-limited GitHubError, from one request", async () => {
+    const error = await readCompareUncached(`${url}/github/compare`, 5000).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GitHubError);
+    expect((error as GitHubError).message).toBe("GitHub's limit for requests without a token is used up until 2026-10-11T07:26:40.000Z");
+    expect(isRateLimited(error)).toBe(true);
     expect(requests).toBe(1);
   });
 });

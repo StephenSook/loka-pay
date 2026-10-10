@@ -10,16 +10,35 @@
 // visitor tries again. When an earlier good read is still cached, the page gets it marked
 // stale together with the failed read's reason and time (lib/read-state.ts), and says both.
 //
-// A cached value is never older than the window the page states: an older entry is read
-// again now. Every value says whether it was read for this page or is a cached read, and
-// how old (lib/read-state.ts `fresh`). A page whose claims say Live passes `readFirst`, so
-// a claim is decided by a read made for that page view, never by the cache.
+// Every value says how old it is; only one younger than the policy's `currentForMs` is
+// current, and only a current value may make a claim Live (a page asks with `needCurrent`).
+// Every request upstream, from the cache or past it, goes through one ReadGate per server
+// process (lib/read-state.ts): page views share a running read, each read has a budget per
+// window, and a rate-limited answer pauses that read instead of being retried. So however
+// many page views arrive, the reads they cause stay bounded, and a page that cannot read
+// again shows the last good read with its age.
 
 import { unstable_cache } from "next/cache";
-import { resolveRead, type FailedRead, type Read, type Stamped } from "./read-state";
+import { ReadGate, ReadNotMade, resolveRead, type FailedRead, type GateLimits, type Read, type Stamped } from "./read-state";
 import { describeFailure } from "./solana";
 
 export type { FailedRead, Read } from "./read-state";
+
+/** How one kind of read is cached, how young it must be to count as current, and its budget. */
+export interface ReadPolicy {
+  /** The cache's window: an entry older than this is read again (cached mode). */
+  revalidateSeconds: number;
+  /** A read younger than this is current: a claim may be Live from it. */
+  currentForMs: number;
+  limits: GateLimits;
+}
+
+export interface CachedReadOptions {
+  /** For a page whose claims say Live: a current read (reused or made now), the cache only as a fallback. */
+  needCurrent?: boolean;
+}
+
+const gate = new ReadGate(Date.now);
 
 // The latest failed read per key in this server process. The cache refreshes an old entry
 // in the background after answering with it; when that refresh fails, the cache keeps the
@@ -32,38 +51,35 @@ const lastFailures = new Map<string, FailedRead>();
 // would read devnet again; this keeps the newer read for the next views instead.
 const lastGoodReads = new Map<string, Stamped<unknown>>();
 
-export interface CachedReadOptions {
-  /** Read now first; use the cache only when that read fails (the value is then stale). */
-  readFirst?: boolean;
-}
-
 export async function cachedRead<T>(
   key: string,
-  revalidateSeconds: number,
+  policy: ReadPolicy,
   read: () => Promise<T>,
   options: CachedReadOptions = {},
 ): Promise<Read<T>> {
-  const stamped = async () => {
+  const upstream = async (): Promise<Stamped<T>> => {
     try {
-      return { data: await read(), readAtMs: Date.now() };
+      return await gate.read(key, policy.limits, read);
     } catch (e) {
-      lastFailures.set(key, { reason: describeFailure(e), atMs: Date.now() });
+      // A read the gate did not make is not a failure of devnet or GitHub.
+      if (!(e instanceof ReadNotMade)) lastFailures.set(key, { reason: describeFailure(e), atMs: Date.now() });
       throw e;
     }
   };
   return resolveRead({
-    cached: unstable_cache(stamped, [key], { revalidate: revalidateSeconds }),
-    readNow: stamped,
+    cached: unstable_cache(upstream, [key], { revalidate: policy.revalidateSeconds }),
+    readNow: upstream,
     // After a quiet spell the cache answers once with its last entry while it refreshes in
     // the background. When that entry is older than the window, read now instead, so a judge
     // arriving at an idle site never sees a value older than the window the page states.
-    maxAgeMs: revalidateSeconds * 1000,
+    maxAgeMs: policy.revalidateSeconds * 1000,
+    currentForMs: policy.currentForMs,
     lastFailure: () => lastFailures.get(key) ?? null,
     lastGoodRead: () => (lastGoodReads.get(key) as Stamped<T> | undefined) ?? null,
     keepGoodRead: (entry) => {
       lastGoodReads.set(key, entry);
     },
     now: Date.now,
-    readFirst: options.readFirst ?? false,
+    needCurrent: options.needCurrent ?? false,
   });
 }

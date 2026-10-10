@@ -41,7 +41,7 @@ export function ProgramFactsPanel({ read }: { read: Read<ProgramFacts> }) {
         </Fact>
       </dl>
       {read.ok ? (
-        <Facts facts={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} fresh={read.fresh} askedAtMs={read.askedAtMs} />
+        <Facts facts={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} current={read.current} askedAtMs={read.askedAtMs} />
       ) : (
         <ReadFailure what="the program from devnet" reason={read.reason} ms={read.atMs} />
       )}
@@ -53,13 +53,13 @@ function Facts({
   facts,
   readAtMs,
   stale,
-  fresh,
+  current,
   askedAtMs,
 }: {
   facts: ProgramFacts;
   readAtMs: number;
   stale: FailedRead | null;
-  fresh: boolean;
+  current: boolean;
   askedAtMs: number;
 }) {
   const { program, programData, vault, counts, init, config } = facts;
@@ -69,7 +69,7 @@ function Facts({
       slot={slotText(facts.slots)}
       ms={readAtMs}
       stale={stale}
-      fresh={fresh}
+      current={current}
       askedAtMs={askedAtMs}
       testId="program-read-stamp"
     />

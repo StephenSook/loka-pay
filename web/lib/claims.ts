@@ -2,9 +2,10 @@
 // the page hands in its reads, so the rules are unit-tested (unit/claims.test.ts).
 //
 // A claim is Live only with evidence a judge can open; a claim the chain decides is computed
-// from a devnet read made for this page view (the page passes `readFirst`), and when that
-// read failed, or only a cached read is available, it says Not checked, never Live from an
-// older read. Everything else says Building and has no link.
+// from a current devnet read (younger than its window, lib/read-state.ts; the page asks with
+// `needCurrent`), and a Live claim says when that read was made and how old it was. When the
+// read failed, was not made, or only an older read is available, it says Not checked, never
+// Live from an older read. Everything else says Building and has no link.
 
 import type { ProgramFacts, ReservesRead } from "./chain";
 import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
@@ -33,28 +34,44 @@ export interface Claim {
   more?: Evidence;
   /** Why it is not Live: the failed read, or what is missing. */
   note?: string;
+  /** For a Live claim decided by a read: which read, when, and how old it was when the page loaded. */
+  checked?: Checked;
+}
+
+export interface Checked {
+  source: string;
+  readAtMs: number;
+  ageMs: number;
 }
 
 /**
- * The data of a read made for this page view, or why there is none: the read failed, or only
- * an older read (stale, or reused from the cache) is available. A claim is never decided
- * from an older read: Live needs a read made for this page.
+ * The data of a current read, with when it was made, or why there is none: the read failed or
+ * was not made, or only an older read is available. A claim is never decided from an older
+ * read: Live needs a read younger than its window.
  */
-export function current<T>(read: Read<T>, source = "devnet"): { data: T; problem: null } | { data: null; problem: string } {
-  if (!read.ok) return { data: null, problem: read.reason };
-  if (read.staleBecause) {
+export function current<T>(
+  read: Read<T>,
+  source = "Solana devnet",
+): { data: T; problem: null; checked: Checked } | { data: null; problem: string; checked: null } {
+  if (!read.ok) return { data: null, problem: read.reason, checked: null };
+  const age = formatAge(read.askedAtMs - read.readAtMs);
+  const window = formatAge(read.currentForMs);
+  if (!read.current) {
+    const why = read.staleBecause
+      ? `The ${source} read for this page, at ${formatEt(read.staleBecause.atMs)}, ${read.staleBecause.notMade ? "was not made" : "failed"}: ${read.staleBecause.reason}. `
+      : "";
     return {
       data: null,
-      problem: `The ${source} read for this page, at ${formatEt(read.staleBecause.atMs)}, failed: ${read.staleBecause.reason}. The last good read, ${formatAge(read.askedAtMs - read.readAtMs)} old, does not make this claim Live.`,
+      problem: `${why}The last good ${source} read, from ${formatEt(read.readAtMs)}, was ${age} old; a Live claim needs one no older than ${window}.`,
+      checked: null,
     };
   }
-  if (!read.fresh) {
-    return {
-      data: null,
-      problem: `Only a cached ${source} read from ${formatEt(read.readAtMs)}, ${formatAge(read.askedAtMs - read.readAtMs)} old, is available; Live needs a read made for this page.`,
-    };
-  }
-  return { data: read.data, problem: null };
+  return { data: read.data, problem: null, checked: { source, readAtMs: read.readAtMs, ageMs: read.askedAtMs - read.readAtMs } };
+}
+
+/** A Live claim decided by a read carries that read's time and age. */
+function stamped(claim: Claim, checked: Checked | null): Claim {
+  return claim.status === "live" && checked ? { ...claim, checked } : claim;
 }
 
 export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRead>): Claim[] {
@@ -106,8 +123,8 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
         : { id: "redeemed", text: "A payment note has been redeemed on devnet.", status: "building", note: "No allowance on chain has a redeemed amount yet." };
 
   return [
-    deployed,
-    initialized,
+    stamped(deployed, facts.checked),
+    stamped(initialized, facts.checked),
     {
       id: "verify",
       text: "A receipt's three signatures are checked in your browser, with nothing sent to a server.",
@@ -132,14 +149,17 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
       status: "live",
       evidence: { href: "/live", label: "/live", internal: true },
     },
-    {
-      id: "reserves",
-      text: "Proof of reserves from the program's accounts, every balance read at one slot.",
-      status: reserves.data ? "live" : "unchecked",
-      evidence: reserves.data ? { href: "#reserves", label: "Proof of reserves below", internal: true } : undefined,
-      note: reserves.problem ?? undefined,
-    },
-    redeemed,
+    stamped(
+      {
+        id: "reserves",
+        text: "Proof of reserves from the program's accounts, every balance read at one slot.",
+        status: reserves.data ? "live" : "unchecked",
+        evidence: reserves.data ? { href: "#reserves", label: "Proof of reserves below", internal: true } : undefined,
+        note: reserves.problem ?? undefined,
+      },
+      reserves.checked,
+    ),
+    stamped(redeemed, reserves.checked),
     {
       id: "server",
       text: "The settlement server takes a note from a phone and settles it on devnet.",

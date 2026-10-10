@@ -4,11 +4,12 @@ import { connection } from "next/server";
 import { BuiltThisWeekendPanel } from "@/components/built-this-weekend";
 import { SandboxChip } from "@/components/chips";
 import { ArrowUpRightIcon } from "@/components/icons";
-import { CARD, ClaimChip, PAGE } from "@/components/judge-ui";
+import { CARD, ClaimChip, PAGE, When } from "@/components/judge-ui";
 import { ReservesPanel } from "@/components/reserves-panel";
 import { readProgramFacts, readReserves } from "@/lib/chain";
 import { claimsFrom, type Evidence } from "@/lib/claims";
 import { readBuiltThisWeekend } from "@/lib/github";
+import { formatAge } from "@/lib/time";
 
 // /proof (PLAN.md 3.2, 3.24, 3.60). The claims and the rules that decide their status are in
 // lib/claims.ts; this page reads devnet and GitHub and shows them.
@@ -35,10 +36,11 @@ function EvidenceLink({ evidence, testId = "claim-evidence" }: { evidence: Evide
 
 export default async function ProofPage() {
   await connection();
-  // Read for this page view (readFirst): a claim is never Live from a cached read.
+  // needCurrent: a claim is Live only from a current read (reused or made now), never from
+  // an older cached one.
   const [facts, reserves, built] = await Promise.all([
-    readProgramFacts({ readFirst: true }),
-    readReserves({ readFirst: true }),
+    readProgramFacts({ needCurrent: true }),
+    readReserves({ needCurrent: true }),
     readBuiltThisWeekend(),
   ]);
   const claims = claimsFrom(facts, reserves);
@@ -69,6 +71,12 @@ export default async function ProofPage() {
               </div>
               {c.status === "live" && c.evidence ? <EvidenceLink evidence={c.evidence} /> : null}
               {c.status === "live" && c.evidence && c.more ? <EvidenceLink evidence={c.more} testId="claim-evidence-more" /> : null}
+              {c.status === "live" && c.checked ? (
+                <p className="text-sm text-muted" data-testid="claim-checked">
+                  Checked against {c.checked.source} at <When ms={c.checked.readAtMs} />, {formatAge(c.checked.ageMs)} before this page
+                  loaded.
+                </p>
+              ) : null}
               {c.status !== "live" && c.note ? <p className="break-words text-sm text-muted">{c.note}</p> : null}
             </li>
           ))}

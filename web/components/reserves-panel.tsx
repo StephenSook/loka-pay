@@ -30,7 +30,7 @@ export function ReservesPanel({ read }: { read: Read<ReservesRead> }) {
         The vault&apos;s tokens against everything the program owes, from the program&apos;s own accounts on devnet.
       </p>
       {read.ok ? (
-        <Reserves r={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} fresh={read.fresh} askedAtMs={read.askedAtMs} />
+        <Reserves r={read.data} readAtMs={read.readAtMs} stale={read.staleBecause} current={read.current} askedAtMs={read.askedAtMs} />
       ) : (
         <ReadFailure what="the reserves from devnet" reason={read.reason} ms={read.atMs} />
       )}
@@ -69,13 +69,13 @@ function Reserves({
   r,
   readAtMs,
   stale,
-  fresh,
+  current,
   askedAtMs,
 }: {
   r: ReservesRead;
   readAtMs: number;
   stale: FailedRead | null;
-  fresh: boolean;
+  current: boolean;
   askedAtMs: number;
 }) {
   const difference = BigInt(r.totals.difference);
@@ -86,7 +86,7 @@ function Reserves({
       slot={`slot ${r.slot}, every balance in one call (accounts listed at slot ${r.listedAt.first} and checked again at slot ${r.listedAt.check})`}
       ms={readAtMs}
       stale={stale}
-      fresh={fresh}
+      current={current}
       askedAtMs={askedAtMs}
       testId="reserves-read-stamp"
     />
