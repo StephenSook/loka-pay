@@ -11,6 +11,10 @@ public struct ReceivedPayment: Equatable, Sendable {
     public let receivedWithZeroBars: Bool
     /// The signed acknowledgement, once the merchant key has signed it.
     public internal(set) var ack: Ack?
+    /// The Bluetooth inbox delivery (`PaymentInbox.deliver`'s sequence number) this note was
+    /// accepted from; nil when it came by camera, by paste or from the ledger. The mesh glue sends
+    /// the ack and the receipt only to the sender of this one delivery.
+    public internal(set) var meshDelivery: UInt64? = nil
 
     /// `L1|P|1|Y|...` for the payer.
     public var ackText: String? { ack.map { PaymentTransport.encode(.ack, $0.wire) } }
@@ -139,6 +143,9 @@ public final class ReceiveModel {
     /// The attachment `PaymentInbox.attach` returned; nil while this screen is not attached. The
     /// consumer takes queued texts only with it, so it stops when the screen goes or is replaced.
     @ObservationIgnored private var inboxAttachment: UInt64?
+    /// The Bluetooth delivery the waiting note came from (`ReceivedPayment.meshDelivery`), paired
+    /// with its note id so it never applies to another note. The first copy of a waiting note keeps it.
+    @ObservationIgnored private var waitingNoteDelivery: (noteId: Data, delivery: UInt64)?
 
     /// - Parameters:
     ///   - merchantWire: this phone's merchant certificate from `POST /v1/merchants` (verified here).
@@ -386,7 +393,7 @@ public final class ReceiveModel {
                 inbox?.hold(item)
                 return
             }
-            await accept(decoded)
+            await accept(decoded, delivery: item.sequence)
         }
     }
 
@@ -418,16 +425,17 @@ public final class ReceiveModel {
         case .failure(let kind):
             report(kind)
         case .success(let decoded):
-            await accept(decoded)
+            await accept(decoded, delivery: nil)
         }
     }
 
-    /// An `A` or `N` payload that has already been parsed.
-    private func accept(_ decoded: (kind: PaymentTransport.Kind, payload: Data)) async {
+    /// An `A` or `N` payload that has already been parsed. `delivery` is the Bluetooth inbox
+    /// delivery it came from, nil for the camera or a paste.
+    private func accept(_ decoded: (kind: PaymentTransport.Kind, payload: Data), delivery: UInt64?) async {
         if decoded.kind == .allowance {
             await acceptAllowance(decoded.payload)
         } else {
-            await acceptNote(decoded.payload)
+            await acceptNote(decoded.payload, delivery: delivery)
         }
     }
 
@@ -450,7 +458,8 @@ public final class ReceiveModel {
             if waiting.note.allowanceId == certificate.allowanceId {
                 waitingNote = nil
                 issue = nil
-                await process(waiting, certificate: certificate)
+                let delivery = waitingNoteDelivery?.noteId == waiting.noteId ? waitingNoteDelivery?.delivery : nil
+                await process(waiting, certificate: certificate, delivery: delivery)
             } else if issue?.kind != .allowanceNeeded {
                 // Another payer's note still waits for its own allowance: its next step stays.
                 report(.allowanceNeeded)
@@ -460,7 +469,7 @@ public final class ReceiveModel {
         }
     }
 
-    private func acceptNote(_ wire: Data) async {
+    private func acceptNote(_ wire: Data, delivery: UInt64?) async {
         do {
             let note = try SignedNote.validate(wire: wire, deployment: deployment)
             // The same note scanned again is not a second payment.
@@ -471,22 +480,24 @@ public final class ReceiveModel {
             // it takes the allowance path below, and `process` brings it back once the allowance arrives.
             if let held = heldPayment(noteId: note.noteId),
                held.damaged || held.certificate != nil || boundCertificate(for: held.note) != nil {
-                await bringBack(held)
+                await bringBack(held, delivery: delivery)
                 return
             }
             guard let certificate = allowances[note.note.allowanceId] else {
                 // One note waits at a time. A different one is refused by name, never swapped in.
                 if let waiting = waitingNote, waiting.noteId != note.noteId { return report(.otherNoteWaiting) }
+                // The first copy of a waiting note keeps its delivery; a later copy never replaces it.
+                if waitingNote == nil { waitingNoteDelivery = delivery.map { (note.noteId, $0) } }
                 waitingNote = note
                 return report(.allowanceNeeded)
             }
-            await process(note, certificate: certificate)
+            await process(note, certificate: certificate, delivery: delivery)
         } catch {
             report(PayModel.kind(of: error))
         }
     }
 
-    private func process(_ note: SignedNote, certificate: AllowanceCertificate) async {
+    private func process(_ note: SignedNote, certificate: AllowanceCertificate, delivery: UInt64?) async {
         guard let merchant else { return }
         // Runs only while ready. The card, the limit chip and the risk line now describe the
         // allowance this note is checked against, whatever happens below.
@@ -505,7 +516,7 @@ public final class ReceiveModel {
             if let entries = try? ledger.entries(), let entry = entries.first(where: { $0.noteIdHex == note.noteId.hex }) {
                 conflictAllowanceId = nil
                 if entry.state == .pending, let held = unsettledPayment(from: entry) {
-                    await bringBack(held)
+                    await bringBack(held, delivery: delivery)
                     return
                 }
                 return report(.alreadyReceived)
@@ -521,7 +532,7 @@ public final class ReceiveModel {
         if waitingNote?.noteId == note.noteId { waitingNote = nil }
         payment = ReceivedPayment(note: note, certificate: certificate,
                                   receivedAt: Date(timeIntervalSince1970: TimeInterval(seconds)),
-                                  receivedWithZeroBars: zeroBars, ack: nil)
+                                  receivedWithZeroBars: zeroBars, ack: nil, meshDelivery: delivery)
         issue = nil
         phase = .received
         refreshUnsettled(certificate.allowanceId)
@@ -911,13 +922,15 @@ public final class ReceiveModel {
     }
 
     /// Brings a held note back on screen after `recheck`, or shows the named reason it cannot come back.
+    /// `delivery` is the Bluetooth delivery that brought it back, nil for a tap, the camera or a paste.
     @discardableResult
-    private func bringBack(_ held: UnsettledPayment) async -> Bool {
+    private func bringBack(_ held: UnsettledPayment, delivery: UInt64? = nil) async -> Bool {
         switch recheck(held) {
         case .failure(let kind):
             report(kind)
             return false
-        case .success(let received):
+        case .success(var received):
+            received.meshDelivery = delivery
             await restore(received)
             return true
         }

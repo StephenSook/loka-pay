@@ -52,6 +52,9 @@ public final class PaymentInbox {
     /// the oldest go first) or because they waited longer than `maxAge`. The Receive screen shows
     /// this count when it is not zero.
     public private(set) var droppedWhileDetached = 0
+    /// The sequence numbers of the most recent dropped texts (the last 64), so the mesh glue can
+    /// tell a dropped delivery, which a retry may bring back, from one still waiting or taken.
+    @ObservationIgnored private var droppedSequences: [UInt64] = []
 
     public let maxAge: TimeInterval
     private let now: @MainActor () -> Date
@@ -69,14 +72,25 @@ public final class PaymentInbox {
     public var isAttached: Bool { handler != nil }
 
     /// Hands one received transport text to the attached Receive model, or holds it. Its arrival
-    /// time and its place in line are fixed here, once.
-    public func deliver(_ text: String) {
+    /// time and its place in line are fixed here, once. Returns its sequence number: the id of this
+    /// delivery, which stays with the text (`InboxText.sequence`).
+    @discardableResult
+    public func deliver(_ text: String) -> UInt64 {
         let item = stamp(text, arrivedAt: now())
         if let handler {
-            if handler(item) { return }
+            if handler(item) { return item.sequence }
             unhook()
         }
         hold(item)
+        return item.sequence
+    }
+
+    /// True when the delivery with this sequence number was dropped (the inbox was full, or it
+    /// waited past `maxAge`) and never handed to a screen.
+    public func wasDropped(_ sequence: UInt64) -> Bool { droppedSequences.contains(sequence) }
+
+    private func recordDrop(_ item: InboxText) {
+        droppedSequences = Array((droppedSequences + [item.sequence]).suffix(64))
     }
 
     private func stamp(_ text: String, arrivedAt: Date) -> InboxText {
@@ -167,9 +181,9 @@ public final class PaymentInbox {
     private func enforceCapacity() {
         while waiting.count + queued.count > Self.capacity {
             if let oldestHeld = waiting.first, queued.first.map({ oldestHeld.sequence < $0.sequence }) ?? true {
-                waiting.removeFirst()
+                recordDrop(waiting.removeFirst())
             } else {
-                queued.removeFirst()
+                recordDrop(queued.removeFirst())
             }
             droppedWhileDetached += 1
         }
@@ -186,6 +200,7 @@ public final class PaymentInbox {
     private func dropExpired() {
         let cutoff = now().addingTimeInterval(-maxAge)
         let before = waiting.count + queued.count
+        for item in (waiting + queued) where item.arrivedAt < cutoff { recordDrop(item) }
         waiting.removeAll { $0.arrivedAt < cutoff }
         queued.removeAll { $0.arrivedAt < cutoff }
         let dropped = before - waiting.count - queued.count
