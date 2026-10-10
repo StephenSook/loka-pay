@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIAppFonts</key>
-	<array><string>LilitaOne-Regular.ttf</string></array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -17,6 +15,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LOKAWiFiAwareEnabled</key>
 	<string>$(LOKA_WIFI_AWARE)</string>
 	<key>NSBonjourServices</key>
@@ -25,21 +25,27 @@
 	</array>
 	<key>NSContactsUsageDescription</key>
 	<string>Find a name for the phone number you enter. Contacts stay on this device and are never uploaded by LOKA.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>LOKA Pay asks for Face ID before this phone signs a payment, so only you can spend from it.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Send encrypted messages to nearby LOKA phones on your Wi-Fi network, without Internet.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record a voice note to send to your LOKA friend.</string>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UIBackgroundModes</key>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LilitaOne-Regular.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>WiFiAwareServices</key>
 	<dict>

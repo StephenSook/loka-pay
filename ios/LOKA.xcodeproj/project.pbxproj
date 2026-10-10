@@ -59,6 +59,8 @@ A00000000000000000000043 = {isa = PBXBuildFile; fileRef = A000000000000000000000
 A00000000000000000000045 = {isa = PBXBuildFile; fileRef = A00000000000000000000044; };
 A00000000000000000000047 = {isa = PBXBuildFile; fileRef = A00000000000000000000046; };
 A00000000000000000000049 = {isa = PBXBuildFile; fileRef = A00000000000000000000048; };
+		D00000000000000000000003 /* LokaPay in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000002 /* LokaPay */; };
+		D00000000000000000000006 /* App/LokaPayBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000005 /* App/LokaPayBridge.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -91,6 +93,8 @@ A00000000000000000000042 = {isa = PBXFileReference; lastKnownFileType = sourceco
 A00000000000000000000044 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/LocalNotifications.swift; sourceTree = "<group>"; };
 A00000000000000000000046 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/VoiceNote.swift; sourceTree = "<group>"; };
 A00000000000000000000048 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core/ChatMessage.swift; sourceTree = "<group>"; };
+		D00000000000000000000001 /* LokaPay */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = LokaPay; sourceTree = "<group>"; };
+		D00000000000000000000005 /* App/LokaPayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/LokaPayBridge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -127,6 +131,8 @@ A00000000000000000000040,
 				A00000000000000000000017 /* Network/BleFraming.swift */,
 				A00000000000000000000015 /* Network/BleLink.swift */,
 				A00000000000000000000006 /* App/LokaApp.swift */,
+				D00000000000000000000005 /* App/LokaPayBridge.swift */,
+				D00000000000000000000001 /* LokaPay */,
 				A00000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -141,12 +147,24 @@ A00000000000000000000040,
 		};
 /* End PBXGroup section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		D00000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D00000000000000000000003 /* LokaPay in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXNativeTarget section */
 		A00000000000000000000005 /* LOKA */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A00000000000000000000008 /* Build configuration list for PBXNativeTarget "LOKA" */;
 			buildPhases = (
 				A00000000000000000000009 /* Sources */,
+				D00000000000000000000004 /* Frameworks */,
  A00000000000000000000063 /* Resources */,
 			);
 			buildRules = (
@@ -154,6 +172,9 @@ A00000000000000000000040,
 			dependencies = (
 			);
 			name = LOKA;
+			packageProductDependencies = (
+				D00000000000000000000002 /* LokaPay */,
+			);
 			productName = LOKA;
 			productReference = A00000000000000000000007 /* LOKA.app */;
 			productType = "com.apple.product-type.application";
@@ -217,6 +238,7 @@ A00000000000000000000060,
 				A00000000000000000000014 /* App/LokaApp.swift in Sources */,
 				A00000000000000000000016 /* Network/BleLink.swift in Sources */,
 				A00000000000000000000018 /* Network/BleFraming.swift in Sources */,
+				D00000000000000000000006 /* App/LokaPayBridge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,6 +340,13 @@ A00000000000000000000060,
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D00000000000000000000002 /* LokaPay */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LokaPay;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A00000000000000000000001 /* Project object */;
 }
