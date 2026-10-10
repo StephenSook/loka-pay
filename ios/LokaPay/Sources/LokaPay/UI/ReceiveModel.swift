@@ -68,6 +68,9 @@ public final class ReceiveModel {
     /// certificate's payer on a serial already in the ledger). Read it through `conflictingSpend`,
     /// which checks it against the allowance on screen.
     public private(set) var conflictAllowanceId: UInt64?
+    /// Bluetooth texts of kinds this screen does not use (spend markers, receipts, confirmations),
+    /// counted instead of reported: nobody at the till asked for them.
+    public private(set) var inboxIgnored = 0
     public private(set) var isWorking = false
     /// This merchant's pending total for the allowance on screen (OfflineLedger); nil when the
     /// ledger could not be read. Read it through `unsettled(for:)`, which checks the pairing.
@@ -192,9 +195,36 @@ public final class ReceiveModel {
     /// True when the app supplied a Bluetooth inbox (`LokaPayDependencies.meshInbox`).
     public var receivesOverBluetooth: Bool { inbox != nil }
 
+    /// Bluetooth codes the inbox dropped before any screen could check them (it was full, or they
+    /// waited longer than its age limit).
+    public var inboxDropped: Int { inbox?.droppedWhileDetached ?? 0 }
+
+    /// Bluetooth codes held in the inbox until this screen is ready for the next payer.
+    public var inboxWaiting: Int { inbox?.held.count ?? 0 }
+
+    /// The ready card's line about Bluetooth texts that were not checked; nil when there are none.
+    public var inboxLine: String? {
+        Self.inboxLine(dropped: inboxDropped, ignored: inboxIgnored, maxAge: inbox?.maxAge ?? PaymentInbox.defaultMaxAge)
+    }
+
+    public static func inboxLine(dropped: Int, ignored: Int, maxAge: TimeInterval) -> String? {
+        var lines: [String] = []
+        if dropped > 0 {
+            let minutes = String(max(1, Int((maxAge / 60).rounded())))
+            lines.append("Bluetooth codes dropped before this screen could check them: " + String(dropped)
+                         + " (too many waiting, or held longer than " + minutes + " min). Ask the payer to send again.")
+        }
+        if ignored > 0 {
+            lines.append("Bluetooth texts for other steps ignored: " + String(ignored) + " (such as spend markers).")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " ")
+    }
+
     /// Takes payer codes from the Bluetooth inbox, held ones first. ReceiveView calls this while it
     /// is shown, so a code that lands on another tab waits in the inbox and is never accepted unseen.
+    /// A screen that cannot receive (no merchant certificate) leaves the codes in the inbox.
     public func startInbox() {
+        guard phase != .unavailable else { return }
         inbox?.attach(self) { [weak self] text in
             guard let self else { return false }
             self.enqueueFromInbox(text)
@@ -211,8 +241,27 @@ public final class ReceiveModel {
         let previous = inboxTail
         inboxTail = Task { [weak self] in
             await previous?.value
-            await self?.accept(text: text)
+            await self?.acceptFromInbox(text)
         }
+    }
+
+    /// A Bluetooth text. Nobody at the till chose to scan it, so it is checked only while the screen
+    /// is ready for a payer: during a payment it goes back to the inbox until Next payment, and never
+    /// replaces that payment's issue (a settlement error, a ledger write that failed). Protocol texts
+    /// for other steps are counted, not reported.
+    private func acceptFromInbox(_ text: String) async {
+        guard phase != .unavailable, merchant != nil else { return }
+        if case .failure(.wrongKind) = ScanParser.parse(text, accepting: [.allowance, .note]) {
+            // Spend markers (M) reach every nearby merchant (PAYMENT-V1 4.9); receipts and
+            // confirmations are for payers. None of them is a step on this screen.
+            inboxIgnored += 1
+            return
+        }
+        guard phase == .ready else {
+            inbox?.hold(text)
+            return
+        }
+        await accept(text: text)
     }
 
     /// Waits until every inbox text handed over so far has been checked (for tests).
@@ -434,7 +483,8 @@ public final class ReceiveModel {
         issue = nil
     }
 
-    /// Clears the screen for the next payer. The ledger keeps every accepted note.
+    /// Clears the screen for the next payer. The ledger keeps every accepted note; Bluetooth codes
+    /// that arrived during the payment are checked now, in arrival order.
     public func nextPayment() {
         guard phase != .unavailable, !isWorking else { return }
         payment = nil
@@ -448,6 +498,7 @@ public final class ReceiveModel {
         unsettledTotal = nil
         unsettledAllowanceId = nil
         phase = .ready
+        inbox?.release()
     }
 
     // MARK: - Helpers

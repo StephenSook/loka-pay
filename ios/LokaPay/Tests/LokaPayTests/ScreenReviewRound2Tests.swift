@@ -98,6 +98,127 @@ struct ConflictPairingTests {
     }
 }
 
+@Suite("Bluetooth texts never replace a payment's issue (review 2, finding 2)")
+@MainActor
+struct InboxIssueTests {
+    let payer = SoftwareP256Signer()
+    let stranger = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    var allowanceText: String { PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)) }
+    /// A spend marker is `note wire || ack wire` (PAYMENT-V1 4.9); this screen never reads its bytes.
+    var markerText: String { PaymentTransport.encode(.marker, Data(repeating: 7, count: 238 + 153)) }
+
+    func makeModel(inbox: PaymentInbox, replies: [StubReply] = [],
+                   ledgerURL: URL = F.tempURL("ledger.json")) -> ReceiveModel {
+        let client = replies.isEmpty ? nil : APIFixtures.client(StubTransport(replies), retry: .never)
+        return ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                            ledger: OfflineLedger(url: ledgerURL), settlementClient: client, deployment: F.deployment,
+                            serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+    }
+
+    /// A note from a payer whose allowance (88) is not on this phone.
+    func strayNote() throws -> (SignedNote, String) {
+        let note = try F.note(payer: stranger, payee: merchant.keyHash, amount: 400_000, serial: 1, allowanceId: 88)
+        return (note, PaymentTransport.encode(.note, note.wire))
+    }
+
+    /// Takes one payment over Bluetooth and returns the accepted note.
+    func receiveOverBluetooth(_ model: ReceiveModel, _ inbox: PaymentInbox) async throws -> SignedNote {
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        model.startInbox()
+        inbox.deliver(allowanceText)
+        inbox.deliver(PaymentTransport.encode(.note, note.wire))
+        await model.inboxDrained()
+        #expect(model.phase == .received)
+        #expect(model.payment?.ack != nil)
+        return note
+    }
+
+    @Test("a spend marker over Bluetooth is counted, not shown as Stopped: wrong_kind")
+    func markerIsCounted() async throws {
+        let inbox = PaymentInbox()
+        let model = makeModel(inbox: inbox)
+        model.startInbox()
+        inbox.deliver(markerText)
+        await model.inboxDrained()
+        #expect(model.issue == nil)
+        #expect(model.inboxIgnored == 1)
+        #expect(model.inboxLine == "Bluetooth texts for other steps ignored: 1 (such as spend markers).")
+        // The same code from the camera is still refused by name: the merchant chose to scan it.
+        await model.accept(text: markerText)
+        #expect(model.issue?.kind == .wrongKind(expected: [.note, .allowance], got: .marker))
+        #expect(model.inboxIgnored == 1)
+    }
+
+    @Test("after a 503, a marker and a stray note leave the 503 on screen; the note is checked after Next payment")
+    func strayNoteAfter503() async throws {
+        let inbox = PaymentInbox()
+        let model = makeModel(inbox: inbox, replies: [StubReply(status: 503, body: Data("Sandbox API not deployed yet.".utf8))])
+        _ = try await receiveOverBluetooth(model, inbox)
+        await model.settle()
+        let down = MoneyIssueKind.settlement(.http(status: 503, error: nil, message: nil))
+        #expect(model.issue?.kind == down)
+
+        let (stray, strayText) = try strayNote()
+        inbox.deliver(markerText)
+        inbox.deliver(strayText)
+        await model.inboxDrained()
+        #expect(model.issue?.kind == down)
+        #expect(model.phase == .received)
+        #expect(model.inboxIgnored == 1)
+        #expect(inbox.held == [strayText])
+        #expect(model.inboxWaiting == 1)
+        #expect(model.waitingNote == nil)
+
+        // Next payment: the held note is checked now, like any code for the next payer.
+        model.nextPayment()
+        await model.inboxDrained()
+        #expect(inbox.held.isEmpty)
+        #expect(model.waitingNote == stray)
+        #expect(model.issue?.kind == .allowanceNeeded)
+    }
+
+    @Test("a ledger write that failed after a decision stays on screen when a Bluetooth note arrives")
+    func ledgerNotUpdatedStays() async throws {
+        let url = F.tempURL("ledger.json")
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let conf = F.confWire(noteId: note.noteId, status: 1)
+        let inbox = PaymentInbox()
+        let model = makeModel(inbox: inbox, replies: [
+            StubReply(status: 200, body: F.decisionBody(conf: conf, noteId: note.noteId, jsonStatus: "settled")),
+        ], ledgerURL: url)
+        let accepted = try await receiveOverBluetooth(model, inbox)
+        #expect(accepted.noteId == note.noteId)
+        try Data("damaged".utf8).write(to: url)
+        await model.settle()
+        #expect(model.phase == .settled)
+        #expect(model.issue?.kind == .ledgerNotUpdated(paid: true))
+
+        let (_, strayText) = try strayNote()
+        inbox.deliver(strayText)
+        inbox.deliver("not a payment code")
+        await model.inboxDrained()
+        #expect(model.issue?.kind == .ledgerNotUpdated(paid: true))
+        #expect(inbox.held == [strayText, "not a payment code"])
+    }
+
+    @Test("a screen that cannot receive leaves Bluetooth codes in the inbox")
+    func unavailableScreenDoesNotAttach() {
+        let inbox = PaymentInbox()
+        let model = ReceiveModel(merchantWire: nil, signer: merchant, ledger: OfflineLedger(url: F.tempURL("ledger.json")),
+                                 settlementClient: nil, deployment: F.deployment, serverPublicKey: F.serverKey,
+                                 inbox: inbox, now: { F.now })
+        #expect(model.phase == .unavailable)
+        model.startInbox()
+        #expect(!inbox.isAttached)
+        // Built once: CryptoKit's Ed25519 signatures are randomized, so a rebuilt wire differs.
+        let allowance = allowanceText
+        inbox.deliver(allowance)
+        #expect(inbox.held == [allowance])
+    }
+}
+
 @Suite("one note waits for its allowance at a time (review 2, finding 3)")
 @MainActor
 struct WaitingNoteTests {
@@ -179,5 +300,84 @@ struct WrongKindArticleTests {
                 #expect(message.firstMatch(of: wrong) == nil, "\(message)")
             }
         }
+    }
+}
+
+/// A clock a test can move.
+@MainActor
+final class TestClock {
+    var now = F.now
+}
+
+@Suite("the inbox drops stale texts and the Receive screen shows every drop (review 2, finding 6)")
+@MainActor
+struct InboxDropTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    @Test("a held text older than the age limit is dropped and counted, never handed over")
+    func staleTextsDropped() throws {
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        inbox.deliver("old")
+        clock.now += 301
+        inbox.deliver("new")
+        #expect(inbox.held == ["new"])
+        #expect(inbox.droppedWhileDetached == 1)
+
+        // A screen that appears after the age limit gets nothing stale.
+        let allowance = PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash))
+        inbox.deliver(allowance)
+        clock.now += 301
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+        model.startInbox()
+        #expect(inbox.held.isEmpty)
+        #expect(model.lastAllowance == nil)
+        #expect(model.inboxDropped == 3)
+        #expect(model.inboxLine == "Bluetooth codes dropped before this screen could check them: 3 "
+                + "(too many waiting, or held longer than 5 min). Ask the payer to send again.")
+    }
+
+    @Test("a text within the age limit is handed over")
+    func freshTextKept() async throws {
+        let clock = TestClock()
+        let inbox = PaymentInbox(maxAge: 300, now: { clock.now })
+        let allowance = PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash))
+        inbox.deliver(allowance)
+        clock.now += 299
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+        model.startInbox()
+        await model.inboxDrained()
+        #expect(model.lastAllowance?.allowanceId == F.allowanceId)
+        #expect(model.inboxDropped == 0)
+        #expect(model.inboxLine == nil)
+    }
+
+    @Test("a change in the drop count reaches an observer of the Receive model")
+    func dropCountIsObserved() {
+        final class Flag: @unchecked Sendable { var fired = false }
+        let inbox = PaymentInbox()
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, inbox: inbox, now: { F.now })
+        let flag = Flag()
+        withObservationTracking { _ = model.inboxLine } onChange: { flag.fired = true }
+        for i in 0..<PaymentInbox.capacity { inbox.deliver("text \(i)") }
+        #expect(!flag.fired, "holding without a drop changes nothing the line shows")
+        inbox.deliver("one too many")
+        #expect(flag.fired)
+        #expect(model.inboxDropped == 1)
+    }
+
+    @Test("both counts in one line; nothing when both are zero")
+    func lineWording() {
+        #expect(ReceiveModel.inboxLine(dropped: 0, ignored: 0, maxAge: 300) == nil)
+        #expect(ReceiveModel.inboxLine(dropped: 2, ignored: 5, maxAge: 120)
+                == "Bluetooth codes dropped before this screen could check them: 2 (too many waiting, or held longer "
+                + "than 2 min). Ask the payer to send again. Bluetooth texts for other steps ignored: 5 (such as spend markers).")
     }
 }

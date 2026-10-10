@@ -104,6 +104,10 @@ public struct ReceiveView: View {
             // A waiting note belongs to an allowance not on this phone yet, so another payer's
             // chip and risk line would describe the wrong allowance.
             if step != .noteWaitingForAllowance { limitBlock(model.lastAllowance) }
+            if let line = model.inboxLine {
+                Label(line, systemImage: "antenna.radiowaves.left.and.right")
+                    .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+            }
             CodeEntryField(prompt: "Or paste a payer code") { text in Task { await model.accept(text: text) } }
         }
         .lokaCard()
@@ -176,6 +180,10 @@ public struct ReceiveView: View {
             }
             Text("Settling needs internet. The status changes only when a server-signed confirmation verifies on this phone.")
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+            if model.inboxWaiting > 0 {
+                Text("Bluetooth codes waiting for Next payment: " + String(model.inboxWaiting) + ".")
+                    .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
+            }
             Button("Next payment") { model.nextPayment() }
                 .font(LokaStyle.label).foregroundStyle(LokaColor.ink)
         }
