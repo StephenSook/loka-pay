@@ -6,11 +6,13 @@ import Foundation
 /// The only deliberate reuse is the labelled cheat control, which signs a serial it already used.
 public final class SerialReservations: @unchecked Sendable {
     private let url: URL
-    private let lock = NSLock()
+    private let lock: NSLock
 
-    /// `url` is a JSON file owned by this store (for example in Application Support).
+    /// `url` is a JSON file owned by this store (for example in Application Support). Every
+    /// instance on the same file shares one lock, so concurrent reservations never collide.
     public init(url: URL) {
         self.url = url
+        self.lock = FileLocks.lock(for: url)
     }
 
     /// Returns the next unused serial for `allowanceId` (0 to 255) after persisting the
@@ -21,7 +23,8 @@ public final class SerialReservations: @unchecked Sendable {
         var table = try load()
         let key = String(allowanceId)
         let next = table[key] ?? 0
-        guard next <= 255 else { throw PaymentError.serialsExhausted }
+        guard next != 256 else { throw PaymentError.serialsExhausted }
+        guard (0...255).contains(next) else { throw PaymentError.storage }
         table[key] = next + 1
         try save(table)
         return UInt8(next)
@@ -37,7 +40,11 @@ public final class SerialReservations: @unchecked Sendable {
     private func load() throws -> [String: Int] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         do {
-            return try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: url))
+            let table = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: url))
+            // A counter outside 0...256 is corruption: never use it, never "fix" it to 0.
+            guard table.values.allSatisfy({ (0...256).contains($0) }),
+                  table.keys.allSatisfy({ UInt64($0) != nil }) else { throw PaymentError.storage }
+            return table
         } catch {
             // A corrupt file must never silently reset counters to 0 (that would reuse serials).
             throw PaymentError.storage
