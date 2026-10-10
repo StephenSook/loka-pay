@@ -47,6 +47,7 @@ export class RemittanceStore {
           ELSE remittance_jobs.plan END,attempt=NULL,result=NULL
       WHERE (remittance_jobs.attempt IS NULL AND remittance_jobs.result IS NULL AND remittance_jobs.lease_expires_at<=EXCLUDED.lease_expires_at-30)
         OR (remittance_jobs.result->>'statusCode' IN ('200','201') AND (remittance_jobs.plan->>'expiry')::bigint<EXCLUDED.lease_expires_at-30)
+        OR remittance_jobs.result->>'statusCode'='409'
       RETURNING recipient`, [this.namespace, recipient, JSON.stringify(plan), token, this.clock?.() ?? null]);
     return rows.length ? token : null;
   }
@@ -57,7 +58,8 @@ export class RemittanceStore {
   async find(recipient: string): Promise<(FundingRow & { claimable: boolean }) | null> {
     const { rows } = await this.db.query(`SELECT recipient,plan,attempt,result,
       ((attempt IS NULL AND result IS NULL AND lease_expires_at<=COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
-        OR (result->>'statusCode' IN ('200','201') AND (plan->>'expiry')::bigint<COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))) IS TRUE AS claimable
+        OR (result->>'statusCode' IN ('200','201') AND (plan->>'expiry')::bigint<COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
+        OR result->>'statusCode'='409') IS TRUE AS claimable
       FROM remittance_jobs WHERE namespace=$1 AND recipient=$2`, [this.namespace, recipient, this.clock?.() ?? null]);
     return (rows[0] as unknown as FundingRow & { claimable: boolean }) ?? null;
   }
@@ -141,7 +143,11 @@ export class RemittanceService {
       const publicKey = P.base64urlDecode(identity.publicKey), now = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
       const policy = { ...this.options.policy, capUnits: body.amountUnits, offlineLimitUnits: body.amountUnits };
       let allowanceId: string | undefined;
-      for (let n = 0; n < 8; n++) { const id = randomBytes(8).readBigUInt64BE().toString(); if (!await this.options.chain.taken(id)) { allowanceId = id; break; } }
+      for (let n = 0; n < 8; n++) {
+        const id = randomBytes(8).readBigUInt64BE().toString();
+        if (existing?.result?.statusCode === 409 && id === existing.plan.allowanceId) continue;
+        if (!await this.options.chain.taken(id)) { allowanceId = id; break; }
+      }
       if (!allowanceId) throw new HttpError(503, 'chain_unavailable');
       plan = { kind: 'payer', pool: 'public', publicKey: identity.publicKey, keyHash: P.toHex(P.keyHash(publicKey)),
         allowanceId, policy, expiry: now + policy.lifetimeSeconds };
