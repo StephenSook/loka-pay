@@ -34,10 +34,11 @@ struct TryToCheatMerchantTests {
     }
 
     /// Merchant B's Receive model with the payer's allowance scanned.
-    func merchantBModel(_ replies: [StubReply]) async -> (ReceiveModel, OfflineLedger) {
+    func merchantBModel(_ replies: [StubReply], retry: RetryPolicy = .never,
+                        stub: StubTransport? = nil) async -> (ReceiveModel, OfflineLedger) {
         let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
         let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchantB.keyHash, name: "Stall B"), signer: merchantB,
-                                 ledger: ledger, settlementClient: APIFixtures.client(StubTransport(replies), retry: .never),
+                                 ledger: ledger, settlementClient: APIFixtures.client(stub ?? StubTransport(replies), retry: retry),
                                  deployment: F.deployment, serverPublicKey: F.serverKey, now: { F.now })
         await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
         return (model, ledger)
@@ -185,6 +186,68 @@ struct TryToCheatMerchantTests {
             #expect(model.phase == .received, "\(name)")
             #expect(try ledger.entries().first?.state == .pending, "\(name)")
         }
+    }
+
+    @Test("one Settle whose automatic retry is refused after an unanswered attempt keeps the outcome unknown (Codex round 2)")
+    func refusalAfterUnansweredRetry() async throws {
+        let (_, cheat) = try pair()
+        let stub = StubTransport([StubReply(failure: URLError(.timedOut)),
+                                  APIFixtures.errorReply(429, "rate_limited", headers: ["Retry-After": "5"])])
+        let (model, ledger) = await merchantBModel([], retry: .standard, stub: stub)
+        await model.accept(text: PaymentTransport.encode(.note, cheat.wire))
+        #expect(model.settlementOutcomeUnknown == false)
+        await model.settle()
+        #expect(stub.requests.count == 2)
+        let issue = try #require(model.issue)
+        #expect(issue.kind == .settlement(.afterUnansweredAttempt(.rateLimited(retryAfter: 5, message: "m"))))
+        #expect(issue.name == "settlement_rate_limited_after_unanswered_attempt")
+        #expect(issue.message.hasPrefix("The server asked to wait 5 s before trying again."))
+        #expect(issue.message.contains("may have settled"))
+        #expect(model.settlementOutcomeUnknown)
+        #expect(model.offersCheckAgain)
+        #expect(issue.refusedBy == .settlementServer(earlierUploadUndecided: true))
+        #expect(issue.refusedBy?.text.contains("may have settled") == true)
+        #expect(model.phase == .received)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+}
+
+@Suite("an upload's automatic retries carry an unanswered attempt into the final error (Codex round 2)")
+struct UnansweredAttemptRetryTests {
+    let timeout = StubReply(failure: URLError(.timedOut))
+    let limited = APIFixtures.errorReply(429, "rate_limited", headers: ["Retry-After": "5"])
+    let chainDown = APIFixtures.errorReply(503, "chain_unavailable")
+
+    @Test("an unanswered attempt then a refusal is wrapped; a refusal or a lost answer alone is not")
+    func wrapping() async throws {
+        let note = APIFixtures.note(0)
+        let rate = SettlementError.rateLimited(retryAfter: 5, message: "m")
+        let cases: [(String, [StubReply], SettlementError, Bool)] = [
+            ("timeout, 429", [timeout, limited], .afterUnansweredAttempt(rate), true),
+            ("timeout, chain down twice", [timeout, chainDown, chainDown],
+             .afterUnansweredAttempt(.chainUnavailable(message: "m")), true),
+            ("chain down, 429", [chainDown, limited], rate, false),
+            ("429 alone", [limited], rate, false),
+            ("timeout three times", [timeout, timeout, timeout], .network(.timedOut), true),
+            ("chain down, timeout twice", [chainDown, timeout, timeout], .network(.timedOut), true),
+        ]
+        for (name, replies, expected, unknown) in cases {
+            let stub = StubTransport(replies)
+            await #expect(throws: expected, "\(name)") {
+                try await APIFixtures.client(stub).settle(note: note)
+            }
+            #expect(stub.requests.count == replies.count, "\(name)")
+            #expect(expected.leavesOutcomeUnknown == unknown, "\(name)")
+        }
+
+        // A read decides nothing, so its refusal is passed on as it is.
+        let read = StubTransport([timeout, limited])
+        await #expect(throws: rate) { try await APIFixtures.client(read).outcome(noteId: note.noteId) }
+
+        // A decision after an unanswered attempt is the answer.
+        let decided = StubTransport([timeout, APIFixtures.settled(replayed: true)])
+        let decision = try APIFixtures.decided(try await APIFixtures.client(decided).settle(note: note))
+        #expect(decision.status == .settled)
     }
 }
 

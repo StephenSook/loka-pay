@@ -148,6 +148,10 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
             switch e {
             case .refused, .badJSON, .badBase64url, .badPubkey, .nameLength, .rateLimited, .budgetExhausted:
                 return .settlementServer(earlierUploadUndecided: false)
+            case .afterUnansweredAttempt(let last):
+                // The server refused the last attempt; an earlier one may have settled the note.
+                guard MoneyIssueKind.settlement(last).refusedBy != nil else { return nil }
+                return .settlementServer(earlierUploadUndecided: true)
             default: return nil
             }
         default: return nil
@@ -224,6 +228,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .merchantMismatch: return "merchant_mismatch"
         case .protocolViolation: return "protocol_violation"
         case .stillPending: return "still_pending"
+        case .afterUnansweredAttempt(let last): return settlementName(last) + "_after_unanswered_attempt"
         }
     }
 
@@ -261,6 +266,10 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 + "upload it; the note stays held on this phone."
         case .badJSON, .badBase64url, .badPubkey, .nameLength:
             return "The server rejected the request (\(settlementName(e))). \(held)"
+        case .afterUnansweredAttempt(let last):
+            return settlementMessage(last) + " An earlier attempt of this upload got no answer this phone can trust, "
+                + "so the server may have settled the note: the outcome is unknown, and Check again asks the server "
+                + "by note id."
         }
     }
 
