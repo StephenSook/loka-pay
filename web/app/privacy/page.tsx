@@ -142,7 +142,14 @@ export default function PrivacyPage() {
           same server to watch for the next settled payment, only after you press &quot;Call me when
           the next payment settles&quot;. That site sees your browser&apos;s request, as any website
           does; this site sends it nothing about you, and never your phone number. Every other page
-          makes no request to any other website.
+          makes no request to any other website, except /send below.
+        </p>
+        <p>
+          /send makes your browser contact our settlement server at api.zerobars.us only after you
+          press its Send button: one request carrying the recipient allowance id and the amount you
+          entered, sent again unchanged while the server answers that the send is pending. The
+          server sees your browser&apos;s request, as any website does; nothing else about you is
+          sent.
         </p>
         <p>
           The /judge, /proof and /trust pages read public data from Solana devnet ({serverHosts}) and
@@ -189,8 +196,9 @@ export default function PrivacyPage() {
           All but the last two rows of the table below are what it stores, read from its code
           (server/ in the repository); the last two are what the /call page handles. Its log has one
           line per response, with the method, the route and the status code, and no address, header
-          or body. The /proof page reads its public health check (api.zerobars.us/api/health) from
-          our web server, not from your browser, and that read carries nothing about you.
+          or body. The /proof and /send pages read its public health check
+          (api.zerobars.us/api/health) from our web server, not from your browser, and that read
+          carries nothing about you.
         </p>
       </Section>
 
