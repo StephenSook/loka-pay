@@ -46,14 +46,56 @@ struct MeshPaymentTests {
 
     // MARK: Routing decision (what ChatStore's receive branch does)
 
-    @Test("exactly L1|P|1| from a contact is payment content; Y and X go to Pay, the rest to Receive")
+    @Test("a well-formed allowance or note from a contact goes to Receive, an ack or receipt to Pay")
     func routesPaymentContent() throws {
-        #expect(MeshPaymentText.route(noteText(try note()), fromContact: true) == .receive)
-        #expect(MeshPaymentText.route("L1|P|1|A|AAAA", fromContact: true) == .receive)
-        #expect(MeshPaymentText.route("L1|P|1|M|AAAA", fromContact: true) == .receive)
-        #expect(MeshPaymentText.route("L1|P|1|Q|AAAA", fromContact: true) == .receive)
-        #expect(MeshPaymentText.route("L1|P|1|Y|AAAA", fromContact: true) == .pay)
-        #expect(MeshPaymentText.route("L1|P|1|X|AAAA", fromContact: true) == .pay)
+        let signed = try note()
+        let ack = try Ack.sign(note: signed, receivedAt: 1_800_000_000, with: merchant)
+        #expect(MeshPaymentText.route(noteText(signed), fromContact: true) == .receive)
+        #expect(MeshPaymentText.route(allowanceText, fromContact: true) == .receive)
+        #expect(MeshPaymentText.route(PaymentTransport.encode(.ack, ack.wire), fromContact: true) == .pay)
+        let pending = Bundles.receipt(note: signed, ack: ack, confirmationWire: nil)
+        let settled = Bundles.receipt(note: signed, ack: ack, confirmationWire: F.confWire(noteId: signed.noteId, status: 1))
+        #expect(MeshPaymentText.route(PaymentTransport.encode(.receipt, pending), fromContact: true) == .pay)
+        #expect(MeshPaymentText.route(PaymentTransport.encode(.receipt, settled), fromContact: true) == .pay)
+        let earmarked = F.allowanceWire(payer: payer.keyHash, earmarks: [merchant.keyHash, SoftwareP256Signer().keyHash].sorted { $0.lexicographicallyPrecedes($1) })
+        #expect(MeshPaymentText.route(PaymentTransport.encode(.allowance, earmarked), fromContact: true) == .receive)
+    }
+
+    @Test("malformed texts and kinds no screen takes over the mesh are dropped before any inbox")
+    func dropsMalformedAndUnusedKinds() throws {
+        let signed = try note()
+        var badSignature = Data(signed.wire)
+        badSignature[150] ^= 0xFF
+        var badPrefix = Data(signed.wire)
+        badPrefix[0] ^= 0xFF
+        var shortAllowance = Data(allowanceWire)
+        shortAllowance.removeLast()
+        let ack = try Ack.sign(note: signed, receivedAt: 1_800_000_000, with: merchant)
+        let otherNote = try note(serial: 3)
+        let otherAck = try Ack.sign(note: otherNote, receivedAt: 1_800_000_000, with: merchant)
+        let mismatched = signed.wire + otherAck.wire + Data([0])
+        let unused = [
+            PaymentTransport.encode(.marker, Bundles.marker(note: signed, ack: ack)),
+            PaymentTransport.encode(.confirmation, F.confWire(noteId: signed.noteId, status: 1)),
+            PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchant.keyHash)),
+        ]
+        let malformed = [
+            "L1|P|1|Q|AAAA", "L1|P|1|N", "L1|P|1|N|", "L1|P|1|N|A=A=", "L1|P|1|N|AAAA|extra", "L1|P|1|N|AAAA",
+            PaymentTransport.encode(.note, badSignature), PaymentTransport.encode(.note, badPrefix),
+            PaymentTransport.encode(.note, signed.wire + Data([0])), PaymentTransport.encode(.allowance, shortAllowance),
+            PaymentTransport.encode(.ack, Data(ack.wire.prefix(152))), PaymentTransport.encode(.receipt, mismatched),
+            noteText(signed) + "=",
+        ]
+        for text in unused + malformed {
+            #expect(MeshPaymentText.route(text, fromContact: true) == .drop, "\(text.prefix(24))")
+        }
+        let router = MeshPaymentRouter()
+        for (index, text) in (unused + malformed).enumerated() {
+            #expect(router.receive(text, from: "contact", fromContact: true, packetID: "junk-\(index)"))
+        }
+        #expect(router.dropped == unused.count + malformed.count)
+        #expect(router.receiveInbox.held.isEmpty)
+        #expect(router.payInbox.held.isEmpty)
     }
 
     @Test("any other L1|P text, and L1|P from a non-contact, is dropped, never chat")
@@ -114,7 +156,7 @@ struct MeshPaymentTests {
 
         // The inbox fills (no Receive screen attached) and drops the oldest text: the note.
         for index in 0..<PaymentInbox.capacity {
-            router.receive("L1|P|1|A|AAAA", from: "busy-contact", fromContact: true, packetID: "fill-\(index)")
+            router.receive(allowanceText, from: "busy-contact", fromContact: true, packetID: "fill-\(index)")
         }
         #expect(!inbox.held.contains(text))
         #expect(inbox.droppedWhileDetached == 1)

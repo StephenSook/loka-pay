@@ -344,7 +344,7 @@ final class LokaPayStore: ObservableObject {
     /// not show, store or notify it. False: not payment content; LOKA handles it as before.
     static func takeMeshText(_ text: String, from peer: String, packetID: String, fromContact: Bool) -> Bool {
         // Chat, games and receipts never touch the payment store.
-        guard MeshPaymentText.route(text, fromContact: fromContact) != .loka else { return false }
+        guard MeshPaymentText.isPaymentFamily(text) else { return false }
         let store = shared
         guard store.mesh.receive(text, from: peer, fromContact: fromContact, packetID: packetID) else { return false }
         // An ack that verifies for a note this phone sent: LOKA stops retrying that payment's packets.

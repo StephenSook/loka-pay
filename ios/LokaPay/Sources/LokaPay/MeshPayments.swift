@@ -12,27 +12,83 @@ public enum MeshPaymentText {
         /// Not payment content. LOKA's own paths (chat, games, delivery and read receipts) take it
         /// unchanged.
         case loka
-        /// `L1|P|1|...` from a contact, for the Receive screen's inbox: allowances and notes, and the
-        /// kinds Receive counts and ignores (spend markers, confirmations, anything unknown).
+        /// A well-formed allowance (`A`) or note (`N`) from a contact, for the Receive screen's inbox.
         case receive
-        /// `L1|P|1|Y|...` or `L1|P|1|X|...` from a contact: the merchant's ack or receipt, for Pay.
+        /// A well-formed ack (`Y`) or receipt (`X`) from a contact, for the Pay screen.
         case pay
-        /// Payment family text that is not taken: another version of `L1|P`, or a sender that is not a
-        /// contact (the payment-only scope for non-contacts is a follow-up of task 2.2). It is counted
-        /// and never shown, stored or notified.
+        /// Payment family text that is not taken: malformed (`admittedKind`), a kind no screen takes
+        /// over the mesh in this build (spend markers, confirmations, merchant codes), another
+        /// version of `L1|P`, or a sender that is not a contact (the payment-only scope for
+        /// non-contacts is a follow-up of task 2.2). It is counted, never queued in an inbox, and
+        /// never shown, stored or notified as chat.
         case drop
     }
 
     /// The version 1 transport prefix.
     public static let prefix = "L1|P|1|"
 
-    /// Sorts a decrypted text. Everything that starts with `L1|P` is payment family text and never
-    /// reaches chat; only exactly `L1|P|1|` from a contact is delivered.
+    /// True for every text of the payment family (`L1|P`). None of them ever reaches chat.
+    public static func isPaymentFamily(_ text: String) -> Bool { text.hasPrefix("L1|P") }
+
+    /// Sorts a decrypted text. Only a well-formed version 1 allowance, note, ack or receipt from a
+    /// contact reaches an inbox, so junk can never take an inbox place from a real payment.
     public static func route(_ text: String, fromContact: Bool) -> Route {
-        guard text.hasPrefix("L1|P") else { return .loka }
-        guard fromContact, text.hasPrefix(prefix) else { return .drop }
-        let rest = text.dropFirst(prefix.count)
-        return rest.hasPrefix("Y|") || rest.hasPrefix("X|") ? .pay : .receive
+        guard isPaymentFamily(text) else { return .loka }
+        guard fromContact, let kind = admittedKind(text) else { return .drop }
+        switch kind {
+        case .allowance, .note: return .receive
+        case .ack, .receipt: return .pay
+        case .marker, .confirmation, .merchant: return .drop
+        }
+    }
+
+    /// The kind of a version 1 text whose wrapper is canonical (`PaymentTransport.decode`: five
+    /// fields, a known kind, canonical base64url without padding) and whose payload has that kind's
+    /// exact structure: its length, its domain prefix, the earmark count of an allowance, and for a
+    /// note and an ack a P-256 signature that verifies over the signed bytes with the attached key.
+    /// nil otherwise. The deployment and the server key are not checked here; the screens check them.
+    static func admittedKind(_ text: String) -> PaymentTransport.Kind? {
+        guard text.hasPrefix(prefix), let decoded = try? PaymentTransport.decode(text) else { return nil }
+        let bytes = Data(decoded.payload)
+        switch decoded.kind {
+        case .note:
+            return signedNoteId(bytes) != nil ? .note : nil
+        case .ack:
+            return signedAckNoteId(bytes) != nil ? .ack : nil
+        case .receipt:
+            guard let parts = try? Bundles.splitReceipt(bytes), let noteId = signedNoteId(Data(parts.note)),
+                  signedAckNoteId(Data(parts.ack)) == noteId else { return nil }
+            if let conf = parts.confirmation, Data(conf).prefix(16) != Data(Confirmation.prefix.utf8) { return nil }
+            return .receipt
+        case .allowance:
+            let fixed = AllowanceCertificate.size + 64
+            guard bytes.count >= fixed + 2, bytes.prefix(16) == Data(AllowanceCertificate.prefix.utf8) else { return nil }
+            let count = Int(bytes[fixed]) << 8 | Int(bytes[fixed + 1])
+            return count <= 16 && bytes.count == fixed + 2 + 32 * count ? .allowance : nil
+        case .marker, .confirmation, .merchant:
+            return decoded.kind
+        }
+    }
+
+    /// The note id of a 238-byte note wire with the right prefix whose signature verifies.
+    private static func signedNoteId(_ wire: Data) -> Data? {
+        guard wire.count == SignedNote.wireSize else { return nil }
+        var r = ByteReader(wire)
+        guard let bytes = try? r.read(NoteV1.size), bytes.prefix(16) == Data(NoteV1.prefix.utf8),
+              let signature = try? r.read(64), let key = try? r.read(33),
+              (try? P256Rules.verify(signature: signature, message: bytes, compressedPublicKey: key)) != nil else { return nil }
+        return Data(SHA256.hash(data: bytes))
+    }
+
+    /// The note id a 153-byte ack wire names, when its prefix is right and its signature verifies
+    /// with its own key (whether that key is the payee's needs the note; Pay checks it).
+    private static func signedAckNoteId(_ wire: Data) -> Data? {
+        guard wire.count == Ack.wireSize else { return nil }
+        var r = ByteReader(wire)
+        guard let body = try? r.read(56), body.prefix(16) == Data(Ack.prefix.utf8),
+              let signature = try? r.read(64), let key = try? r.read(33),
+              (try? P256Rules.verify(signature: signature, message: body, compressedPublicKey: key)) != nil else { return nil }
+        return body.subdata(in: 16..<48)
     }
 
     /// The id of the note an `N`, `Y` or `X` text is about, read from its bytes WITHOUT verifying
@@ -65,12 +121,8 @@ public enum MeshPaymentText {
     /// with a broken signature can never become a payment, so it never counts as a delivery of the
     /// note (it cannot make a reply ambiguous either).
     static func signedNoteTextId(_ text: String) -> Data? {
-        guard text.hasPrefix(prefix + "N|"), let decoded = try? PaymentTransport.decode(text),
-              decoded.payload.count == SignedNote.wireSize else { return nil }
-        var r = ByteReader(decoded.payload)
-        guard let bytes = try? r.read(NoteV1.size), let signature = try? r.read(64), let key = try? r.read(33),
-              (try? P256Rules.verify(signature: signature, message: bytes, compressedPublicKey: key)) != nil else { return nil }
-        return Data(SHA256.hash(data: bytes))
+        guard text.hasPrefix(prefix + "N|"), let decoded = try? PaymentTransport.decode(text) else { return nil }
+        return signedNoteId(Data(decoded.payload))
     }
 }
 
