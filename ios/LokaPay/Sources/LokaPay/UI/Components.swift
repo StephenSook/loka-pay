@@ -171,7 +171,8 @@ public enum HoldingClock {
 /// Four empty signal bars when the phone has no internet path. NWPathMonitor reports reachability,
 /// not signal strength, so online the meter shows the path name and never invents bars.
 /// The Bluetooth clause appears only when the caller reports Bluetooth state (this package does not
-/// read the radio; the mesh layer does).
+/// read the radio; the mesh layer does). The holding clock stays on every path (task 2.23): signal
+/// coming back does not settle the note, so the clock runs until the card gives way to the receipt.
 public struct ZeroBarsMeter: View {
     let internet: InternetState
     let holdingSince: Date?
@@ -189,6 +190,12 @@ public struct ZeroBarsMeter: View {
         case false?: return "Zero bars: no Wi-Fi, no cellular, Bluetooth off"
         case nil: return "Zero bars: no Wi-Fi, no cellular"
         }
+    }
+
+    /// True whenever a received-at time is given, on every internet path: the clock goes only with
+    /// the Received card, when a verified CONF replaces it with the receipt's signed Held offline line.
+    public static func showsHoldingClock(internet: InternetState, holdingSince: Date?) -> Bool {
+        holdingSince != nil
     }
 
     public var body: some View {
@@ -209,18 +216,18 @@ public struct ZeroBarsMeter: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(internet.accessibilityLabel)
-                if let holdingSince {
-                    TimelineView(.periodic(from: holdingSince, by: 1)) { context in
-                        Text(HoldingClock.label(since: holdingSince, now: context.date))
-                            .font(LokaStyle.headline.monospacedDigit())
-                            .foregroundStyle(LokaColor.ink)
-                    }
-                }
             } else {
                 Label(internet.label, systemImage: NoInternetChip.symbol(internet))
                     .font(LokaStyle.label)
                     .foregroundStyle(LokaColor.ink)
                     .accessibilityLabel(internet.accessibilityLabel)
+            }
+            if let holdingSince, Self.showsHoldingClock(internet: internet, holdingSince: holdingSince) {
+                TimelineView(.periodic(from: holdingSince, by: 1)) { context in
+                    Text(HoldingClock.label(since: holdingSince, now: context.date))
+                        .font(LokaStyle.headline.monospacedDigit())
+                        .foregroundStyle(LokaColor.ink)
+                }
             }
         }
     }
