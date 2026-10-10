@@ -126,6 +126,17 @@ export class RegistrationStore {
     [this.namespace, job.id, signature, token, this.clock?.() ?? null, Math.floor(this.clock?.() ?? Date.now()/1000)]);
     return rows.length ? token : null;
   }
+  async claimUnsignedRetry(job: Job, signature: string): Promise<string | null> {
+    const token = randomUUID();
+    const { rows } = await this.db.query(`UPDATE registration_jobs SET claim_token=$4,
+      lease_expires_at=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30
+      WHERE namespace=$1 AND id=$2 AND attempt IS NULL AND result IS NULL
+        AND retry_parent->'attempt'->>'signature'=$3 AND retry_parent->'result'->'body'->>'retryOf'=$3
+        AND explicit_retries=1
+        AND lease_expires_at<=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))
+      RETURNING id`, [this.namespace, job.id, signature, token, this.clock?.() ?? null]);
+    return rows.length === 1 ? token : null;
+  }
   async history(job: Job): Promise<{ plan: RegistrationPlan; attempt: PreparedAttempt }[]> {
     const { rows } = await this.db.query('SELECT plan,attempt FROM registration_attempts WHERE job_id=$1', [job.id]);
     return rows as unknown as { plan: RegistrationPlan; attempt: PreparedAttempt }[];
@@ -152,11 +163,13 @@ export class RegistrationStore {
   }
   async finish(job: Job, result: Result, priorSuccess = false): Promise<Result> {
     const legacyFailure = result.statusCode === 409 && job.result?.statusCode === 409 && !('retryable' in job.result.body);
-    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb WHERE namespace=$1 AND id=$2
+    await this.db.query(`UPDATE registration_jobs SET result=$3::jsonb,
+      plan=CASE WHEN $6::boolean THEN $7::jsonb ELSE plan END WHERE namespace=$1 AND id=$2
       AND (result IS NULL OR ($5::boolean AND result->>'statusCode'='409' AND NOT (result->'body' ? 'retryable'))
         OR ($6::boolean AND result->>'statusCode'='409'))
       AND attempt->>'signature'=$4`,
-      [this.namespace, job.id, JSON.stringify(result), job.attempt?.signature ?? null, legacyFailure, priorSuccess && result.statusCode === 200]);
+      [this.namespace, job.id, JSON.stringify(result), job.attempt?.signature ?? null, legacyFailure,
+        priorSuccess && result.statusCode === 200, JSON.stringify(job.plan)]);
     const saved = await this.get(job.plan.kind, job.plan.keyHash);
     if (saved.id !== job.id || !saved.result) throw new Error('Registration result was not saved');
     return saved.result;
