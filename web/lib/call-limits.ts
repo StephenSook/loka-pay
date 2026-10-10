@@ -6,13 +6,14 @@
 // and destination settings, and the LOKA_CALLS_OFF kill switch (lib/call-server.ts). These
 // caps only stop one instance from being used as a fast dialer. No database, on purpose.
 //
-// CallLimits, for requests that passed every check including the desk code:
+// CallLimits, for requests that passed every check including the desk code. Such a request
+// reserves a slot in both caps below before any devnet read or upstream call, and the slots
+// stay reserved whatever happens next (a bad signature, too old, no payment, a devnet error, a
+// call Vonage refused), so a desk-code holder flooding bad requests still runs into the caps.
+// A request refused before that step (bad body, calls off, wrong code) reserves nothing.
 // - per number: at most NUMBER_LIMIT requests in NUMBER_WINDOW_MS, keyed by the number's HMAC
-//   (lib/call-crypto.ts numberKey), never the number itself. The slot is taken before any
-//   devnet read and stays taken whatever happens next (a bad signature, no payment, a
-//   refused call), so a flood of failing requests from one number runs into it;
-// - site (per instance): at most SITE_LIMIT calls we actually try to place in SITE_WINDOW_MS;
-//   it is checked before any devnet read and counted just before Vonage is asked;
+//   (lib/call-crypto.ts numberKey), never the number itself;
+// - site (per instance): at most SITE_LIMIT requests in SITE_WINDOW_MS;
 // - per number and payment: one call, remembered for PAYMENT_MEMORY_MS.
 //
 // DeskCodeFailures, for wrong or missing desk codes, which never touch the caps above (so
@@ -90,27 +91,20 @@ export class CallLimits {
     }
   }
 
-  private siteAt(nowMs: number): LimitCheck {
-    if (this.site.length >= this.settings.siteLimit) {
-      return { ok: false, limit: "site", retryAfterSeconds: seconds(this.site[0] + SITE_WINDOW_MS - nowMs) };
-    }
-    return { ok: true };
-  }
-
-  /** Whether the site may try another call now. Counts nothing. */
-  checkSite(): LimitCheck {
-    const nowMs = this.now();
-    this.prune(nowMs);
-    return this.siteAt(nowMs);
-  }
-
-  /** Takes one of the number's slots when its cap allows it. The slot stays taken. */
-  takeNumber(key: string): LimitCheck {
+  /**
+   * Reserves one slot for this number and one for the site, together: both when both caps
+   * allow it, neither otherwise. Called before any devnet read or upstream call; the slots
+   * stay reserved whatever happens next.
+   */
+  reserve(key: string): LimitCheck {
     const nowMs = this.now();
     this.prune(nowMs);
     const times = this.byNumber.get(key);
     if (times && times.length >= this.settings.numberLimit) {
       return { ok: false, limit: "number", retryAfterSeconds: seconds(times[0] + NUMBER_WINDOW_MS - nowMs) };
+    }
+    if (this.site.length >= this.settings.siteLimit) {
+      return { ok: false, limit: "site", retryAfterSeconds: seconds(this.site[0] + SITE_WINDOW_MS - nowMs) };
     }
     if (times) {
       times.push(nowMs);
@@ -118,6 +112,7 @@ export class CallLimits {
       makeRoom(this.byNumber, this.settings.maxNumberKeys);
       this.byNumber.set(key, [nowMs]);
     }
+    this.site.push(nowMs);
     return { ok: true };
   }
 
@@ -132,15 +127,6 @@ export class CallLimits {
     makeRoom(this.byPayment, this.settings.maxPaymentPairs);
     this.byPayment.set(pair, nowMs);
     return { ok: true };
-  }
-
-  /** Counts a call we are about to try to place, when the site cap allows it. */
-  takeSite(): LimitCheck {
-    const nowMs = this.now();
-    this.prune(nowMs);
-    const result = this.siteAt(nowMs);
-    if (result.ok) this.site.push(nowMs);
-    return result;
   }
 
   /** How many entries each map holds, for the tests that check the bounds. */

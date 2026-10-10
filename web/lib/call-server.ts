@@ -139,6 +139,7 @@ export function callConfig(): CallConfigResult {
     .filter(([, v]) => v === "")
     .map(([name]) => name);
   if (missing.length > 0) return off(`not set: ${missing.join(", ")}`);
+  const deskCode = process.env.LOKA_CALL_CODE?.trim() || null;
   if (!/^[A-Za-z0-9-]{8,64}$/.test(applicationId)) return off("LOKA_VONAGE_APPLICATION_ID is not a Vonage application id");
   if (!/^[1-9]\d{6,14}$/.test(fromNumber)) return off("LOKA_VONAGE_FROM_NUMBER must be the number's digits in E.164 form, without the plus");
   if (Buffer.byteLength(secret, "utf8") < 32) return off("LOKA_CALL_SECRET must be at least 32 bytes");
@@ -159,7 +160,7 @@ export function callConfig(): CallConfigResult {
         origin: publicOrigin(),
         vonageBase: vonageApiBase(),
         elevenLabsBase: elevenLabsApiBase(),
-        deskCode: process.env.LOKA_CALL_CODE?.trim() || null,
+        deskCode,
       },
     };
   } catch (e) {
@@ -391,10 +392,9 @@ async function findPayment(signature: string | null, deps: CallDeps): Promise<Se
  * 2. The desk code. A wrong or missing code counts only against this client's failure limit
  *    (lib/call-limits.ts DeskCodeFailures), never against a number or the site, so bad codes
  *    cannot lock anyone else out; a client over that limit gets 429 without its code checked.
- * 3. The site cap is checked, then the number's slot is taken; that slot stays taken whatever
- *    happens next, so failing requests from one number run into its cap.
- * 4. Only then is devnet read; then one call per number and payment; then the site counts the
- *    call and Vonage is asked.
+ * 3. One slot in the per-number cap and one in the site cap are reserved together. They stay
+ *    reserved whatever happens next, so failing requests run into the caps.
+ * 4. Only then is devnet read; then one call per number and payment; then Vonage is asked.
  */
 async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   const read = await readCallRequest(request);
@@ -416,11 +416,9 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
     }
   }
 
-  const site = deps.limits.checkSite();
-  if (!site.ok) return limited(site);
   const key = numberKey(secret, to);
-  const taken = deps.limits.takeNumber(key);
-  if (!taken.ok) return limited(taken);
+  const reserved = deps.limits.reserve(key);
+  if (!reserved.ok) return limited(reserved);
 
   let payment: SettledPayment | null;
   try {
@@ -435,9 +433,6 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   }
   const once = deps.limits.claimPayment(key, payment.signature);
   if (!once.ok) return limited(once);
-  // The site cap counts the calls we actually try to place.
-  const placing = deps.limits.takeSite();
-  if (!placing.ok) return limited(placing);
 
   const nowSeconds = Math.floor(nowMs / 1000);
   const { p, m } = signAudioParams(secret, {

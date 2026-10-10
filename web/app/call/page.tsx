@@ -64,8 +64,8 @@ export default async function CallPage() {
         </p>
         <p className="text-sm text-muted">
           A refused or failed transaction is never read out as paid. US numbers only. Limits: {NUMBER_LIMIT} requests per
-          number every {NUMBER_WINDOW_MS / 60_000} minutes (failed ones count too), one call per number for each payment,
-          and {SITE_LIMIT} calls placed an hour.{" "}
+          number every {NUMBER_WINDOW_MS / 60_000} minutes, {SITE_LIMIT} requests an hour for the site, and one call per
+          number for each payment. Failed requests count too.{" "}
           {codeRequired ? (
             <>Wrong desk codes are limited separately, per network address, and never count against anyone&apos;s calls. </>
           ) : null}

@@ -285,20 +285,20 @@ function callKeyObject() {
 // ---------- the caps ----------
 
 test.describe("call caps, with an injected clock", () => {
-  test("two requests per number per 30 minutes, then rate limited until the oldest leaves the window", () => {
+  test("two reservations per number per 30 minutes, then rate limited until the oldest leaves the window", () => {
     let now = 1_000_000;
     const limits = new CallLimits(() => now);
     const key = numberKey(SECRET, NUMBER);
-    expect(limits.takeNumber(key)).toEqual({ ok: true });
+    expect(limits.reserve(key)).toEqual({ ok: true });
     now += 60_000;
-    expect(limits.takeNumber(key)).toEqual({ ok: true });
+    expect(limits.reserve(key)).toEqual({ ok: true });
     now += 60_000;
-    expect(limits.takeNumber(key)).toEqual({ ok: false, limit: "number", retryAfterSeconds: (NUMBER_WINDOW_MS - 120_000) / 1000 });
-    // Another number is not affected, and a number's slots are not the site's calls.
-    expect(limits.takeNumber(numberKey(SECRET, OTHER_NUMBER))).toEqual({ ok: true });
-    expect(limits.sizes()).toEqual({ numbers: 2, payments: 0, site: 0 });
+    expect(limits.reserve(key)).toEqual({ ok: false, limit: "number", retryAfterSeconds: (NUMBER_WINDOW_MS - 120_000) / 1000 });
+    // A refused reservation takes nothing; another number is not affected.
+    expect(limits.sizes()).toEqual({ numbers: 1, payments: 0, site: 2 });
+    expect(limits.reserve(numberKey(SECRET, OTHER_NUMBER))).toEqual({ ok: true });
     now = 1_000_000 + NUMBER_WINDOW_MS;
-    expect(limits.takeNumber(key)).toEqual({ ok: true });
+    expect(limits.reserve(key)).toEqual({ ok: true });
   });
 
   test("one call per number and payment, remembered for 24 hours", () => {
@@ -315,20 +315,18 @@ test.describe("call caps, with an injected clock", () => {
     expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: true });
   });
 
-  test("at most 30 calls placed an hour for the site (this instance); checking counts nothing", () => {
+  test("at most 30 reservations an hour for the site (this instance); a full site takes no number slot", () => {
     let now = 9_000_000;
     const limits = new CallLimits(() => now);
     for (let i = 0; i < SITE_LIMIT; i += 1) {
-      expect(limits.checkSite()).toEqual({ ok: true });
-      expect(limits.takeSite()).toEqual({ ok: true });
+      expect(limits.reserve(numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`))).toEqual({ ok: true });
       now += 1000;
     }
-    const full = { ok: false, limit: "site", retryAfterSeconds: (SITE_WINDOW_MS - SITE_LIMIT * 1000) / 1000 };
-    expect(limits.checkSite()).toEqual(full);
-    expect(limits.takeSite()).toEqual(full);
-    expect(limits.sizes().site).toBe(SITE_LIMIT);
+    const fresh = numberKey(SECRET, OTHER_NUMBER);
+    expect(limits.reserve(fresh)).toEqual({ ok: false, limit: "site", retryAfterSeconds: (SITE_WINDOW_MS - SITE_LIMIT * 1000) / 1000 });
+    expect(limits.sizes()).toEqual({ numbers: SITE_LIMIT, payments: 0, site: SITE_LIMIT });
     now = 9_000_000 + SITE_WINDOW_MS;
-    expect(limits.checkSite()).toEqual({ ok: true });
+    expect(limits.reserve(fresh)).toEqual({ ok: true });
   });
 
   test("desk-code failures: 10 per client in 10 minutes, then refused until the oldest leaves the window", () => {
@@ -350,15 +348,14 @@ test.describe("call caps, with an injected clock", () => {
     const limits = new CallLimits(() => now, { siteLimit: 10_000, maxNumberKeys: 5, maxPaymentPairs: 7 });
     for (let i = 0; i < 40; i += 1) {
       const key = numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`);
-      expect(limits.takeNumber(key)).toEqual({ ok: true });
+      expect(limits.reserve(key)).toEqual({ ok: true });
       expect(limits.claimPayment(key, REDEEM_SIG)).toEqual({ ok: true });
-      expect(limits.takeSite()).toEqual({ ok: true });
     }
     expect(limits.sizes()).toEqual({ numbers: 5, payments: 7, site: 40 });
     // The default site cap stops calls long before any bound matters.
     const real = new CallLimits(() => now);
-    for (let i = 0; i < 200; i += 1) real.takeSite();
-    expect(real.sizes().site).toBe(SITE_LIMIT);
+    for (let i = 0; i < 200; i += 1) real.reserve(numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`));
+    expect(real.sizes()).toEqual({ numbers: SITE_LIMIT, payments: 0, site: SITE_LIMIT });
 
     const failures = new DeskCodeFailures(() => now, FAILURE_LIMIT, 6);
     for (let i = 0; i < 500; i += 1) failures.record(`client-${i}`);
@@ -657,7 +654,7 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
     const unknown = encodeBase58(new Uint8Array(64).fill(7));
     await withStandIn({}, async (s) => {
       await withEnv(callEnv(s.base), async () => {
-        const d = deps(undefined, { siteLimit: 3 });
+        const d = deps(undefined, { siteLimit: 5 });
         const ask = (to: string, signature?: string) => handleCall(callRequest({ to, lang: "en", ...(signature ? { signature } : {}) }), d);
         // The number's two slots each read devnet once, and find nothing.
         expect((await ask(NUMBER, unknown)).status).toBe(404);
@@ -666,9 +663,11 @@ test.describe("POST /api/call and GET /api/call/audio", () => {
         // Fifty more from that number: refused before any read.
         for (let i = 0; i < 50; i += 1) expect((await ask(NUMBER, unknown)).status).toBe(429);
         expect(s.seen.rpc).toHaveLength(2);
-        // Three calls placed fill this instance's site cap (3 here)...
+        // The two failed requests kept their site slots; three calls fill this instance's cap (5 here)...
+        expect(d.limits.sizes().site).toBe(2);
         for (let i = 0; i < 3; i += 1) expect((await ask(`${PLUS}1678555${String(i).padStart(4, "0")}`)).status).toBe(200);
         expect(s.seen.vonage).toHaveLength(3);
+        expect(d.limits.sizes().site).toBe(5);
         const reads = s.seen.rpc.length;
         // ...then a hundred more numbers are refused before any read or call.
         for (let i = 0; i < 100; i += 1) {
@@ -767,6 +766,224 @@ test.describe("desk code (LOKA_CALL_CODE)", () => {
   });
 });
 
+// ---------- the limits' end state, one row per rule ----------
+
+test.describe("limits end state (table)", () => {
+  const CODE = "desk-code-for-the-test";
+  const A = "203.0.113.5";
+  const B = "198.51.100.7";
+  const UNKNOWN = encodeBase58(new Uint8Array(64).fill(9));
+
+  interface Send {
+    body?: unknown;
+    raw?: string;
+    client?: string;
+  }
+  interface Row {
+    rule: string;
+    env?: Record<string, string | undefined>;
+    stand?: StandInOptions;
+    settings?: Partial<LimitSettings>;
+    nowMs?: number;
+    /** Requests made before the one the row is about. */
+    before?: Send[];
+    send: Send;
+    status: number;
+    error?: string;
+    limit?: string;
+    /** Changes the request makes: limiter entries (failures: client keys; site: reservations; payments: pairs) and upstream requests. */
+    failures: number;
+    numbers: number;
+    site: number;
+    payments: number;
+    /** "some" means at least one devnet request. */
+    rpc: number | "some";
+    vonage: number;
+  }
+
+  const ok = { to: NUMBER, lang: "en", code: CODE };
+  const ROWS: Row[] = [
+    { rule: "1 bad body", send: { raw: "{not json" }, status: 400, error: "bad_request", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "1 bad number (Jamaica, +1 876)", send: { body: { ...ok, to: `${PLUS}18765550100` } }, status: 400, error: "bad_number", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "2 calls off (LOKA_CALLS_OFF=1)", env: { LOKA_CALLS_OFF: "1" }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "2 not configured (no ElevenLabs key)", env: { ELEVENLABS_API_KEY: undefined }, send: { body: ok }, status: 503, error: "calls_off", failures: 0, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "3 missing desk code", send: { body: { to: NUMBER, lang: "en" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    { rule: "3 wrong desk code", send: { body: { ...ok, code: "nope" }, client: A }, status: 403, error: "wrong_code", failures: 1, numbers: 0, site: 0, payments: 0, rpc: 0, vonage: 0 },
+    {
+      rule: "3 a client past its threshold gets 429, even with the right code",
+      before: Array.from({ length: FAILURE_LIMIT }, (_, i) => ({ body: { ...ok, code: `guess-${i}` }, client: A })),
+      send: { body: ok, client: A },
+      status: 429,
+      limit: "desk_code",
+      failures: 0,
+      numbers: 0,
+      site: 0,
+      payments: 0,
+      rpc: 0,
+      vonage: 0,
+    },
+    {
+      rule: "3 another client is not affected",
+      before: Array.from({ length: FAILURE_LIMIT + 5 }, (_, i) => ({ body: { ...ok, code: `guess-${i}` }, client: A })),
+      send: { body: ok, client: B },
+      status: 200,
+      failures: 0,
+      numbers: 1,
+      site: 1,
+      payments: 1,
+      rpc: "some",
+      vonage: 1,
+    },
+    { rule: "4 right code, latest payment: reserved, then called", send: { body: ok }, status: 200, failures: 0, numbers: 1, site: 1, payments: 1, rpc: "some", vonage: 1 },
+    { rule: "4 right code, unknown signature: reservation stays", send: { body: { ...ok, signature: UNKNOWN } }, status: 404, error: "no_settled_payment", failures: 0, numbers: 1, site: 1, payments: 0, rpc: "some", vonage: 0 },
+    {
+      rule: "4 right code, too old: reservation stays",
+      nowMs: (REDEEM.blockTime + 16 * 60) * 1000,
+      send: { body: { ...ok, signature: REDEEM_SIG } },
+      status: 409,
+      error: "too_old",
+      failures: 0,
+      numbers: 1,
+      site: 1,
+      payments: 0,
+      rpc: "some",
+      vonage: 0,
+    },
+    {
+      rule: "4 right code, devnet error: reservation stays",
+      stand: { failTransaction: REDEEM_SIG },
+      send: { body: { ...ok, signature: REDEEM_SIG } },
+      status: 502,
+      error: "chain_read_failed",
+      failures: 0,
+      numbers: 1,
+      site: 1,
+      payments: 0,
+      rpc: "some",
+      vonage: 0,
+    },
+    {
+      rule: "4 right code, Vonage refuses: reservation stays",
+      stand: { vonageStatus: 401, vonageTitle: "Unauthorized" },
+      send: { body: ok },
+      status: 502,
+      error: "call_failed",
+      failures: 0,
+      numbers: 1,
+      site: 1,
+      payments: 1,
+      rpc: "some",
+      vonage: 1,
+    },
+    {
+      rule: "5 a number's third request in 30 minutes",
+      before: [{ body: { ...ok, signature: UNKNOWN } }, { body: { ...ok, signature: UNKNOWN } }],
+      send: { body: ok },
+      status: 429,
+      limit: "number",
+      failures: 0,
+      numbers: 0,
+      site: 0,
+      payments: 0,
+      rpc: 0,
+      vonage: 0,
+    },
+    {
+      rule: "5 the site's 31st request in an hour",
+      before: Array.from({ length: SITE_LIMIT }, (_, i) => ({ body: { ...ok, to: `${PLUS}1678555${String(i).padStart(4, "0")}`, signature: UNKNOWN } })),
+      send: { body: ok },
+      status: 429,
+      limit: "site",
+      failures: 0,
+      numbers: 0,
+      site: 0,
+      payments: 0,
+      rpc: 0,
+      vonage: 0,
+    },
+    {
+      rule: "5 one call per number and payment",
+      before: [{ body: ok }],
+      send: { body: ok },
+      status: 429,
+      limit: "payment",
+      failures: 0,
+      numbers: 0,
+      site: 1,
+      payments: 0,
+      rpc: 0,
+      vonage: 0,
+    },
+  ];
+
+  test("every rule, against the stand-ins", async () => {
+    for (const row of ROWS) {
+      await withStandIn(row.stand ?? {}, async (s) => {
+        await withEnv(callEnv(s.base, { LOKA_CALL_CODE: CODE, ...row.env }), async () => {
+          const d = deps(row.nowMs, row.settings);
+          const send = (m: Send) =>
+            handleCall(
+              new Request("http://x/api/call", {
+                method: "POST",
+                headers: { "content-type": "application/json", ...(m.client ? { "x-forwarded-for": m.client } : {}) },
+                body: m.raw ?? JSON.stringify(m.body),
+              }),
+              d,
+            );
+          for (const m of row.before ?? []) await send(m);
+          const sizes = d.limits.sizes();
+          const failures = d.failures.size;
+          const seen = { rpc: s.seen.rpc.length, vonage: s.seen.vonage.length, speech: s.seen.speech.length };
+
+          const r = await send(row.send);
+          const body = await r.json();
+          expect(r.status, row.rule).toBe(row.status);
+          if (row.error) expect(body.error, row.rule).toBe(row.error);
+          if (row.limit) expect(body.limit, row.rule).toBe(row.limit);
+          const after = d.limits.sizes();
+          expect(
+            {
+              failures: d.failures.size - failures,
+              numbers: after.numbers - sizes.numbers,
+              site: after.site - sizes.site,
+              payments: after.payments - sizes.payments,
+              vonage: s.seen.vonage.length - seen.vonage,
+              speech: s.seen.speech.length - seen.speech,
+            },
+            row.rule,
+          ).toEqual({ failures: row.failures, numbers: row.numbers, site: row.site, payments: row.payments, vonage: row.vonage, speech: 0 });
+          const reads = s.seen.rpc.length - seen.rpc;
+          if (row.rpc === "some") expect(reads, row.rule).toBeGreaterThan(0);
+          else expect(reads, row.rule).toBe(row.rpc);
+          expect(JSON.stringify(body), row.rule).not.toContain(NATIONAL);
+        });
+      });
+    }
+    // 6: every map is bounded (each also expires with its window; see the caps tests).
+    const now = 1_000;
+    const limits = new CallLimits(() => now, { siteLimit: 1_000_000, maxNumberKeys: 3, maxPaymentPairs: 3 });
+    const failures = new DeskCodeFailures(() => now, FAILURE_LIMIT, 3);
+    const memo = new ChainMemo(10_000, 3);
+    const audio = new AudioCache(3);
+    for (let i = 0; i < 50; i += 1) {
+      const key = numberKey(SECRET, `${PLUS}1404555${String(i).padStart(4, "0")}`);
+      limits.reserve(key);
+      limits.claimPayment(key, REDEEM_SIG);
+      failures.record(`client-${i}`);
+      memo.set(`sig-${i}`, now, null);
+      await audio.get(`p-${i}`, now, now + 600_000, async () => new Uint8Array([1]));
+    }
+    expect({ ...limits.sizes(), site: 0, failures: failures.size, memo: memo.size, audio: audio.size }).toEqual({
+      numbers: 3,
+      payments: 3,
+      site: 0,
+      failures: 3,
+      memo: 3,
+      audio: 3,
+    });
+  });
+});
+
 // ---------- privacy: the number never reaches a log or a response ----------
 
 test("the number never appears in console output across a full call path (want 0), while the capture works (want 1)", async () => {
@@ -819,6 +1036,8 @@ function callEnv(base: string, extra: Record<string, string | undefined> = {}): 
   return {
     NODE_ENV: "test",
     VERCEL: undefined,
+    VERCEL_ENV: undefined,
+    LOKA_CALL_CODE: undefined,
     LOKA_E2E_UPSTREAM: "1",
     SOLANA_RPC_URL: `${base}/rpc`,
     LOKA_VONAGE_APPLICATION_ID: "unit-test-application",
