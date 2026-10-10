@@ -1,0 +1,28 @@
+{
+  "name": "@lokapay/protocol",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PAYMENT-V1 encode, decode and verify (protocol/PAYMENT-V1.md) for the server and the web",
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
