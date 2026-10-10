@@ -15,7 +15,8 @@ public struct ReceiveView: View {
         self.bluetoothOn = bluetoothOn
     }
 
-    /// The screen without its scroll view (also rendered on its own for layout checks).
+    /// The screen without its scroll view (also rendered on its own at a 390 pt phone width by
+    /// `ReceiveLayoutTests`, which checks that no state is wider).
     var screenContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             SandboxBanner()

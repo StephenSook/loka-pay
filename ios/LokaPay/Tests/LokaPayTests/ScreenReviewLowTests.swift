@@ -327,3 +327,63 @@ struct TextButtonTests {
         #expect(try pixels(textButton("Next payment", enabled: false)) != enabled)
     }
 }
+
+@Suite("Receive's screen content fits a 390 pt phone width in each state (low finding 7)")
+@MainActor
+struct ReceiveLayoutTests {
+    static let phoneWidth: CGFloat = 390
+
+    /// The rendered width in points when the view is offered the phone width.
+    func renderedWidth(_ view: some View) throws -> Int {
+        let renderer = ImageRenderer(content: view)
+        renderer.proposedSize = ProposedViewSize(width: Self.phoneWidth, height: nil)
+        renderer.scale = 1
+        let image = try #require(renderer.cgImage)
+        #expect(image.height > 0)
+        return image.width
+    }
+
+    func screen(_ model: ReceiveModel) -> some View {
+        ReceiveView(model: model, connectivity: ConnectivityMonitor(), bluetoothOn: true).screenContent
+    }
+
+    @Test("the check sees a view wider than the phone")
+    func positiveControl() throws {
+        #expect(try renderedWidth(Color.red.frame(width: 500, height: 10)) > Int(Self.phoneWidth))
+    }
+
+    @Test("every main Receive state renders no wider than 390 pt")
+    func statesFit() throws {
+        let unavailable = ReceiveModel(merchantWire: nil, signer: PreviewFixtures.merchantSigner,
+                                       ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                                       deployment: PreviewFixtures.deployment, serverPublicKey: PreviewFixtures.serverKey,
+                                       now: { PreviewFixtures.now })
+        let pending = PendingSettlement(noteId: PreviewFixtures.note0.noteId, signature: nil, explorer: nil, retryAfter: 2)
+        let states: [(String, ReceiveModel)] = [
+            ("unavailable", unavailable),
+            ("ready, Bluetooth", .preview(.ready, bluetoothInbox: true)),
+            ("ready, camera only", .preview(.ready)),
+            ("ready, note before allowance", .preview(.ready, issue: .allowanceNeeded, waitingNote: PreviewFixtures.note0)),
+            ("ready, conflicting spend", .preview(.ready, issue: .payment(.serialSeen), conflict: true, unsettled: 1_000_000)),
+            ("ready, over the offline limit", .preview(.ready, issue: .payment(.offlineLimit), unsettled: 2_750_000)),
+            ("received", .preview(.received, payment: PreviewFixtures.received(), unsettled: 1_000_000)),
+            ("received, not signed", .preview(.received, payment: PreviewFixtures.received(withAck: false),
+                                              issue: .signing("Authentication canceled."), unsettled: 1_000_000)),
+            ("received, server down", .preview(.received, payment: PreviewFixtures.received(),
+                                               issue: .settlement(.http(status: 503, error: nil, message: nil)),
+                                               unsettled: 1_000_000)),
+            ("received, chain undecided", .preview(.received, payment: PreviewFixtures.received(), pending: pending,
+                                                   unsettled: 1_000_000)),
+            ("settled, paid", .preview(.settled, payment: PreviewFixtures.received(),
+                                       settlement: PreviewFixtures.settled(conf: PreviewFixtures.confSettledWire), unsettled: 0)),
+            ("settled, failed", .preview(.settled, payment: PreviewFixtures.received(),
+                                         settlement: PreviewFixtures.settled(conf: PreviewFixtures.confFailedWire), unsettled: 0)),
+        ]
+        #expect(unavailable.phase == .unavailable)
+        for (name, model) in states {
+            let width = try renderedWidth(screen(model))
+            #expect(width <= Int(Self.phoneWidth), "\(name): \(width) pt")
+            #expect(width > 300, "\(name) rendered almost nothing: \(width) pt")
+        }
+    }
+}
