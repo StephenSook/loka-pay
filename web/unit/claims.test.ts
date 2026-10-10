@@ -59,7 +59,7 @@ const fresh = <T>(data: T, ageMs = 0): Read<T> => ({
   readAtMs: NOW - ageMs,
   staleBecause: null,
   current: true,
-  askedAtMs: NOW,
+  shownAtMs: NOW,
   currentForMs: CURRENT_FOR,
 });
 const cached = <T>(data: T, ageMs: number): Read<T> => ({
@@ -68,7 +68,7 @@ const cached = <T>(data: T, ageMs: number): Read<T> => ({
   readAtMs: NOW - ageMs,
   staleBecause: null,
   current: false,
-  askedAtMs: NOW,
+  shownAtMs: NOW,
   currentForMs: CURRENT_FOR,
 });
 const stale = <T>(data: T, ageMs: number, reason: string, notMade = false): Read<T> => ({
@@ -77,7 +77,7 @@ const stale = <T>(data: T, ageMs: number, reason: string, notMade = false): Read
   readAtMs: NOW - ageMs,
   staleBecause: notMade ? { reason, atMs: NOW, notMade: true } : { reason, atMs: NOW },
   current: false,
-  askedAtMs: NOW,
+  shownAtMs: NOW,
   currentForMs: CURRENT_FOR,
 });
 const failed = <T>(reason: string): Read<T> => ({ ok: false, reason, atMs: NOW });

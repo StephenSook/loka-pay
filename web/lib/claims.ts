@@ -55,7 +55,7 @@ export type Current<T> = { data: T; problem: null; checked: Checked } | { data: 
 
 export function current<T>(read: Read<T>, source = "Solana devnet"): Current<T> {
   if (!read.ok) return { data: null, problem: read.reason, checked: null };
-  const age = formatAge(read.askedAtMs - read.readAtMs);
+  const age = formatAge(read.shownAtMs - read.readAtMs);
   const window = formatAge(read.currentForMs);
   if (!read.current) {
     const why = read.staleBecause
@@ -67,7 +67,7 @@ export function current<T>(read: Read<T>, source = "Solana devnet"): Current<T> 
       checked: null,
     };
   }
-  return { data: read.data, problem: null, checked: { source, readAtMs: read.readAtMs, ageMs: read.askedAtMs - read.readAtMs } };
+  return { data: read.data, problem: null, checked: { source, readAtMs: read.readAtMs, ageMs: read.shownAtMs - read.readAtMs } };
 }
 
 /** A Live claim decided by a read carries that read's time and age. */

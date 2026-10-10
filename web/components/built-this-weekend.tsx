@@ -42,7 +42,7 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
           </p>
         </>
       ) : (
-        <Numbers b={read.data} readAtMs={read.readAtMs} current={read.current} askedAtMs={read.askedAtMs} />
+        <Numbers b={read.data} readAtMs={read.readAtMs} current={read.current} shownAtMs={read.shownAtMs} />
       )}
       <OutLink href={COMPARE_PAGE_URL} testId="compare-link">
         Every commit and file on GitHub ({KIT_TAG}...main)
@@ -51,7 +51,7 @@ export function BuiltThisWeekendPanel({ read }: { read: Read<BuiltThisWeekend> }
   );
 }
 
-function Numbers({ b, readAtMs, current, askedAtMs }: { b: BuiltThisWeekend; readAtMs: number; current: boolean; askedAtMs: number }) {
+function Numbers({ b, readAtMs, current, shownAtMs }: { b: BuiltThisWeekend; readAtMs: number; current: boolean; shownAtMs: number }) {
   const partial = b.listedCommits < b.totalCommits;
   return (
     <div className={`${CARD} flex flex-col gap-4`}>
@@ -86,7 +86,7 @@ function Numbers({ b, readAtMs, current, askedAtMs }: { b: BuiltThisWeekend; rea
         ms={readAtMs}
         stale={null}
         current={current}
-        askedAtMs={askedAtMs}
+        shownAtMs={shownAtMs}
         testId="built-read-stamp"
       />
     </div>

@@ -33,7 +33,7 @@ export function CiStatusList({ read }: { read: Read<MainChecks> }) {
       ms={read.readAtMs}
       stale={read.staleBecause}
       current={read.current}
-      askedAtMs={read.askedAtMs}
+      shownAtMs={read.shownAtMs}
       testId="ci-read-stamp"
     />
   ) : null;

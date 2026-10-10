@@ -37,6 +37,7 @@ export const COMPARE_PAGE_URL = `${REPO_URL}/compare/${KIT_TAG}...main`;
 export const GITHUB_READS: ReadPolicy = {
   revalidateSeconds: 300,
   currentForMs: 60_000,
+  reuseForMs: 45_000,
   limits: { reads: 3, perMs: 60_000, rateLimitPauseMs: 60_000 },
 };
 

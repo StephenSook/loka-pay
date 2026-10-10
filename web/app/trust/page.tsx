@@ -4,6 +4,7 @@ import { SandboxChip } from "@/components/chips";
 import { CARD, Fact, Mono, OutLink, PAGE, ReadFailure, ReadStamp, YesNo } from "@/components/judge-ui";
 import { readProgramFacts } from "@/lib/chain";
 import { upgradeability } from "@/lib/claims";
+import { shownTogether } from "@/lib/read-state";
 import { MULTISIG_TASK } from "@/lib/facts";
 import { PINS } from "@/lib/pins";
 import { REPO_URL } from "@/lib/site";
@@ -60,7 +61,8 @@ const CHECKS: Array<{ title: string; body: string }> = [
 
 export default async function TrustPage() {
   await connection();
-  const facts = await readProgramFacts();
+  // The read's age is decided when the page renders.
+  const [facts] = shownTogether([await readProgramFacts()]);
   // The heading follows the upgrade authority the custody section shows, never a fixed line.
   const pilot = upgradeability(facts);
   const programData = facts.ok ? facts.data.programData : null;
@@ -72,7 +74,7 @@ export default async function TrustPage() {
       ms={facts.readAtMs}
       stale={facts.staleBecause}
       current={facts.current}
-      askedAtMs={facts.askedAtMs}
+      shownAtMs={facts.shownAtMs}
       testId="trust-read-stamp"
     />
   ) : (

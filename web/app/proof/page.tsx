@@ -9,6 +9,7 @@ import { ReservesPanel } from "@/components/reserves-panel";
 import { readProgramFacts, readReserves } from "@/lib/chain";
 import { claimsFrom, type Evidence } from "@/lib/claims";
 import { readBuiltThisWeekend, readMainChecks } from "@/lib/github";
+import { shownTogether } from "@/lib/read-state";
 import { formatAge } from "@/lib/time";
 
 // /proof (PLAN.md 3.2, 3.24, 3.60). The claims and the rules that decide their status are in
@@ -38,12 +39,15 @@ export default async function ProofPage() {
   await connection();
   // needCurrent: a claim is Live only from a current read (reused or made now), never from
   // an older cached one.
-  const [facts, reserves, checks, built] = await Promise.all([
-    readProgramFacts({ needCurrent: true }),
-    readReserves({ needCurrent: true }),
-    readMainChecks({ needCurrent: true }),
-    readBuiltThisWeekend(),
-  ]);
+  // Every read's age is decided at one render time, after the slowest read has arrived.
+  const [facts, reserves, checks, built] = shownTogether(
+    await Promise.all([
+      readProgramFacts({ needCurrent: true }),
+      readReserves({ needCurrent: true }),
+      readMainChecks({ needCurrent: true }),
+      readBuiltThisWeekend(),
+    ]),
+  );
   const claims = claimsFrom(facts, reserves, checks);
 
   return (

@@ -8,6 +8,7 @@ import { ProgramFactsPanel } from "@/components/program-facts";
 import { readProgramFacts } from "@/lib/chain";
 import { TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readMainChecks } from "@/lib/github";
+import { shownTogether } from "@/lib/read-state";
 import { REPO_URL } from "@/lib/site";
 
 // The judge door (PLAN.md 3.2): a numbered three-minute route through everything a judge
@@ -68,7 +69,8 @@ function GoLink({ href, children }: { href: string; children: React.ReactNode })
 
 export default async function JudgePage() {
   await connection();
-  const [facts, checks] = await Promise.all([readProgramFacts(), readMainChecks()]);
+  // Both reads' ages are decided at one render time, after the slower one has arrived.
+  const [facts, checks] = shownTogether(await Promise.all([readProgramFacts(), readMainChecks()]));
   return (
     <main className={PAGE}>
       <header className="flex flex-col gap-4">

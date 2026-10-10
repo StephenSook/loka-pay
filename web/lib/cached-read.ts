@@ -30,6 +30,8 @@ export interface ReadPolicy {
   revalidateSeconds: number;
   /** A read younger than this is current: a claim may be Live from it. */
   currentForMs: number;
+  /** needCurrent: a kept read younger than this is reused; shorter than currentForMs so it is still current at render. */
+  reuseForMs: number;
   limits: GateLimits;
 }
 
@@ -74,6 +76,7 @@ export async function cachedRead<T>(
     // arriving at an idle site never sees a value older than the window the page states.
     maxAgeMs: policy.revalidateSeconds * 1000,
     currentForMs: policy.currentForMs,
+    reuseForMs: policy.reuseForMs,
     lastFailure: () => lastFailures.get(key) ?? null,
     lastGoodRead: () => (lastGoodReads.get(key) as Stamped<T> | undefined) ?? null,
     keepGoodRead: (entry) => {

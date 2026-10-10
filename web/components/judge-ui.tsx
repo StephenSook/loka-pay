@@ -79,7 +79,7 @@ export function ReadStamp({
   ms,
   stale,
   current,
-  askedAtMs,
+  shownAtMs,
   testId,
 }: {
   source: string;
@@ -87,10 +87,10 @@ export function ReadStamp({
   ms: number;
   stale: FailedRead | null;
   current: boolean;
-  askedAtMs: number;
+  shownAtMs: number;
   testId?: string;
 }) {
-  const age = formatAge(askedAtMs - ms);
+  const age = formatAge(shownAtMs - ms);
   if (stale) {
     return (
       <div

@@ -3,11 +3,17 @@
 //
 // Every value says how old it is, and a page must show which state it has:
 // - current: a successful read younger than the read's window (10 s for devnet, 60 s for
-//   GitHub), with its time and exact age. Only a current value may make a claim Live;
+//   GitHub) at the moment the page renders, with no newer read that failed, with its time
+//   and exact age. Only a current value may make a claim Live;
 // - cached: an older good read, with its time and age. Never Live;
 // - stale: an older good read PLUS the newer read that failed (or was not made), with its
 //   reason and time. A page shows both; it never shows the older value as if it were current;
 // - failed: no value at all, only the reason and the time.
+//
+// Age and current-ness are decided when the page renders, never when it asked: a page awaits
+// several reads, and a value that was current when it was handed over can be too old by the
+// time the last read arrives. resolveRead stamps its answer after its own awaits, and a page
+// re-stamps every read at one render time (shownAt) before deciding any claim.
 //
 // The load on devnet and GitHub is bounded whatever the traffic (ReadGate below): page views
 // that want the same read while it is running share it, a current value is reused instead of
@@ -31,10 +37,13 @@ export type Read<T> =
       readAtMs: number;
       /** Null when this is the latest read. Otherwise the newer read that failed or was not made. */
       staleBecause: FailedRead | null;
-      /** True when the read was younger than `currentForMs` when the page asked: only then may a claim be Live. */
+      /**
+       * True when, at shownAtMs, the read was no older than `currentForMs` and no newer read had
+       * failed: only then may a claim be Live.
+       */
       current: boolean;
-      /** When the page asked for the read (this server's clock): the value's age is askedAtMs - readAtMs. */
-      askedAtMs: number;
+      /** When the page shows the value (this server's clock): its age is shownAtMs - readAtMs. */
+      shownAtMs: number;
       /** How young a read must be to count as current, for the page to say so. */
       currentForMs: number;
     }
@@ -116,6 +125,29 @@ export class ReadGate {
   }
 }
 
+/**
+ * The same read as the page shows it at `shownAtMs`: its age and whether it is current are
+ * decided at that moment. A page calls this for every read with one render time, after all
+ * of its reads have arrived and before it decides any claim.
+ */
+export function shownAt<T>(read: Read<T>, shownAtMs: number): Read<T> {
+  if (!read.ok) return read;
+  return {
+    ...read,
+    shownAtMs,
+    current: read.staleBecause === null && shownAtMs - read.readAtMs <= read.currentForMs,
+  };
+}
+
+/**
+ * Every read a page made, re-stamped at one render time (this server's clock, read once):
+ * call it after all of the page's reads have arrived, before deciding any claim.
+ */
+export function shownTogether<T extends readonly Read<unknown>[]>(reads: readonly [...T]): T {
+  const renderedAtMs = Date.now();
+  return reads.map((read) => shownAt(read, renderedAtMs)) as unknown as T;
+}
+
 export interface ResolveInput<T> {
   /** The cache: its entry (possibly old), or it throws when it has none and the read failed. */
   cached: () => Promise<Stamped<T>>;
@@ -125,6 +157,11 @@ export interface ResolveInput<T> {
   maxAgeMs: number;
   /** A read younger than this counts as current. */
   currentForMs: number;
+  /**
+   * needCurrent: a kept read younger than this is reused instead of read again. Shorter than
+   * currentForMs, so a reused read is still current when the page renders a moment later.
+   */
+  reuseForMs?: number;
   /** The latest failure recorded for this key, for example by a background refresh. */
   lastFailure: () => FailedRead | null;
   /** The latest successful read made now (readNow) for this key, kept in this server process. */
@@ -140,28 +177,27 @@ export interface ResolveInput<T> {
 }
 
 export async function resolveRead<T>(input: ResolveInput<T>): Promise<Read<T>> {
-  const askedAtMs = input.now();
-  const isCurrent = (entry: Stamped<T>) => askedAtMs - entry.readAtMs <= input.currentForMs;
-  const answer = (entry: Stamped<T>, staleBecause: FailedRead | null): Read<T> => {
-    const current = isCurrent(entry);
-    return {
-      ok: true,
-      data: entry.data,
-      readAtMs: entry.readAtMs,
-      // A good read inside the window is current whatever happened after it.
-      staleBecause: current ? null : staleBecause,
-      current,
-      askedAtMs,
-      currentForMs: input.currentForMs,
-    };
-  };
+  // Stamped after every await: the age is the age when this answer is handed over.
+  const answer = (entry: Stamped<T>, staleBecause: FailedRead | null): Read<T> =>
+    shownAt(
+      {
+        ok: true,
+        data: entry.data,
+        readAtMs: entry.readAtMs,
+        staleBecause,
+        current: false,
+        shownAtMs: 0,
+        currentForMs: input.currentForMs,
+      },
+      input.now(),
+    );
   const failureOf = (e: unknown): FailedRead =>
     e instanceof ReadNotMade ? { reason: e.message, atMs: input.now(), notMade: true } : { reason: describeFailure(e), atMs: input.now() };
   const newest = (a: Stamped<T> | null, b: Stamped<T> | null) => (a && (!b || a.readAtMs > b.readAtMs) ? a : b);
 
   if (input.needCurrent) {
     const kept = input.lastGoodRead();
-    if (kept && isCurrent(kept)) return answer(kept, null);
+    if (kept && input.now() - kept.readAtMs <= (input.reuseForMs ?? input.currentForMs)) return answer(kept, null);
     let failure: FailedRead;
     try {
       const entry = await input.readNow();

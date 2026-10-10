@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { ReadGate, resolveRead, type FailedRead, type GateLimits, type ResolveInput, type Stamped } from "../lib/read-state";
+import { ReadGate, resolveRead, shownAt, shownTogether, type FailedRead, type GateLimits, type Read, type ResolveInput, type Stamped } from "../lib/read-state";
 import { RpcError } from "../lib/solana";
 
 // lib/read-state.ts decides what a cached server read hands the page. A page must never
-// show an older value as if it were current: every value carries its age (askedAtMs minus
+// show an older value as if it were current: every value carries its age (shownAtMs minus
 // readAtMs), only a read younger than its window is current, and when the newest read failed
 // the older value comes with that failure's reason and time.
 
@@ -41,13 +41,13 @@ function input(options: {
   return { calls: () => readNowCalls, value };
 }
 
-const ok = (data: string, readAtMs: number, current: boolean, staleBecause: FailedRead | null = null, askedAtMs = NOW) => ({
+const ok = (data: string, readAtMs: number, current: boolean, staleBecause: FailedRead | null = null, shownAtMs = NOW) => ({
   ok: true,
   data,
   readAtMs,
   staleBecause,
   current,
-  askedAtMs,
+  shownAtMs,
   currentForMs: CURRENT_FOR,
 });
 
@@ -61,7 +61,7 @@ test("a cached entry older than its current window but inside the cache window i
   const i = input({ cached: { data: "v1", readAtMs: NOW - 30_000 } });
   const read = await resolveRead(i.value);
   expect(read).toEqual(ok("v1", NOW - 30_000, false));
-  expect(read.ok && read.askedAtMs - read.readAtMs).toBe(30_000);
+  expect(read.ok && read.shownAtMs - read.readAtMs).toBe(30_000);
   expect(i.calls()).toBe(0);
 });
 
@@ -165,7 +165,7 @@ test.describe("needCurrent: a current read, the cache only as a fallback", () =>
     const i = input({ cached: new Error("not used"), kept: { data: "kept", readAtMs: NOW - 4_000 }, needCurrent: true });
     const read = await resolveRead(i.value);
     expect(read).toEqual(ok("kept", NOW - 4_000, true));
-    expect(read.ok && read.askedAtMs - read.readAtMs).toBe(4_000);
+    expect(read.ok && read.shownAtMs - read.readAtMs).toBe(4_000);
     expect(i.calls()).toBe(0);
   });
 
@@ -213,7 +213,79 @@ test.describe("needCurrent: a current read, the cache only as a fallback", () =>
       now: () => clock.ms,
       needCurrent: true,
     });
-    expect(read).toEqual(ok("cache-miss-read", NOW + 100, true));
+    expect(read).toEqual(ok("cache-miss-read", NOW + 100, true, null, NOW + 100));
+  });
+});
+
+// The age of a value is its age when the page shows it, never when the page asked: awaits
+// between the two (a slow cache, a slow sibling read) make it older. A fake clock moves
+// while the awaits run.
+test.describe("age and current-ness are decided after the awaits, at render", () => {
+  test("a kept read 9 s old, then a cache that takes 9 s to fail: 18 s old, not current, and the failure is kept", async () => {
+    const clock = { ms: NOW };
+    const read = await resolveRead<string>({
+      cached: async () => {
+        clock.ms += 9_000;
+        throw new Error("no answer from 127.0.0.1 within 9 s");
+      },
+      readNow: async () => {
+        throw new Error("readNow was not expected");
+      },
+      maxAgeMs: MAX_AGE,
+      currentForMs: CURRENT_FOR,
+      lastFailure: () => null,
+      lastGoodRead: () => ({ data: "kept", readAtMs: NOW - 9_000 }),
+      keepGoodRead: () => {},
+      now: () => clock.ms,
+    });
+    expect(read).toEqual(ok("kept", NOW - 9_000, false, { reason: "no answer from 127.0.0.1 within 9 s", atMs: NOW + 9_000 }, NOW + 9_000));
+    expect(read.ok && read.shownAtMs - read.readAtMs).toBe(18_000);
+  });
+
+  test("needCurrent: a slow failed read and a slow cache are both counted in the fallback's age", async () => {
+    const clock = { ms: NOW };
+    const read = await resolveRead<string>({
+      cached: async () => {
+        clock.ms += 4_000;
+        throw new Error("nothing cached");
+      },
+      readNow: async () => {
+        clock.ms += 5_000;
+        throw new Error("node is behind");
+      },
+      maxAgeMs: MAX_AGE,
+      currentForMs: CURRENT_FOR,
+      reuseForMs: 7_000,
+      lastFailure: () => null,
+      lastGoodRead: () => ({ data: "kept", readAtMs: NOW - 8_000 }),
+      keepGoodRead: () => {},
+      now: () => clock.ms,
+      needCurrent: true,
+    });
+    expect(read).toEqual(ok("kept", NOW - 8_000, false, { reason: "node is behind", atMs: NOW + 5_000 }, NOW + 9_000));
+  });
+
+  test("needCurrent reuses a kept read only while it has time to stay current through the render", async () => {
+    const reused = input({ cached: new Error("not used"), kept: { data: "kept", readAtMs: NOW - 6_000 }, needCurrent: true });
+    reused.value.reuseForMs = 7_000;
+    expect(await resolveRead(reused.value)).toEqual(ok("kept", NOW - 6_000, true));
+    expect(reused.calls()).toBe(0);
+    const reread = input({ cached: new Error("not used"), kept: { data: "kept", readAtMs: NOW - 8_000 }, readNow: { data: "now", readAtMs: NOW }, needCurrent: true });
+    reread.value.reuseForMs = 7_000;
+    expect(await resolveRead(reread.value)).toEqual(ok("now", NOW, true));
+    expect(reread.calls()).toBe(1);
+  });
+
+  test("a page re-stamps every read at one render time: a read current when handed over is not current 5 s later", () => {
+    const handed: Read<string> = { ok: true, data: "v", readAtMs: NOW - 8_000, staleBecause: null, current: true, shownAtMs: NOW, currentForMs: CURRENT_FOR };
+    expect(shownAt(handed, NOW + 5_000)).toEqual(ok("v", NOW - 8_000, false, null, NOW + 5_000));
+    expect(shownAt(handed, NOW + 2_000)).toEqual(ok("v", NOW - 8_000, true, null, NOW + 2_000));
+    // A newer read that failed keeps a value from being current, however young.
+    const failure = { reason: "node is behind", atMs: NOW };
+    const withFailure = shownAt({ ...handed, readAtMs: NOW - 1_000, staleBecause: failure }, NOW);
+    expect(withFailure).toMatchObject({ current: false, staleBecause: failure });
+    const failed: Read<string> = { ok: false, reason: "x", atMs: NOW };
+    expect(shownAt(failed, NOW + 1)).toBe(failed);
   });
 });
 
@@ -259,7 +331,7 @@ test.describe("the read gate bounds upstream reads whatever the traffic", () => 
     answer("slot 600000000");
     const reads = await Promise.all(views);
     expect(upstreamCalls).toBe(1);
-    for (const read of reads) expect(read).toEqual(ok("slot 600000000", NOW + 300, true));
+    for (const read of reads) expect(read).toEqual(ok("slot 600000000", NOW + 300, true, null, NOW + 300));
     // A view inside the current window reuses it: still one upstream read.
     clock.ms = NOW + 5_000;
     expect(await page(gate, clock, upstream, kept)).toEqual(ok("slot 600000000", NOW + 300, true, null, NOW + 5_000));
@@ -286,7 +358,7 @@ test.describe("the read gate bounds upstream reads whatever the traffic", () => 
       expect(read.ok && read.current).toBe(false);
       expect(read.ok && read.staleBecause?.notMade).toBe(true);
       expect(read.ok && read.staleBecause?.reason).toContain("the last read was rate limited");
-      expect(read.ok && read.askedAtMs - read.readAtMs).toBe(at - (NOW - 20_000));
+      expect(read.ok && read.shownAtMs - read.readAtMs).toBe(at - (NOW - 20_000));
     }
     // After the pause, one more read is allowed.
     clock.ms = NOW + 10_000;
@@ -322,4 +394,14 @@ test.describe("the read gate bounds upstream reads whatever the traffic", () => 
     await page(gate, clock, upstream, kept);
     expect(upstreamCalls).toBe(4);
   });
+});
+
+test("shownTogether stamps every read of a page with the same render time", () => {
+  const a: Read<string> = { ok: true, data: "a", readAtMs: 1, staleBecause: null, current: true, shownAtMs: 1, currentForMs: CURRENT_FOR };
+  const b: Read<number> = { ok: true, data: 2, readAtMs: 1, staleBecause: null, current: true, shownAtMs: 1, currentForMs: CURRENT_FOR };
+  const [x, y] = shownTogether([a, b]);
+  expect(x.ok && y.ok && x.shownAtMs === y.shownAtMs).toBe(true);
+  expect(x.ok && x.shownAtMs).toBeGreaterThan(1);
+  // Read at time 1, shown now: long past the window.
+  expect(x.ok && x.current).toBe(false);
 });

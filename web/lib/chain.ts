@@ -43,7 +43,8 @@ import {
 export type { FailedRead, Read } from "./cached-read";
 
 /**
- * Devnet reads: cached 30 s; current (a claim may be Live from it) for 10 s; at most 3 reads
+ * Devnet reads: cached 30 s; current (a claim may be Live from it) for 10 s, reused by /proof
+ * for 7 s so a reused read is still current when the page renders; at most 3 reads
  * of each kind per 10 s in one server process; 10 s without that read after a rate-limited
  * answer (public devnet answers 429 with Retry-After: 10). Each facts read makes one
  * getProgramAccounts call and each reserves read two, against devnet's 10 per 10 s.
@@ -51,6 +52,7 @@ export type { FailedRead, Read } from "./cached-read";
 export const CHAIN_READS: ReadPolicy = {
   revalidateSeconds: 30,
   currentForMs: 10_000,
+  reuseForMs: 7_000,
   limits: { reads: 3, perMs: 10_000, rateLimitPauseMs: 10_000 },
 };
 
