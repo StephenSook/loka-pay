@@ -4,7 +4,7 @@ import { ArrowUpRightIcon } from "@/components/icons";
 import { OutLink } from "@/components/judge-ui";
 import { ProofPair } from "@/components/proof-pair";
 import { IPHONE_PAIR, IPHONE_RUN2, type RecordedTx } from "@/lib/proof-pair";
-import { REPO_URL, SENTENCE } from "@/lib/site";
+import { BLUETOOTH_STATUS, REPO_URL, SENTENCE } from "@/lib/site";
 import { formatEtClock } from "@/lib/time";
 
 // The status card's times and links are the recorded iPhone runs in docs/FACTS.json
@@ -34,7 +34,10 @@ export default function Home() {
 
       <p className="text-xl leading-relaxed sm:text-2xl">{SENTENCE}</p>
 
-      <p className="text-muted">Sandbox only: test tokens on Solana devnet with no value. No real money moves.</p>
+      <p className="text-muted">
+        Sandbox only: test tokens on Solana devnet with no value. No real money moves.{" "}
+        <span data-testid="bluetooth-status">{BLUETOOTH_STATUS}</span>
+      </p>
 
       <Link
         href="/judge"

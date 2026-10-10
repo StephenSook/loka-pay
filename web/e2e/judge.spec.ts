@@ -5,8 +5,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 // Typed out here on purpose, not imported from the app, so a copy change shows up
 // as a failing test instead of passing by construction.
+// Payments so far went by camera QR, so the sentence says QR code; Bluetooth is said beside it
+// as built and not yet shown.
 const SENTENCE =
-  "When the network or the bank goes down, LOKA Pay lets a phone in airplane mode pay a shop's phone directly, in one hop over Bluetooth or a QR code, and the shop's phone settles the payment on Solana devnet when it finds signal.";
+  "When the network or the bank goes down, LOKA Pay lets a phone in airplane mode pay a shop's phone directly, in one hop by QR code, and the shop's phone settles the payment on Solana devnet when it finds signal.";
+const BLUETOOTH_STATUS = "Bluetooth delivery is built but has not carried a payment yet.";
 const STATUS =
   "Built this weekend at Hacklanta II. Real iPhone payments settled on Solana devnet at 4:23 PM and 5:05 PM ET on Sat Oct 10. Each time, the same serial signed again was refused on chain, at 4:31 PM and 5:09 PM ET.";
 // The status card's four links, in order: the two iPhone runs, each settled then refused.
@@ -57,6 +60,10 @@ test("home: loads with no login, shows the sentence and the sandbox chip", async
   await openWithNoCookies(page, "/");
 
   await expect(page.getByText(SENTENCE, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("bluetooth-status")).toHaveText(BLUETOOTH_STATUS);
+  // The page description carries the same sentence, so a search result says QR code too.
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", SENTENCE);
+  await expect(page.getByRole("main")).not.toContainText("over Bluetooth or a QR code");
   await expect(page.getByTestId("sandbox-chip")).toBeVisible();
   await expect(page.getByTestId("sandbox-chip")).toHaveText("Sandbox");
   await expect(page.getByTestId("home-status-text")).toHaveText(STATUS);

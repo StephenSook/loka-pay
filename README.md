@@ -1,6 +1,6 @@
 # LOKA Pay
 
-**A phone in airplane mode pays a shop's phone directly, in one hop over Bluetooth or a QR code. The shop's phone settles the payment on Solana devnet, Solana's public test network, when it finds signal.**
+**A phone in airplane mode pays a shop's phone directly, in one hop by QR code. The shop's phone settles the payment on Solana devnet, Solana's public test network, when it finds signal.** Bluetooth delivery is built but has not carried a payment yet.
 
 Sandbox tokens only: devnet USDC has no value. Moving real dollars would require a licensed partner. We do not have one yet.
 
