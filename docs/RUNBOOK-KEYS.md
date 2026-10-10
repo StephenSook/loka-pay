@@ -60,4 +60,4 @@ Then run the pin checks above and redeploy the API container.
 
 ## Rotation
 
-A new Ed25519 key invalidates every issued ALLOW, MERCH and CONF for clients that pin the old key. Rotate only if the key leaks: generate on the VPS, update `config/pins.json` in a PR, rebuild iOS and web, redeploy, then take a new encrypted backup.
+A new Ed25519 key invalidates every issued ALLOW, MERCH and CONF for clients that pin the old key. Rotate only if the key leaks: generate on the VPS, update `config/pins.json` in a PR, rebuild and distribute iOS and Android, rebuild web, redeploy, then take a new encrypted backup.
