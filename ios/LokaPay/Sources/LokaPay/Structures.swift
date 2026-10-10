@@ -174,7 +174,9 @@ public struct MerchantCertificate: Equatable, Sendable {
         let n = Int(try r.u16())
         guard (1...64).contains(n), r.remaining == n,
               let name = String(data: try r.read(n), encoding: .utf8),
-              name == name.precomposedStringWithCanonicalMapping
+              // Compare bytes: Swift's String == treats canonically equivalent spellings as
+              // equal, which would accept a decomposed (non-NFC) name.
+              Array(name.utf8) == Array(name.precomposedStringWithCanonicalMapping.utf8)
         else { throw PaymentError.nameLength }
         return MerchantCertificate(merchantKeyHash: keyHash, displayName: name)
     }
