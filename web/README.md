@@ -9,7 +9,7 @@ Pages today:
 | `/` | What LOKA Pay is, the sandbox chip, the build status, the judge door button and links to every page |
 | `/judge` | The judge door: a numbered three-minute itinerary, the program's facts read live from devnet, the TestFlight status and each workflow's result on main, read from GitHub's API by the server |
 | `/live` | The program's transactions, read by the browser straight from devnet (`getSignaturesForAddress`, `getTransaction`, then a `logsSubscribe` WebSocket). It keeps the newest 100 rows, and after a reconnect it reads the history again and retries rows whose details it had given up on. A transaction answer it cannot read marks only its own row "Details unavailable". The socket also carries a `slotSubscribe` heartbeat, so with nothing arriving for 10 s the connection chip says "No update for N s" instead of Live, and Live again when traffic resumes. `/live?kiosk=1` uses large type |
-| `/verify` | Checks a payment receipt in the visitor's browser (PAYMENT-V1 section 4.9): from a `#r=<base64url>` link or pasted text, plus a button that loads the published test receipt |
+| `/verify` | Checks a payment receipt in the visitor's browser (PAYMENT-V1 section 4.9): from a `#r=<base64url>` link or pasted text, plus a button that loads the published test receipt. Under a receipt that verifies, "Play the attacker" lets the visitor edit the note's amount or payee and runs the same check on the edited bytes, in the tab |
 | `/proof` | Claims, each Live only from a current read with its evidence linked and the read's time and age shown (the verifier is Available, a page to run yourself), proof of reserves from the program's accounts at one slot, and "Built this weekend" from GitHub's compare API |
 | `/trust` | The threat model in plain words: what the program checks, what the protocol does not promise, custody, and the upgrade authority read from chain |
 | `/privacy` | The privacy policy. Also the App Store Connect privacy policy URL for the TestFlight build |
@@ -44,6 +44,7 @@ Other pages arrive with the tasks that build them (see `PLAN.md`). Claims follow
   ```
 
 - A receipt whose note carries the vector-only program id is checked against the test deployment and test server key in `protocol/vectors/payment-v1.json` and labelled as a test vector made from public test keys.
+- "Play the attacker" (`components/attacker-panel.tsx`, `lib/attacker.ts`, PLAN.md 3.52): under a verified receipt it shows the note's ten fields decoded from its 141 bytes, each with its byte range. The visitor changes the amount or picks a test merchant from the vectors file as the payee; the page encodes the edited note with the protocol library (`encodeNote`), counts the changed byte positions, and passes the edited receipt to `evaluateBytes`, the function that verified the original. An edit fails with `bad_signature` in the note check, and Undo restores the signed bytes. It makes no request (`e2e/verify-attacker.spec.ts` intercepts every request while editing and expects none). Sending an edited note to devnet is not built.
 
 ## Commands
 
