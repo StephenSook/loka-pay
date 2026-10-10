@@ -98,6 +98,66 @@ struct ConflictPairingTests {
     }
 }
 
+@Suite("one note waits for its allowance at a time (review 2, finding 3)")
+@MainActor
+struct WaitingNoteTests {
+    let payerA = SoftwareP256Signer()
+    let payerB = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    func makeModel() -> ReceiveModel {
+        ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                     ledger: OfflineLedger(url: F.tempURL("ledger.json")), settlementClient: nil,
+                     deployment: F.deployment, serverPublicKey: F.serverKey, now: { F.now })
+    }
+
+    func noteText(_ note: SignedNote) -> String { PaymentTransport.encode(.note, note.wire) }
+
+    @Test("a second note before its allowance is refused by name; the first keeps waiting")
+    func secondNoteRefused() async throws {
+        let model = makeModel()
+        let first = try F.note(payer: payerA, payee: merchant.keyHash, amount: 1_000_000, serial: 0, allowanceId: 77)
+        let second = try F.note(payer: payerB, payee: merchant.keyHash, amount: 700_000, serial: 0, allowanceId: 88)
+        await model.accept(text: noteText(first))
+        #expect(model.waitingNote == first)
+        await model.accept(text: noteText(second))
+        #expect(model.issue?.kind == .otherNoteWaiting)
+        #expect(model.waitingNote == first)
+        // The waiting note itself again is not another note.
+        await model.accept(text: noteText(first))
+        #expect(model.issue?.kind == .allowanceNeeded)
+        #expect(model.waitingNote == first)
+        await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payerA.keyHash, id: 77)))
+        #expect(model.phase == .received)
+        #expect(model.payment?.note == first)
+    }
+
+    @Test("Clear the waiting note lets another note wait")
+    func clearWaitingNote() async throws {
+        let model = makeModel()
+        let first = try F.note(payer: payerA, payee: merchant.keyHash, amount: 1_000_000, serial: 0, allowanceId: 77)
+        let second = try F.note(payer: payerB, payee: merchant.keyHash, amount: 700_000, serial: 0, allowanceId: 88)
+        await model.accept(text: noteText(first))
+        model.clearWaitingNote()
+        #expect(model.waitingNote == nil)
+        #expect(model.issue == nil)
+        #expect(model.readyStep == .waitingForBoth(bluetooth: false))
+        await model.accept(text: noteText(second))
+        #expect(model.issue?.kind == .allowanceNeeded)
+        #expect(model.waitingNote == second)
+    }
+
+    @Test("the refusal is a named next step in plain words")
+    func refusalWords() {
+        let kind = MoneyIssueKind.otherNoteWaiting
+        #expect(kind.name == "other_note_waiting")
+        #expect(kind.isStep)
+        #expect(kind.message.contains("Clear the waiting note"))
+        #expect(!kind.message.contains("_"))
+        #expect(!kind.message.contains("\u{2014}") && !kind.message.contains("\u{2013}"))
+    }
+}
+
 @Suite("wrong-kind messages use the right article (review 2, finding 5)")
 struct WrongKindArticleTests {
     @Test("an allowance, a payment note")

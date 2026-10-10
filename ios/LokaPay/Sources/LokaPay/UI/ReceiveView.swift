@@ -93,6 +93,8 @@ public struct ReceiveView: View {
             case .noteWaitingForAllowance:
                 Label(step.text, systemImage: "hourglass")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                Button("Clear the waiting note") { model.clearWaitingNote() }
+                    .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
             case .allowanceVerified:
                 Label(step.text, systemImage: "checkmark.circle.fill")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)

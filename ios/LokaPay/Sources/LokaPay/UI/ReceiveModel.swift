@@ -221,7 +221,8 @@ public final class ReceiveModel {
     }
 
     /// Scanned or received `L1|P|1|A|...` or `L1|P|1|N|...`. Nothing is dropped silently: an
-    /// allowance is always kept, and a note that arrives during another payment is refused by name.
+    /// allowance is always kept, and a note that arrives during another payment, or while a
+    /// different note waits for its allowance, is refused by name.
     public func accept(text: String) async {
         guard phase != .unavailable, merchant != nil else { return }
         switch ScanParser.parse(text, accepting: [.allowance, .note]) {
@@ -264,6 +265,8 @@ public final class ReceiveModel {
             if let current = payment, current.note.noteId == note.noteId { return }
             guard phase == .ready else { return report(.busy) }
             guard let certificate = allowances[note.note.allowanceId] else {
+                // One note waits at a time. A different one is refused by name, never swapped in.
+                if let waiting = waitingNote, waiting.noteId != note.noteId { return report(.otherNoteWaiting) }
                 waitingNote = note
                 return report(.allowanceNeeded)
             }
@@ -421,6 +424,14 @@ public final class ReceiveModel {
             return report(.settlement(settlement))
         }
         report(.settlement(.transport(String(describing: error))))
+    }
+
+    /// Drops the note waiting for its allowance (the payer left, or sent the wrong note). Only the
+    /// merchant's tap does this; the ledger never saw that note.
+    public func clearWaitingNote() {
+        guard phase == .ready, waitingNote != nil else { return }
+        waitingNote = nil
+        issue = nil
     }
 
     /// Clears the screen for the next payer. The ledger keeps every accepted note.

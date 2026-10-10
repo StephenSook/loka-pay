@@ -34,6 +34,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     case receiptMismatch
     /// A new note arrived while another payment is still on screen.
     case busy
+    /// A different note arrived while one note already waits for its allowance; it was not taken.
+    case otherNoteWaiting
     /// This exact note is already in the merchant's offline ledger.
     case alreadyReceived
     /// No settlement client is connected in this build.
@@ -48,7 +50,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     /// banner instead of a red "Stopped" one.
     public var isStep: Bool {
         switch self {
-        case .allowanceNeeded, .alreadyReceived, .busy, .settlement(.stillPending): return true
+        case .allowanceNeeded, .alreadyReceived, .busy, .otherNoteWaiting, .settlement(.stillPending): return true
         default: return false
         }
     }
@@ -70,6 +72,7 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .signing: return "signing"
         case .receiptMismatch: return "receipt_mismatch"
         case .busy: return "busy"
+        case .otherNoteWaiting: return "other_note_waiting"
         case .alreadyReceived: return "already_received"
         case .serverNotConnected: return "server_not_connected"
         case .settlement(let e): return "settlement_" + Self.settlementName(e)
@@ -101,6 +104,9 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
             return "The phone did not sign (Face ID or passcode did not finish). Nothing was sent. (\(detail))"
         case .receiptMismatch: return "That receipt is for a different payment."
         case .busy: return "Finish the payment on screen first (Next payment), then scan this note."
+        case .otherNoteWaiting:
+            return "Another payment note is already waiting for its allowance (code 1 of 2), so this note was not taken. "
+                + "Scan that allowance, or tap Clear the waiting note, then send this note again."
         case .alreadyReceived: return "This exact note was already received on this phone. It is held in the ledger; nothing new was accepted."
         case .serverNotConnected: return "No settlement server is connected in this build. The note stays held on this phone."
         case .settlement(let e): return Self.settlementMessage(e)
