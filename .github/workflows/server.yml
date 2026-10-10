@@ -65,3 +65,7 @@ jobs:
       - name: Tests (unit, integration, vectors)
         # Must include server/test/replay.test.ts, certs.test.ts, codec.test.ts (T2) and reserves.test.ts (T2).
         run: pnpm run test
+
+      - name: Compiled server loads under plain Node ESM
+        # Vitest and tsx hide CommonJS named-export mistakes that crash the production start.
+        run: pnpm run check:esm
