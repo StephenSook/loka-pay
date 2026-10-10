@@ -29,5 +29,5 @@ export interface CertificateSigner {
 }
 export interface Result { statusCode: 200 | 201 | 202 | 409; body: Record<string, unknown> }
 export interface Job {
-  id: string; plan: RegistrationPlan; attempt: PreparedAttempt | null; result: Result | null;
+  id: string; explicitRetries?: number; plan: RegistrationPlan; attempt: PreparedAttempt | null; result: Result | null;
 }

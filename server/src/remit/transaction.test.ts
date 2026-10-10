@@ -66,3 +66,16 @@ test('only a confirmed allocation collision for the exact PDA permits a retry', 
   rpc.getTransaction.mockResolvedValue({ meta: { err: status.err, logMessages: ['Allocate: another account already in use'] } });
   expect(await chain.observe(attempt, plan)).toBe('failed');
 });
+
+test.each(['payer', 'merchant'] as const)('public %s registration uses published public wallets and never the table-demo pair', kind => {
+  const pins = JSON.parse(readFileSync(new URL('../../../config/pins.json', import.meta.url), 'utf8'));
+  const standIn = (address: string) => ({ publicKey: new PublicKey(address), secretKey: new Uint8Array(64) });
+  const configured = { team: { funder: standIn(pins.wallets.tableDemo), feePayer: standIn(pins.feePayers.demo) },
+    public: { funder: standIn(pins.wallets.publicOnboarding), feePayer: standIn(pins.feePayers.public) } };
+  const live = { programId: new PublicKey(pins.programId).toBytes(), clusterId: 0, mint: new PublicKey(pins.mint).toBytes() };
+  const tx = buildRegistrationTransaction(live, configured, { ...plan, kind, pool: 'public', name: 'Shop' });
+  expect(tx.feePayer?.toBase58()).toBe(pins.feePayers.public);
+  const keys = tx.instructions.flatMap(ix => ix.keys.map(k => k.pubkey.toBase58()));
+  expect(keys).not.toContain(pins.wallets.tableDemo); expect(keys).not.toContain(pins.feePayers.demo);
+  if (kind === 'payer') expect(keys).toContain(pins.wallets.publicOnboarding);
+});

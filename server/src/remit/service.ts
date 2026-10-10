@@ -28,17 +28,38 @@ export class RegistrationService {
       signature: job.attempt?.signature ?? null, retryAfter: 2 } };
   }
   async submit(kind: Kind, input: unknown): Promise<Result> {
+    let retryOf: string | undefined;
+    if (input && typeof input === 'object' && !Array.isArray(input) && 'retryOf' in input) {
+      const { retryOf: requested, ...rest } = input as Record<string, unknown>;
+      if (typeof requested !== 'string' || requested.length < 1 || requested.length > 128) throw new HttpError(400, 'bad_json');
+      retryOf = requested; input = rest;
+    }
     const request = validateRegistration(kind, input);
     const pool = this.options.teamKeys.includes(request.keyHash) ? 'team' : 'public';
     const policy = this.options.policies[pool]; const now = this.now();
     let job: Job = { id: randomUUID(), plan: { ...request, kind, pool, policy, expiry: now + policy.lifetimeSeconds },
       attempt: null, result: null };
-    const token = await this.options.store.claim(job, now);
+    let token: string | null;
+    if (retryOf) {
+      let previous: Job;
+      try { previous = await this.options.store.get(kind, request.keyHash); }
+      catch { throw new HttpError(409, 'retry_not_available'); }
+      try {
+        const prior = await this.priorResult(previous);
+        if (prior) return prior;
+      } catch { return this.pending(previous); }
+      token = await this.options.store.claimFailedRetry(previous, retryOf);
+      if (!token) token = await this.options.store.claimUnsignedRetry(previous, retryOf);
+    } else token = await this.options.store.claim(job, now);
     if (!token) {
-      return this.resolve(await this.options.store.get(kind, request.keyHash), false);
+      const existing = await this.options.store.get(kind, request.keyHash);
+      if (kind === 'payer' && existing.plan.pool === 'public' && existing.plan.expiry < now
+        && existing.result && [200, 201].includes(existing.result.statusCode)) throw new HttpError(409, 'onboarding_already_claimed');
+      return this.resolve(existing, false);
     }
     // A takeover keeps the original name, pool, policy and expiry. Renewal has a new plan and job id.
     job = await this.options.store.get(kind, request.keyHash);
+    const fixedAllowanceId = kind === 'payer' && (job.explicitRetries ?? 0) > 0;
     // Only the fenced winner can save then send. Saved-attempt recovery has a separate lease.
     let reserved = false;
     try {
@@ -56,7 +77,7 @@ export class RegistrationService {
       }
       for (let tries = 0; tries < 8; tries++) {
         const plan = { ...job.plan };
-        if (kind === 'payer') {
+        if (kind === 'payer' && !fixedAllowanceId) {
           plan.allowanceId = randomBytes(8).readBigUInt64BE().toString();
           if (await this.options.chain.taken(plan.allowanceId)) continue;
         }
@@ -66,7 +87,7 @@ export class RegistrationService {
         reserved = true;
         const admitted = await this.options.store.reserve(job.plan.pool, day, quote.cost, job.plan.policy.daily, { id: job.id, token });
         if (!admitted) {
-          if (job.attempt) return this.pending(job);
+          if (job.attempt) return this.failed(job, 'collision_budget_exhausted');
           reserved = false;
           throw new HttpError(429, 'budget_exhausted');
         }
@@ -78,9 +99,10 @@ export class RegistrationService {
         job.plan = plan; job.attempt = attempt;
         await this.options.store.broadcast(job, attempt, a => this.options.chain.send(a));
         const outcome = await this.options.chain.observe(attempt, plan);
-        if (kind === 'payer' && outcome === 'collision') continue;
+        if (kind === 'payer' && outcome === 'collision' && !fixedAllowanceId) continue;
         return this.resolve(job, true, outcome);
       }
+      if (reserved && job.attempt) return this.failed(job, 'collision_retry_exhausted');
       if (reserved) return this.pending(job);
       throw new HttpError(503, 'chain_unavailable');
     } catch (error) {
@@ -90,6 +112,9 @@ export class RegistrationService {
           return current.result ?? this.pending(current);
         } catch { return this.pending(job); }
       }
+      if (await this.options.store.cancelUnsignedRetry(job.id, token)) {
+        return this.resolve(await this.options.store.get(kind, request.keyHash), false);
+      }
       if (!await this.options.store.releaseUnsigned(job.id, token)) {
         return this.resolve(await this.options.store.get(kind, request.keyHash), false);
       }
@@ -97,14 +122,17 @@ export class RegistrationService {
       throw new HttpError(503, 'chain_unavailable');
     }
   }
-  private async recover(job: Job): Promise<Result> {
-    // A prior transaction can supply the result even after a saved replacement was prepared.
+  private async priorResult(job: Job): Promise<Result | null> {
+    if (!job.attempt) return null;
     for (const saved of await this.options.store.history(job)) {
       if (saved.attempt.signature === job.attempt!.signature) continue;
       const prior = await this.options.chain.lookup(saved.attempt, saved.plan);
-      if (prior.outcome === 'ok') return this.complete({ ...job, plan: saved.plan }, saved.attempt.signature, false);
+      if (prior.outcome === 'ok') return this.complete({ ...job, plan: saved.plan }, saved.attempt.signature, false, true);
       if (prior.found && prior.outcome === null) return this.pending(job);
     }
+    return null;
+  }
+  private async recover(job: Job): Promise<Result> {
     const height = await this.options.chain.blockHeight();
     if (!Number.isSafeInteger(height) || height < 0) return this.pending(job);
     // Search history after observing height so an absent cached lookup cannot authorize a replacement.
@@ -133,7 +161,18 @@ export class RegistrationService {
     await this.options.store.broadcast(job, attempt, a => this.options.chain.send(a));
     return this.resolve(job, false);
   }
-  private async complete(job: Job, signature: string, created: boolean): Promise<Result> {
+  private async failed(job: Job, reason: string): Promise<Result> {
+    const signature = job.attempt!.signature;
+    const retryable = (job.explicitRetries ?? 0) < 1;
+    return this.options.store.finish(job, { statusCode: 409, body: {
+      error: 'registration_failed', reason, retryable, retryOf: signature,
+      message: retryable
+        ? 'Registration failed on chain. Restore funding or wait for budget reset, then repost with retryOf set to this signature.'
+        : 'The bounded registration retry is exhausted. Operator review is required.',
+      signature, explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+    } });
+  }
+  private async complete(job: Job, signature: string, created: boolean, priorSuccess = false): Promise<Result> {
     const p = job.plan;
     const explorer = `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
     const body = p.kind === 'payer' ? {
@@ -146,11 +185,24 @@ export class RegistrationService {
       openSignature: signature, explorer,
     } : { merchantKeyHash: p.keyHash, merchant: await this.options.signer.merchant({ merchantKeyHash: P.fromHex(p.keyHash),
       displayName: p.name! }), registerSignature: signature, explorer };
-    const result = await this.options.store.finish(job, { statusCode: 200, body });
+    const result = await this.options.store.finish(job, { statusCode: 200, body }, priorSuccess);
     return { ...result, statusCode: created ? 201 : 200 };
   }
   private async resolve(job: Job, created: boolean, known?: 'ok' | 'collision' | 'failed' | null): Promise<Result> {
-    if (job.result) return job.result;
+    if (job.result?.statusCode === 200 || job.result?.statusCode === 201) return job.result;
+    try {
+      const prior = await this.priorResult(job);
+      if (prior) return prior;
+    } catch { return this.pending(job); }
+    if (job.result) {
+      if (job.result.statusCode === 409 && !('retryable' in job.result.body) && job.attempt) {
+        try {
+          const outcome = await this.options.chain.observe(job.attempt, job.plan);
+          if (outcome === 'failed' || outcome === 'collision') return await this.failed(job, 'chain_failure');
+        } catch { /* Keep the saved failure until its chain outcome can be checked. */ }
+      }
+      return job.result;
+    }
     if (!job.attempt) return this.pending(job);
     try {
       const outcome = known === undefined ? await this.options.chain.observe(job.attempt, job.plan) : known;
@@ -159,10 +211,8 @@ export class RegistrationService {
         const existing = await this.options.chain.existingMerchant(job.plan.publicKey);
         if (existing) return await this.complete(job, existing, false);
       }
-      if (outcome === 'failed') return await this.options.store.finish(job, { statusCode: 409, body: {
-        error: 'registration_failed', message: 'The registration transaction failed on chain.',
-        signature: job.attempt.signature, explorer: `https://explorer.solana.com/tx/${job.attempt.signature}?cluster=devnet`,
-      } });
+      if (outcome === 'failed') return await this.failed(job, 'chain_failure');
+      if (outcome === 'collision') return await this.failed(job, 'allocation_collision');
       if (outcome === null) return await this.recover(job);
       return this.pending(job);
     } catch { return this.pending(job); }

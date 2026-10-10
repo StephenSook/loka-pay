@@ -25,3 +25,27 @@ test('broadcast ownership fences a paused worker before sending', async () => {
   release(); expect(await running).toBe(false);
   expect(oldSend).not.toHaveBeenCalled(); expect(nextSend).toHaveBeenCalledOnce();
 });
+
+test('a delayed ownership SELECT response can overlap identical broadcasts after takeover', async () => {
+  const db = await testDatabase(); closers.push(() => db.close());
+  let now = 100; let release!: () => void; let reached!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>(resolve => { reached = resolve; });
+  let pause = true;
+  const delayed: Database = { async query<T extends Record<string, unknown>>(sql: string, args?: unknown[]) {
+    const answer = await db.query<T>(sql, args);
+    if (pause && sql.startsWith('SELECT token')) { pause = false; reached(); await barrier; }
+    return answer;
+  } };
+  const old = new BroadcastLease(delayed, () => now); await old.migrate();
+  const next = new BroadcastLease(db, () => now);
+  const attempt = { signature: 'same-signature', rawTransaction: 'same-signed-bytes', blockhash: 'hash', lastValidBlockHeight: 100 };
+  const oldSend = vi.fn(async () => {}); const nextSend = vi.fn(async () => {});
+  const running = old.send('job', attempt, oldSend); await ready;
+  now = 130; expect(await next.send('job', attempt, nextSend)).toBe(true);
+  release(); expect(await running).toBe(true);
+  expect(oldSend).toHaveBeenCalledExactlyOnceWith(attempt);
+  expect(nextSend).toHaveBeenCalledExactlyOnceWith(attempt);
+  const saved = await db.query<{ sends: number }>('SELECT sends FROM saved_broadcasts');
+  expect(saved.rows[0].sends).toBe(2);
+});

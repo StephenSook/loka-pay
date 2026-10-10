@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { SandboxChip } from "@/components/chips";
 import { LiveFeed } from "@/components/live-feed";
 import { Mono } from "@/components/judge-ui";
@@ -29,6 +30,15 @@ export default async function LivePage({ searchParams }: PageProps<"/live">) {
         {big ? null : (
           <p className="text-muted">
             Program <Mono>{PINS.programId}</Mono>. Sandbox only: test tokens with no value.
+          </p>
+        )}
+        {big ? null : (
+          <p>
+            Want your phone to ring when a payment settles?{" "}
+            <Link prefetch={false} href="/call" className="font-bold underline">
+              Get a call on /call
+            </Link>
+            .
           </p>
         )}
       </header>

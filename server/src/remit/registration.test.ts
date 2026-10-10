@@ -20,7 +20,15 @@ const policy: Policy = { capUnits: '100', offlineLimitUnits: '50', bondUnits: '5
   daily: { units: '210', funderLamports: '20', feeLamports: '30' } };
 class Chain implements RegistrationChain {
   blockHeight = vi.fn(async () => 0);
-  lookup = vi.fn(async (_attempt: PreparedAttempt, _plan: RegistrationPlan) => ({ found: this.outcome !== null, outcome: this.outcome }));
+  lookup = vi.fn(async (attempt: PreparedAttempt, _plan: RegistrationPlan) => {
+    // A later transaction's outcome cannot change a previously confirmed signature.
+    for (let i = this.observe.mock.calls.length - 1; i >= 0; i--) {
+      if (this.observe.mock.calls[i][0].signature !== attempt.signature || this.observe.mock.results[i].type !== 'return') continue;
+      const outcome = await this.observe.mock.results[i].value;
+      if (outcome !== null) return { found: true, outcome };
+    }
+    return { found: this.outcome !== null, outcome: this.outcome };
+  });
   taken = vi.fn(async (_id: string) => false);
   existingMerchant = vi.fn(async (_publicKey: string): Promise<string | null> => null);
   quote = vi.fn(async (_plan: RegistrationPlan): Promise<Quote> => ({ message: 'unsigned', blockhash: 'test',
@@ -30,7 +38,7 @@ class Chain implements RegistrationChain {
     rawTransaction: 'test-only', blockhash: 'test', lastValidBlockHeight: 100 }));
   send = vi.fn(async (_attempt: PreparedAttempt) => {});
   outcome: 'ok' | 'collision' | 'failed' | null = 'ok';
-  observe = vi.fn(async () => this.outcome);
+  observe = vi.fn(async (_attempt: PreparedAttempt, _plan: RegistrationPlan) => this.outcome);
 }
 async function fixture(teamKeys: string[] = []) {
   const db = await testDatabase(); closers.push(() => db.close());
@@ -226,8 +234,8 @@ test('taken random ids and proven confirmed collisions retry, uncertainty does n
   expect(f.allow).toHaveBeenCalledTimes(1);
 });
 
-test('renewal is allowed only after a completed allowance expires and receives a fresh id', async () => {
-  const f = await fixture(); const publicKey = key();
+test('team renewal is allowed only after a completed allowance expires and receives a fresh id', async () => {
+  const publicKey = key(); const f = await fixture([P.toHex(P.keyHash(P.base64urlDecode(publicKey)))]);
   const first = (await f.post('payers', { publicKey })).json();
   f.setNow(1800003600);
   const atExpiry = await f.post('payers', { publicKey }); expect(atExpiry.statusCode).toBe(200); expect(atExpiry.json()).toEqual(first);
@@ -262,7 +270,7 @@ test('unsigned RPC failure is retryable; failure saving a signed attempt never b
   expect(f.chain.send).not.toHaveBeenCalled(); expect(f.chain.sign).toHaveBeenCalledTimes(1);
 });
 
-test('confirmed non-collision failure stays terminal and never signs a certificate', async () => {
+test('confirmed non-collision failure requires an explicit retry and never signs a certificate', async () => {
   const f = await fixture(); f.chain.outcome = 'failed'; const publicKey = key();
   const first = await f.post('payers', { publicKey }); expect(first.statusCode).toBe(409);
   expect(first.json().error).toBe('registration_failed');
@@ -382,4 +390,259 @@ test('an expired registration recovery lease cannot reserve or save its prepared
   expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
   expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
   expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
+});
+
+test('confirmed failure has one explicit repost and concurrent retries admit only one new attempt', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { retryable: true, reason: 'chain_failure' } });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(409);
+  f.chain.outcome = 'ok';
+  const input = { publicKey, retryOf: failed.body.retryOf };
+  const results = await Promise.all([f.service.submit('payer', input), f.service.submit('payer', input)]);
+  expect(results.some(r => r.statusCode === 201)).toBe(true);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  const saved = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(await f.store.history(saved)).toHaveLength(2);
+});
+
+test('a second confirmed failure reports the retry bound and signs no third transaction', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const first = await f.service.submit('payer', { publicKey });
+  const second = await f.service.submit('payer', { publicKey, retryOf: first.body.retryOf });
+  expect(second).toMatchObject({ statusCode: 409, body: { retryable: false } });
+  expect((await f.service.submit('payer', { publicKey, retryOf: second.body.retryOf })).statusCode).toBe(409);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.allow).not.toHaveBeenCalled();
+});
+
+test.each(['payer', 'merchant'] as const)('a crashed unsigned explicit retry resumes once after its lease for %s', async kind => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const input = { publicKey, ...(kind === 'merchant' ? { name: 'First shop' } : {}) };
+  const failed = await f.service.submit(kind, input);
+  const job = await f.store.get(kind, unsignedJob(kind, publicKey).plan.keyHash);
+  expect(await f.store.claimFailedRetry(job, failed.body.retryOf as string)).not.toBeNull();
+  const retry = { ...input, retryOf: failed.body.retryOf };
+  f.setNow(1800000029);
+  expect((await f.service.submit(kind, retry)).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.setNow(1800000030);
+  expect((await f.service.submit(kind, { ...input, retryOf: 'another-signature' })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.chain.outcome = 'ok';
+  const results = await Promise.all([f.service.submit(kind, retry), f.service.submit(kind, retry)]);
+  expect(results.some(result => result.statusCode === 201)).toBe(true);
+  const saved = await f.store.get(kind, job.plan.keyHash);
+  expect(saved.id).toBe(job.id); expect(saved.plan.expiry).toBe(job.plan.expiry);
+  expect(saved.explicitRetries).toBe(1);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect((await f.service.submit(kind, retry)).statusCode).toBe(200);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2);
+});
+
+test('an unsigned explicit retry takeover fences the old token before reservation and save', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  const job = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  const oldToken = (await f.store.claimFailedRetry(job, failed.body.retryOf as string))!;
+  const unsigned = await f.store.get('payer', job.plan.keyHash);
+  f.setNow(1800000030); f.chain.outcome = 'ok';
+  let release!: (quote: Quote) => void;
+  f.chain.quote.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const winner = f.service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  await vi.waitFor(() => expect(f.chain.quote).toHaveBeenCalledTimes(2));
+  const cost = { units: '105', funderLamports: '10', feeLamports: '10' };
+  expect(await f.store.reserve('public', '2027-01-15', cost, policy.daily, { id: job.id, token: oldToken })).toBe(false);
+  expect(await f.store.saveAttempt(unsigned, unsigned.plan, { signature: 'stale-retry', rawTransaction: 'stale',
+    blockhash: 'test', lastValidBlockHeight: 100 }, oldToken)).toBe(false);
+  expect(await f.store.cancelUnsignedRetry(job.id, oldToken)).toBe(false);
+  release({ message: 'unsigned', blockhash: 'test', lastValidBlockHeight: 100, cost });
+  expect((await winner).statusCode).toBe(201);
+  expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect(f.chain.send.mock.calls.every(([attempt]) => attempt.signature !== 'stale-retry')).toBe(true);
+  expect((await f.store.get('payer', job.plan.keyHash)).explicitRetries).toBe(1);
+});
+
+test('confirmed collision with denied budget returns a repost signal and can recover after reset', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'collision';
+  f.options.policies.public = { ...policy, daily: { ...policy.daily, units: '105' } };
+  const service = new RegistrationService(f.options);
+  const failed = await service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { retryable: true, reason: 'collision_budget_exhausted' } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.allow).not.toHaveBeenCalled();
+  f.setNow(1800086400); f.chain.outcome = 'ok';
+  expect((await service.submit('payer', { publicKey, retryOf: failed.body.retryOf })).statusCode).toBe(201);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2);
+  const saved = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(saved.plan.expiry).toBeGreaterThan(f.options.now());
+});
+
+test('an uncertain registration send cannot use retryOf to create another signature', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  const pending = await f.service.submit('payer', { publicKey });
+  expect((await f.service.submit('payer', { publicKey, retryOf: pending.body.signature })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('public onboarding refuses a second funded claim after expiry and never spends team budget', async () => {
+  const f = await fixture(); const publicKey = key();
+  const first = await f.post('payers', { publicKey }); expect(first.statusCode).toBe(201);
+  expect((await f.post('payers', { publicKey })).statusCode).toBe(200);
+  f.setNow(1800003601);
+  const second = await f.post('payers', { publicKey });
+  expect(second.statusCode).toBe(409); expect(second.json().error).toBe('onboarding_already_claimed');
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.spent('team', '2027-01-15')).toBeNull();
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
+});
+
+test('the public pool cap holds under simultaneous onboarding and leaves team funds untouched', async () => {
+  const f = await fixture();
+  const results = await Promise.all(Array.from({ length: 5 }, () => f.post('payers', { publicKey: key() })));
+  expect(results.filter(r => r.statusCode === 201)).toHaveLength(2);
+  expect(results.filter(r => r.statusCode === 429)).toHaveLength(3);
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '210', funderLamports: '20', feeLamports: '20' });
+  expect(await f.store.spent('team', '2027-01-15')).toBeNull();
+  expect(f.chain.sign.mock.calls.every(([, plan]) => plan.pool === 'public')).toBe(true);
+});
+
+test('unsigned retry budget denial restores the repost signal without consuming its retry slot', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  f.options.policies.public = { ...policy, daily: { ...policy.daily, units: '105' } };
+  const service = new RegistrationService(f.options);
+  const failed = await service.submit('payer', { publicKey });
+  const denied = await service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect(denied).toMatchObject({ statusCode: 409, body: { retryable: true, retryOf: failed.body.retryOf } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.setNow(1800086400); f.chain.outcome = 'ok';
+  expect((await service.submit('payer', { publicKey, retryOf: failed.body.retryOf })).statusCode).toBe(201);
+});
+
+test('a saved legacy failure gains a repost signal only after confirming its chain failure', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = 'failed';
+  const failed = await f.service.submit('payer', { publicKey });
+  await f.db.query('UPDATE registration_jobs SET result=$1::jsonb',
+    [JSON.stringify({ statusCode: 409, body: { error: 'registration_failed', signature: failed.body.signature } })]);
+  f.chain.outcome = null;
+  expect((await f.service.submit('payer', { publicKey })).body.retryable).toBeUndefined();
+  f.chain.outcome = 'failed';
+  const upgraded = await f.service.submit('payer', { publicKey });
+  expect(upgraded).toMatchObject({ statusCode: 409, body: { retryable: true, retryOf: failed.body.signature } });
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  f.chain.outcome = 'ok';
+  expect((await f.service.submit('payer', { publicKey, retryOf: upgraded.body.retryOf })).statusCode).toBe(201);
+});
+
+async function savedReplacement(f: Awaited<ReturnType<typeof fixture>>, publicKey: string) {
+  f.chain.outcome = null;
+  const first = await f.service.submit('payer', { publicKey });
+  const original = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  f.setNow(1800000030); const token = (await f.store.claimRecovery(original))!;
+  const replacement = { ...original.attempt!, signature: 'replacement-collision', blockhash: 'fresh', lastValidBlockHeight: 200 };
+  expect(await f.store.saveRecovery(original, replacement, token)).toBe(true);
+  return { first, original, replacement };
+}
+
+test('retryOf keeps X when original A becomes visible during preparation after replacement B collides', async () => {
+  const f = await fixture(); const publicKey = key();
+  f.options.policies.public = { ...policy, daily: { units: '315', funderLamports: '30', feeLamports: '30' } };
+  const service = new RegistrationService(f.options);
+  const funded = new Set<string>(); const plans = new Map<string, RegistrationPlan>();
+  const outcomes = new Map<string, 'ok' | 'collision'>(); let originalVisible = false;
+  f.chain.sign.mockImplementation(async (quote, plan) => {
+    const attempt = { signature: `attempt-${f.chain.sign.mock.calls.length}`, rawTransaction: 'test-only',
+      blockhash: quote.blockhash, lastValidBlockHeight: quote.lastValidBlockHeight };
+    plans.set(attempt.signature, { ...plan }); return attempt;
+  });
+  f.chain.send.mockImplementation(async attempt => {
+    const id = plans.get(attempt.signature)!.allowanceId!;
+    outcomes.set(attempt.signature, funded.has(id) ? 'collision' : 'ok');
+    funded.add(id);
+  });
+  f.chain.observe.mockImplementation(async attempt => attempt.signature === 'attempt-1' && !originalVisible
+    ? null : outcomes.get(attempt.signature)!);
+  f.chain.lookup.mockImplementation(async attempt => attempt.signature === 'attempt-1' && !originalVisible
+    ? { found: false, outcome: null } : { found: true, outcome: outcomes.get(attempt.signature)! });
+  const first = await service.submit('payer', { publicKey }); expect(first.statusCode).toBe(202);
+  const original = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  expect(outcomes.get('attempt-1')).toBe('ok'); expect(originalVisible).toBe(false);
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.quote.mockResolvedValueOnce({ message: 'replacement', blockhash: 'fresh', lastValidBlockHeight: 200,
+    cost: { units: '105', funderLamports: '10', feeLamports: '10' } });
+  const failed = await service.submit('payer', { publicKey });
+  expect(failed).toMatchObject({ statusCode: 409, body: { reason: 'allocation_collision', retryOf: 'attempt-2' } });
+  expect(plans.get('attempt-2')!.allowanceId).toBe(original.plan.allowanceId);
+  f.chain.quote.mockImplementationOnce(async () => {
+    originalVisible = true;
+    return { message: 'explicit-retry', blockhash: 'retry', lastValidBlockHeight: 300,
+      cost: { units: '105', funderLamports: '10', feeLamports: '10' } };
+  });
+  const result = await service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect([...funded]).toEqual([original.plan.allowanceId]);
+  expect(plans.get('attempt-3')!.allowanceId).toBe(original.plan.allowanceId);
+  expect(outcomes.get('attempt-3')).toBe('collision');
+  expect(f.chain.sign).toHaveBeenCalledTimes(3); expect(f.chain.send).toHaveBeenCalledTimes(3);
+  expect(result).toMatchObject({ statusCode: 200, body: { allowanceId: original.plan.allowanceId, openSignature: 'attempt-1' } });
+  expect((await f.store.get('payer', original.plan.keyHash)).plan).toEqual(original.plan);
+});
+
+test.each(['collision', 'failed'] as const)('original registration success wins over replacement %s without another attempt', async terminal => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = terminal;
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true, outcome: attempt.signature === original.attempt!.signature ? 'ok' : terminal }));
+  const result = await f.service.submit('payer', { publicKey });
+  expect(result).toMatchObject({ statusCode: 200, body: { openSignature: original.attempt!.signature, allowanceId: original.plan.allowanceId } });
+  const fields = P.verifyAllowWire(P.base64urlDecode(result.body.allowance as string), deployment, ed25519.getPublicKey(f.seed));
+  expect(fields.allowanceId.toString()).toBe(original.plan.allowanceId);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a found original without final metadata keeps a replacement collision pending', async () => {
+  const f = await fixture(); const publicKey = key(); await savedReplacement(f, publicKey);
+  f.chain.outcome = 'collision'; f.chain.lookup.mockResolvedValue({ found: true, outcome: null });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
+  expect(f.allow).not.toHaveBeenCalled(); expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])('late original success overrides a cached replacement failure before repost (retryOf=%s)', async repost => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  const failed = await f.service.submit('payer', { publicKey }); expect(failed.statusCode).toBe(409);
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true, outcome: attempt.signature === original.attempt!.signature ? 'ok' : 'failed' }));
+  const input = { publicKey, ...(repost ? { retryOf: failed.body.retryOf } : {}) };
+  expect(await f.service.submit('payer', input)).toMatchObject({ statusCode: 200, body: { openSignature: original.attempt!.signature } });
+  expect((await f.store.get('payer', original.plan.keyHash)).explicitRetries).toBe(0);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])('late original success persists its historical expiry so team renewal works (retryOf=%s)', async repost => {
+  const publicKey = key(); const hash = unsignedJob('payer', publicKey).plan.keyHash;
+  const f = await fixture([hash]); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  const failed = await f.service.submit('payer', { publicKey }); expect(failed.statusCode).toBe(409);
+  f.setNow(1800086400);
+  const retryFailed = await f.service.submit('payer', { publicKey, retryOf: failed.body.retryOf });
+  expect(retryFailed.statusCode).toBe(409);
+  const retried = await f.store.get('payer', hash);
+  expect(retried.plan.expiry).toBeGreaterThan(f.options.now());
+  f.chain.lookup.mockImplementation(async attempt => ({ found: true,
+    outcome: attempt.signature === original.attempt!.signature ? 'ok' : 'failed' }));
+  const recovered = await f.service.submit('payer', { publicKey, ...(repost ? { retryOf: retryFailed.body.retryOf } : {}) });
+  expect(recovered).toMatchObject({ statusCode: 200, body: { expiry: original.plan.expiry, openSignature: original.attempt!.signature } });
+  const saved = await f.store.get('payer', hash);
+  expect(saved.plan).toEqual(original.plan); expect(saved.result?.body.expiry).toBe(saved.plan.expiry);
+  f.chain.outcome = 'ok';
+  const renewed = await f.service.submit('payer', { publicKey });
+  expect(renewed.statusCode).toBe(201); expect(renewed.body.expiry).toBeGreaterThan(f.options.now());
+  expect(f.chain.sign).toHaveBeenCalledTimes(3);
+});
+
+test('a stale historical success cannot replace the plan after the saved signature changes', async () => {
+  const f = await fixture(); const publicKey = key(); const { original } = await savedReplacement(f, publicKey);
+  f.chain.outcome = 'failed'; f.chain.lookup.mockResolvedValue({ found: false, outcome: null });
+  await f.service.submit('payer', { publicKey });
+  const current = await f.store.get('payer', original.plan.keyHash);
+  const result = await f.store.finish(original, { statusCode: 200, body: { expiry: original.plan.expiry } }, true);
+  expect(result.statusCode).toBe(409);
+  const saved = await f.store.get('payer', original.plan.keyHash);
+  expect(saved.plan).toEqual(current.plan); expect(saved.result).toEqual(current.result);
 });

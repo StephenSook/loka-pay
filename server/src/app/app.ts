@@ -95,7 +95,7 @@ export async function buildApp(options: ShellOptions): Promise<FastifyInstance> 
   // Notes are fee-paid by the demo fee payer (docs/RUNBOOK-KEYS.md). installSettlement types its
   // database as pg.Pool but only calls query(), which PGlite in tests also provides.
   await installSettlement({ app, database: options.database as unknown as Pool, connection: options.connection, deployment,
-    feePayer: options.wallets.team.feePayer, feeBudget: { dailyLamports: options.noteFeeDailyLamports }, signConfirmation: fields => P.signConfWire(fields, seed) });
+    feePayer: options.wallets.team.feePayer, feeBudget: { dailyLamports: options.noteFeeDailyLamports }, pins: options.pins, confirmationSeed: seed });
   // Task 2.10: reads the settlement journal written above.
   await installEvents({ app, database: options.database, deployment, canaryKeyHashes: options.canaryKeyHashes,
     intervalMs: options.eventIntervalMs });
