@@ -14,11 +14,11 @@ const policy: Policy = { capUnits: '1000000', offlineLimitUnits: '1000000', bond
 async function fixture() {
   const db = await testDatabase(); close.push(() => db.close());
   const store = new RemittanceStore(db, 'fixture', () => 1800000000); await store.migrate();
-  const chain = { recipient: vi.fn(async () => ({ publicKey })), taken: vi.fn(async () => false),
+  const chain = { recipient: vi.fn(async () => ({ publicKey })), taken: vi.fn(async (_id: string) => false),
     quote: vi.fn(async (plan: RegistrationPlan) => ({ message: 'unsigned', blockhash: 'fixture', lastValidBlockHeight: 100,
       cost: { units: plan.policy.capUnits, funderLamports: '1', feeLamports: '1' } })),
     sign: vi.fn(async () => ({ signature: 'fixture-signature', rawTransaction: 'test', blockhash: 'fixture', lastValidBlockHeight: 100 })),
-    send: vi.fn(async () => {}), observe: vi.fn(async (): Promise<'ok' | null> => 'ok') };
+    send: vi.fn(async () => {}), observe: vi.fn(async (): Promise<'ok' | 'failed' | null> => 'ok') };
   const signer = { allow: vi.fn(async () => 'certificate'), merchant: vi.fn(async () => 'unused') };
   const service = new RemittanceService({ store, chain: chain as unknown as RegistrationChain & { recipient(id: string): Promise<{ publicKey: string }> }, signer, policy, now: () => 1800000000 });
   return { service, chain, store, db };
@@ -92,4 +92,165 @@ test('empty or unsorted earmarks fail before any funding', async () => {
   expect(() => new RemittanceService(options)).toThrow();
   expect(() => new RemittanceService({ ...options, policy: { ...policy, earmarks: ['ff'.repeat(32), '00'.repeat(32)] } })).toThrow();
   expect(f.chain.sign).not.toHaveBeenCalled();
+});
+
+test('unsigned recovery refreshes an expired plan durably and fences the old worker', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  const old = (await f.store.claim('1', plan))!;
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  f.chain.quote.mockImplementation(async recovered => {
+    expect(recovered.expiry).toBe(1800003600);
+    expect((await f.store.get('1')).plan).toEqual(recovered);
+    expect(recovered.allowanceId).toBe('123'); expect(recovered.policy.capUnits).toBe('7');
+    expect(await f.store.save(await f.store.get('1'), old, { signature: 'old', rawTransaction: 'test', blockhash: 'fixture', lastValidBlockHeight: 100 })).toBe(false);
+    return { message: 'unsigned', blockhash: 'fixture', lastValidBlockHeight: 100,
+      cost: { units: recovered.policy.capUnits, funderLamports: '1', feeLamports: '1' } };
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue');
+  expect(result.statusCode).toBe(201); expect(result.body.allowanceId).toBe('123');
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.claim('1', plan)).toBeNull();
+});
+
+test('finish returns its own update result even if renewal wins before the query returns', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1799999999, policy };
+  const token = (await f.store.claim('1', plan))!, row = await f.store.get('1');
+  row.attempt = await f.chain.sign(); expect(await f.store.save(row, token, row.attempt)).toBe(true);
+  const result = { statusCode: 201 as const, body: { allowanceId: '123', signature: row.attempt.signature } };
+  const query = f.db.query.bind(f.db);
+  vi.spyOn(f.db, 'query').mockImplementation(async (sql, params) => {
+    const written = await query(sql, params);
+    if (sql.startsWith('UPDATE remittance_jobs SET result=') && written.rows.length) {
+      expect(await f.store.claim('1', { ...plan, allowanceId: '456', expiry: 1800003600 })).not.toBeNull();
+    }
+    return written;
+  });
+  expect(await f.store.finish(row, result)).toEqual(result);
+  expect((await f.store.get('1')).plan.allowanceId).toBe('456');
+  expect((await f.store.get('1')).result).toBeNull();
+  expect(await f.store.finish(row, result)).toBeNull();
+});
+
+test('a completion that loses its signature guard returns pending for its own attempt', async () => {
+  const f = await fixture();
+  f.chain.observe.mockImplementation(async () => {
+    await f.db.query(`UPDATE remittance_jobs SET attempt=jsonb_set(attempt,'{signature}','"next-signature"'::jsonb),
+      result='{"statusCode":201,"body":{"allowanceId":"next"}}'::jsonb`);
+    return 'ok';
+  });
+  const result = await f.service.submit({ recipientAllowanceId: '1', amountUnits: '1' }, 'venue');
+  expect(result).toEqual({ statusCode: 202, body: { status: 'pending', recipientAllowanceId: '1', signature: 'fixture-signature', retryAfter: 2 } });
+});
+
+test('saved success and pending polls skip recipient and candidate-id RPC calls', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  const first = await f.service.submit(input, 'venue');
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect(await f.service.submit(input, 'venue')).toEqual({ ...first, statusCode: 200 });
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  await f.db.query('UPDATE remittance_jobs SET result=NULL'); f.chain.observe.mockResolvedValue(null);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(202);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(1); expect(f.chain.taken).toHaveBeenCalledTimes(1);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('unsigned polling avoids RPC allocation and expired recovery keeps its first id and terms', async () => {
+  const f = await fixture();
+  const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey, keyHash: P.toHex(P.keyHash(P.base64urlDecode(publicKey))),
+    allowanceId: '123', expiry: 1800003600, policy: { ...policy, capUnits: '7', offlineLimitUnits: '7' } };
+  await f.store.claim('1', plan);
+  f.chain.recipient.mockRejectedValue(new Error('RPC unavailable')); f.chain.taken.mockRejectedValue(new Error('RPC unavailable'));
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(202);
+  expect(f.chain.quote).not.toHaveBeenCalled();
+  await f.db.query('UPDATE remittance_jobs SET lease_expires_at=0');
+  expect((await f.service.submit({ recipientAllowanceId: '1', amountUnits: '99' }, 'venue')).statusCode).toBe(201);
+  expect(f.chain.quote.mock.calls[0][0]).toEqual(plan);
+  expect(f.chain.recipient).not.toHaveBeenCalled(); expect(f.chain.taken).not.toHaveBeenCalled();
+});
+
+test('only a successful expired job allocates a renewal id', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '1' };
+  await f.service.submit(input, 'venue');
+  await f.db.query(`UPDATE remittance_jobs SET plan=jsonb_set(plan,'{expiry}','1799999999'::jsonb)`);
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(201);
+  expect(f.chain.recipient).toHaveBeenCalledTimes(2); expect(f.chain.taken).toHaveBeenCalledTimes(2);
+  expect(f.chain.quote.mock.calls[1][0].allowanceId).not.toBe(f.chain.quote.mock.calls[0][0].allowanceId);
+});
+
+async function failedRemittance() {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '7' };
+  const failed = { signature: 'failed-signature', rawTransaction: 'failed', blockhash: 'fixture', lastValidBlockHeight: 100 };
+  f.chain.sign.mockResolvedValueOnce(failed);
+  f.chain.observe.mockResolvedValueOnce('failed');
+  expect((await f.service.submit(input, 'venue')).statusCode).toBe(409);
+  const row = await f.store.get('1');
+  const { rows } = await f.db.query('SELECT claim_token FROM remittance_jobs WHERE recipient=$1', ['1']);
+  return { ...f, input, failed, row, token: rows[0].claim_token as string };
+}
+
+test('confirmed 409 reopens with a fresh plan, id, token and attempt without refunding budget', async () => {
+  const f = await failedRemittance();
+  f.chain.taken.mockImplementation(async id => id === f.row.plan.allowanceId);
+  f.chain.quote.mockImplementation(async plan => {
+    const current = await f.store.get('1');
+    expect(current.plan).toEqual(plan); expect(current.attempt).toBeNull(); expect(current.result).toBeNull();
+    expect(await f.store.save(current, f.token, f.failed)).toBe(false);
+    expect(await f.store.reserve('1', f.token, { units: '1', funderLamports: '1', feeLamports: '1' }, policy.daily)).toBe(false);
+    return { message: 'unsigned', blockhash: 'fixture', lastValidBlockHeight: 100,
+      cost: { units: plan.policy.capUnits, funderLamports: '1', feeLamports: '1' } };
+  });
+  const result = await f.service.submit({ ...f.input, amountUnits: '9' }, 'venue');
+  expect(result.statusCode).toBe(201); expect(result.body.signature).toBe('fixture-signature');
+  const next = await f.store.get('1');
+  expect(next.plan.allowanceId).not.toBe(f.row.plan.allowanceId); expect(next.plan.policy.capUnits).toBe('9');
+  expect(next.attempt!.signature).not.toBe(f.failed.signature);
+  const { rows: claims } = await f.db.query('SELECT claim_token FROM remittance_jobs WHERE recipient=$1', ['1']);
+  expect(claims[0].claim_token).not.toBe(f.token);
+  const { rows: budgets } = await f.db.query('SELECT units,funder,fee FROM remittance_budgets');
+  expect(String(budgets[0].units)).toBe('16'); expect(String(budgets[0].funder)).toBe('2'); expect(String(budgets[0].fee)).toBe('2');
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('concurrent reposts of a confirmed 409 reopen exactly once', async () => {
+  const f = await failedRemittance();
+  // Both uploads see the failed row before either reaches the atomic claim.
+  const find = f.store.find.bind(f.store);
+  let arrivals = 0, release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  vi.spyOn(f.store, 'find').mockImplementation(async recipient => {
+    const row = await find(recipient); if (++arrivals === 2) release(); await ready; return row;
+  });
+  const results = await Promise.all([f.service.submit(f.input, 'venue'), f.service.submit(f.input, 'venue')]);
+  expect(results.every(result => [200, 201, 202].includes(result.statusCode))).toBe(true);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  const row = await f.store.get('1'); expect(row.plan.allowanceId).not.toBe(f.row.plan.allowanceId);
+  expect(row.attempt!.signature).toBe('fixture-signature');
+  const { rows } = await f.db.query('SELECT units FROM remittance_budgets'); expect(String(rows[0].units)).toBe('14');
+});
+
+test('an unexpired success is neither claimable nor reopened by a later send', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '7' };
+  const first = await f.service.submit(input, 'venue'), row = await f.store.get('1');
+  expect((await f.store.find('1'))!.claimable).toBe(false);
+  expect(await f.store.claim('1', { ...row.plan, allowanceId: '456' })).toBeNull();
+  expect(await f.service.submit({ ...input, amountUnits: '9' }, 'venue')).toEqual({ ...first, statusCode: 200 });
+  expect((await f.store.get('1')).plan).toEqual(row.plan);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('a saved pending attempt is not reopened even after its plan and lease expire', async () => {
+  const f = await fixture(), input = { recipientAllowanceId: '1', amountUnits: '7' };
+  f.chain.observe.mockResolvedValue(null);
+  const first = await f.service.submit(input, 'venue');
+  await f.db.query(`UPDATE remittance_jobs SET lease_expires_at=0,plan=jsonb_set(plan,'{expiry}','1799999999'::jsonb)`);
+  const row = await f.store.get('1');
+  expect((await f.store.find('1'))!.claimable).toBe(false);
+  expect(await f.store.claim('1', { ...row.plan, allowanceId: '456' })).toBeNull();
+  expect(await f.service.submit({ ...input, amountUnits: '9' }, 'venue')).toEqual(first);
+  expect((await f.store.get('1')).attempt).toEqual(row.attempt);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
 });

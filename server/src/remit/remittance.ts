@@ -40,15 +40,28 @@ export class RemittanceStore {
     const { rows } = await this.db.query(`INSERT INTO remittance_jobs(namespace,recipient,plan,claim_token,lease_expires_at)
       VALUES($1,$2,$3::jsonb,$4,COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30)
       ON CONFLICT(namespace,recipient) DO UPDATE SET claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at,
-        plan=CASE WHEN remittance_jobs.result IS NULL THEN remittance_jobs.plan ELSE EXCLUDED.plan END,attempt=NULL,result=NULL
+        plan=CASE WHEN remittance_jobs.result IS NOT NULL THEN EXCLUDED.plan
+          WHEN (remittance_jobs.plan->>'expiry')::bigint<=EXCLUDED.lease_expires_at-30
+          THEN jsonb_set(remittance_jobs.plan,'{expiry}',to_jsonb(floor(EXCLUDED.lease_expires_at-30)::bigint
+            +(remittance_jobs.plan->'policy'->>'lifetimeSeconds')::bigint))
+          ELSE remittance_jobs.plan END,attempt=NULL,result=NULL
       WHERE (remittance_jobs.attempt IS NULL AND remittance_jobs.result IS NULL AND remittance_jobs.lease_expires_at<=EXCLUDED.lease_expires_at-30)
         OR (remittance_jobs.result->>'statusCode' IN ('200','201') AND (remittance_jobs.plan->>'expiry')::bigint<EXCLUDED.lease_expires_at-30)
+        OR remittance_jobs.result->>'statusCode'='409'
       RETURNING recipient`, [this.namespace, recipient, JSON.stringify(plan), token, this.clock?.() ?? null]);
     return rows.length ? token : null;
   }
   async get(recipient: string): Promise<FundingRow> {
     const { rows } = await this.db.query('SELECT recipient,plan,attempt,result FROM remittance_jobs WHERE namespace=$1 AND recipient=$2', [this.namespace, recipient]);
     if (!rows[0]) throw new Error('Missing remittance'); return rows[0] as unknown as FundingRow;
+  }
+  async find(recipient: string): Promise<(FundingRow & { claimable: boolean }) | null> {
+    const { rows } = await this.db.query(`SELECT recipient,plan,attempt,result,
+      ((attempt IS NULL AND result IS NULL AND lease_expires_at<=COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
+        OR (result->>'statusCode' IN ('200','201') AND (plan->>'expiry')::bigint<COALESCE($3::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
+        OR result->>'statusCode'='409') IS TRUE AS claimable
+      FROM remittance_jobs WHERE namespace=$1 AND recipient=$2`, [this.namespace, recipient, this.clock?.() ?? null]);
+    return (rows[0] as unknown as FundingRow & { claimable: boolean }) ?? null;
   }
   async reserve(recipient: string, token: string, cost: Cost, limits: Cost): Promise<boolean> {
     for (const value of [...Object.values(cost), ...Object.values(limits)]) if (!/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > (1n << 64n) - 1n) throw new Error('Invalid remittance budget');
@@ -78,10 +91,11 @@ export class RemittanceStore {
     await this.db.query(`DELETE FROM remittance_jobs WHERE namespace=$1 AND recipient=$2 AND claim_token=$3 AND attempt IS NULL
       AND lease_expires_at>COALESCE($4::double precision,EXTRACT(EPOCH FROM clock_timestamp()))`, [this.namespace, recipient, token, this.clock?.() ?? null]);
   }
-  async finish(row: FundingRow, result: Result): Promise<Result> {
-    await this.db.query(`UPDATE remittance_jobs SET result=$4::jsonb WHERE namespace=$1 AND recipient=$2
-      AND attempt->>'signature'=$3 AND result IS NULL`, [this.namespace, row.recipient, row.attempt!.signature, JSON.stringify(result)]);
-    return (await this.get(row.recipient)).result!;
+  async finish(row: FundingRow, result: Result): Promise<Result | null> {
+    const { rows } = await this.db.query(`UPDATE remittance_jobs SET result=$4::jsonb WHERE namespace=$1 AND recipient=$2
+      AND attempt->>'signature'=$3 AND result IS NULL RETURNING result`,
+    [this.namespace, row.recipient, row.attempt!.signature, JSON.stringify(result)]);
+    return (rows[0]?.result as Result | undefined) ?? null;
   }
 }
 export class RemittanceService {
@@ -102,13 +116,13 @@ export class RemittanceService {
     try {
       const outcome = await this.options.chain.observe(row.attempt, row.plan);
       if (outcome === null) return this.pending(row);
-      if (outcome !== 'ok') return this.options.store.finish(row, { statusCode: 409, body: { error: 'remittance_failed', signature: row.attempt.signature } });
+      if (outcome !== 'ok') return await this.options.store.finish(row, { statusCode: 409, body: { error: 'remittance_failed', signature: row.attempt.signature } }) ?? this.pending(row);
       const allow = await this.options.signer.allow({ allowanceId: BigInt(row.plan.allowanceId!), payerKeyHash: P.fromHex(row.plan.keyHash),
         cap: BigInt(row.plan.policy.capUnits), offlineLimit: BigInt(row.plan.policy.offlineLimitUnits), expiry: BigInt(row.plan.expiry),
         earmarkList: P.encodeEarmarks(row.plan.policy.earmarks.map(P.fromHex)), bond: 0n });
-      return this.options.store.finish(row, { statusCode: 201, body: { recipientAllowanceId: row.recipient, allowanceId: row.plan.allowanceId,
+      return await this.options.store.finish(row, { statusCode: 201, body: { recipientAllowanceId: row.recipient, allowanceId: row.plan.allowanceId,
         allow, earmarks: row.plan.policy.earmarks, signature: row.attempt.signature,
-        explorer: `https://explorer.solana.com/tx/${row.attempt.signature}?cluster=devnet`, sandbox: true } });
+        explorer: `https://explorer.solana.com/tx/${row.attempt.signature}?cluster=devnet`, sandbox: true } }) ?? this.pending(row);
     } catch { return this.pending(row); }
   }
   async submit(input: unknown, memoryOnlyNetworkIdentifier: string): Promise<Result> {
@@ -118,14 +132,26 @@ export class RemittanceService {
       || !/^(0|[1-9][0-9]*)$/.test(body.recipientAllowanceId) || BigInt(body.recipientAllowanceId) >= 1n << 64n) throw new HttpError(400, 'bad_json');
     if (typeof body.amountUnits !== 'string' || !/^[1-9][0-9]*$/.test(body.amountUnits)
       || BigInt(body.amountUnits) > BigInt(this.options.policy.capUnits)) throw new HttpError(422, 'amount_cap');
-    const identity = await this.options.chain.recipient(body.recipientAllowanceId);
-    const publicKey = P.base64urlDecode(identity.publicKey), now = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
-    const policy = { ...this.options.policy, capUnits: body.amountUnits, offlineLimitUnits: body.amountUnits };
-    let allowanceId: string | undefined;
-    for (let n = 0; n < 8; n++) { const id = randomBytes(8).readBigUInt64BE().toString(); if (!await this.options.chain.taken(id)) { allowanceId = id; break; } }
-    if (!allowanceId) throw new HttpError(503, 'chain_unavailable');
-    const plan: RegistrationPlan = { kind: 'payer', pool: 'public', publicKey: identity.publicKey, keyHash: P.toHex(P.keyHash(publicKey)),
-      allowanceId, policy, expiry: now + policy.lifetimeSeconds };
+    const existing = await this.options.store.find(body.recipientAllowanceId);
+    if (existing && !existing.claimable) return this.resolve(existing);
+    let plan: RegistrationPlan;
+    if (existing && !existing.attempt && !existing.result) {
+      // An unsigned recovery retains the first id, identity and terms. claim refreshes expired time.
+      plan = existing.plan;
+    } else {
+      const identity = await this.options.chain.recipient(body.recipientAllowanceId);
+      const publicKey = P.base64urlDecode(identity.publicKey), now = Math.floor((this.options.now ?? (() => Date.now() / 1000))());
+      const policy = { ...this.options.policy, capUnits: body.amountUnits, offlineLimitUnits: body.amountUnits };
+      let allowanceId: string | undefined;
+      for (let n = 0; n < 8; n++) {
+        const id = randomBytes(8).readBigUInt64BE().toString();
+        if (existing?.result?.statusCode === 409 && id === existing.plan.allowanceId) continue;
+        if (!await this.options.chain.taken(id)) { allowanceId = id; break; }
+      }
+      if (!allowanceId) throw new HttpError(503, 'chain_unavailable');
+      plan = { kind: 'payer', pool: 'public', publicKey: identity.publicKey, keyHash: P.toHex(P.keyHash(publicKey)),
+        allowanceId, policy, expiry: now + policy.lifetimeSeconds };
+    }
     const token = await this.options.store.claim(body.recipientAllowanceId, plan);
     const row = await this.options.store.get(body.recipientAllowanceId);
     if (!token) return this.resolve(row);
