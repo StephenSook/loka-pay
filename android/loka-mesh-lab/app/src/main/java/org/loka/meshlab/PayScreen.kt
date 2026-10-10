@@ -72,7 +72,7 @@ internal fun PayScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val config = remember { PayConfig.status() }
-    val serials = remember { SerialReservations(File(context.filesDir, "loka-pay/serials.txt")) }
+    val serials = remember { SerialReservations(File(context.filesDir, "loka-pay/serials.txt"), AndroidDirectorySync) }
 
     var signer by remember { mutableStateOf<KeystoreP256Signer?>(null) }
     var keyError by remember { mutableStateOf<String?>(null) }
@@ -92,7 +92,11 @@ internal fun PayScreen() {
         keyError = null
         signer = null
         try {
-            signer = withContext(Dispatchers.IO) { KeystoreP256Signer.loadOrCreate(context.applicationContext) }
+            signer = withContext(Dispatchers.IO) {
+                // A new key starts with a new, durably recorded, empty serial store. An existing key
+                // with a missing store makes every reservation fail (`storage`): never a reset.
+                KeystoreP256Signer.loadOrCreate(context.applicationContext, beforeCreate = { serials.initialize() })
+            }
         } catch (e: Exception) {
             keyError = "Could not create or load this phone's key: ${e.message ?: e.javaClass.simpleName}. " +
                 "A screen lock is required, and on Android 8 to 10 an enrolled fingerprint."
@@ -372,7 +376,7 @@ private fun explain(code: String): String = when (code) {
     "offline_limit" -> "The amount is more than one merchant accepts offline from this allowance."
     "amount_zero" -> "The amount must be more than zero."
     "serials_exhausted" -> "All 256 serials of this allowance are used. Ask for a new allowance."
-    "storage" -> "The serial file could not be read or written. Nothing was signed."
+    "storage" -> "The serial file is missing, damaged or could not be written durably. This phone refuses to sign rather than risk reusing a serial."
     else -> ""
 }
 

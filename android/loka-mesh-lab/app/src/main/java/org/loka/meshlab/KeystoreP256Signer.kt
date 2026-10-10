@@ -89,10 +89,18 @@ internal class KeystoreP256Signer private constructor(
         val promptAuthenticators: Int
             get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) BIOMETRIC_STRONG or DEVICE_CREDENTIAL else BIOMETRIC_STRONG
 
-        /** Loads the key under [alias], or creates it (StrongBox first). Blocking: call off the main thread. */
-        fun loadOrCreate(context: Context, alias: String = ALIAS): KeystoreP256Signer = synchronized(lock) {
+        /**
+         * Loads the key under [alias], or creates it (StrongBox first). [beforeCreate] runs under the
+         * same lock only when a new key is about to be generated (the pay screen records its empty
+         * serial store durably there, so a store can only start empty together with a new key).
+         * Blocking: call off the main thread.
+         */
+        fun loadOrCreate(context: Context, alias: String = ALIAS, beforeCreate: () -> Unit = {}): KeystoreP256Signer = synchronized(lock) {
             val store = keyStore()
-            if (!store.containsAlias(alias)) create(context, alias)
+            if (!store.containsAlias(alias)) {
+                beforeCreate()
+                create(context, alias)
+            }
             val publicKey = store.getCertificate(alias)?.publicKey as? ECPublicKey ?: error("Keystore key $alias has no EC public key")
             val privateKey = store.getKey(alias, null) as? PrivateKey ?: error("Keystore key $alias is missing")
             KeystoreP256Signer(alias, P256Rules.compress(publicKey), security(context, alias, privateKey))

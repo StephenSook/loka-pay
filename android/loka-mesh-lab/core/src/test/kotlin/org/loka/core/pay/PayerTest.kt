@@ -3,6 +3,7 @@ package org.loka.core.pay
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -83,10 +84,15 @@ class PayerTest {
 
     @Test fun `serials persist across instances, are per allowance, and stop at 256`() {
         val file = File(temp.root, "pay/serials.txt")
-        val store = SerialReservations(file)
+        val store = SerialReservations(file, JvmDirectorySync)
+        assertFalse(store.isInitialized())
+        store.initialize()
+        assertTrue(store.isInitialized())
+        assertEquals("loka-pay-serials-v1\n", file.readText())
         assertEquals(0, store.reserve(42UL))
         assertEquals(1, store.reserve(42UL))
-        val reopened = SerialReservations(file)
+        val reopened = SerialReservations(file, JvmDirectorySync)
+        reopened.initialize() // an existing store is only checked: no reset
         assertEquals(2, reopened.reserve(42UL))
         assertEquals(0, reopened.reserve(43UL))
         assertEquals(0, reopened.reserve(ULong.MAX_VALUE))
@@ -94,9 +100,71 @@ class PayerTest {
         assertEquals(0, reopened.remaining(42UL))
         assertEquals(255, reopened.remaining(43UL))
         expect("serials_exhausted") { reopened.reserve(42UL) }
-        expect("serials_exhausted") { SerialReservations(file).reserve(42UL) }
+        expect("serials_exhausted") { SerialReservations(file, JvmDirectorySync).reserve(42UL) }
         assertEquals("loka-pay-serials-v1\n42 256\n43 1\n18446744073709551615 1\n", file.readText())
-        assertTrue(File(temp.root, "pay").list()!!.toList() == listOf("serials.txt"))
+        assertEquals(listOf("serials.txt"), File(temp.root, "pay").list()!!.toList())
+    }
+
+    @Test fun `a missing store is never read as empty, so a vanished file cannot hand out serial 0 again`() {
+        val file = File(temp.root, "pay/serials.txt")
+        val store = SerialReservations(file, JvmDirectorySync)
+        expect("storage") { store.reserve(42UL) } // never initialised
+        expect("storage") { store.remaining(42UL) }
+        assertFalse(File(temp.root, "pay").exists()) // a reservation does not create the store
+        store.initialize()
+        assertEquals(0, store.reserve(42UL))
+        assertTrue(file.delete()) // the file vanishes after a signed reservation
+        expect("storage") { store.reserve(42UL) }
+        expect("storage") { SerialReservations(file, JvmDirectorySync).reserve(42UL) }
+        expect("storage") { store.remaining(42UL) }
+        assertFalse(file.exists())
+    }
+
+    /** Records each directory sync with the store's contents at that moment. */
+    private class RecordingSync(private val file: File) : DirectorySync {
+        val calls = mutableListOf<Pair<File, String?>>()
+        var failNext = false
+        override fun sync(directory: File) {
+            calls += directory to (if (file.isFile) file.readText() else null)
+            if (failNext) { failNext = false; throw java.io.IOException("fsync refused (test)") }
+        }
+    }
+
+    @Test fun `every reservation syncs the directory after the rename, and initialisation syncs the folder and its parent`() {
+        val file = File(temp.root, "pay/serials.txt")
+        val sync = RecordingSync(file)
+        val store = SerialReservations(file, sync)
+        store.initialize()
+        val dir = File(temp.root, "pay").canonicalFile
+        assertEquals(listOf(dir to "loka-pay-serials-v1\n", temp.root.canonicalFile to "loka-pay-serials-v1\n"), sync.calls)
+        sync.calls.clear()
+        assertEquals(0, store.reserve(9UL))
+        // One directory sync, after the renamed file already holds the advanced counter.
+        assertEquals(listOf(dir to "loka-pay-serials-v1\n9 1\n"), sync.calls)
+        assertEquals(1, store.reserve(9UL))
+        assertEquals(dir to "loka-pay-serials-v1\n9 2\n", sync.calls.last())
+        assertEquals(2, sync.calls.size)
+    }
+
+    @Test fun `a failed directory sync refuses to return the serial, and that serial is never reused`() {
+        val file = File(temp.root, "pay/serials.txt")
+        val sync = RecordingSync(file)
+        val store = SerialReservations(file, sync)
+        store.initialize()
+        sync.failNext = true
+        expect("storage") { store.reserve(5UL) } // serial 0 is not returned
+        assertEquals(1, store.reserve(5UL)) // and it is burned, not handed out later
+        // Initialising an existing store only checks it: no write, so no sync.
+        val before = sync.calls.size
+        store.initialize()
+        assertEquals(before, sync.calls.size)
+    }
+
+    @Test fun `initialising over a damaged store checks it and never replaces it`() {
+        val file = File(temp.root, "serials.txt")
+        file.writeText("loka-pay-serials-v1\n42 257\n")
+        expect("storage") { SerialReservations(file, JvmDirectorySync).initialize() }
+        assertEquals("loka-pay-serials-v1\n42 257\n", file.readText())
     }
 
     @Test fun `a damaged serial file fails closed and is never reset`() {
@@ -105,19 +173,20 @@ class PayerTest {
             "loka-pay-serials-v1\n042 1\n", "loka-pay-serials-v1\n42 1", "loka-pay-serials-v1\n-1 1\n",
             "loka-pay-serials-v1\n18446744073709551616 1\n", "")) {
             file.writeText(bad)
-            expect("storage") { SerialReservations(file).reserve(42UL) }
+            expect("storage") { SerialReservations(file, JvmDirectorySync).reserve(42UL) }
             assertEquals(bad, file.readText())
         }
     }
 
     @Test fun `concurrent reservations on one file never hand out a serial twice`() {
         val file = File(temp.root, "serials.txt")
+        SerialReservations(file, JvmDirectorySync).initialize()
         val seen = Collections.synchronizedList(mutableListOf<Int>())
         val exhausted = Collections.synchronizedList(mutableListOf<Int>())
         val start = CountDownLatch(1)
         val threads = List(8) {
             thread {
-                val store = SerialReservations(file) // separate instances share one lock per file
+                val store = SerialReservations(file, JvmDirectorySync) // separate instances share one lock per file
                 start.await()
                 repeat(40) {
                     try { seen += store.reserve(7UL) } catch (e: PaymentException) {

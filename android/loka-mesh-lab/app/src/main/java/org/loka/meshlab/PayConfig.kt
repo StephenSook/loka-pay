@@ -1,9 +1,29 @@
 package org.loka.meshlab
 
+import android.system.Os
+import android.system.OsConstants
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.loka.core.pay.DirectorySync
 import org.loka.core.pay.Ed25519Verifier
 import org.loka.core.pay.Pins
+import java.io.File
+
+/**
+ * fsync of a directory on Android: open(2) the directory read-only and fsync(2) it through
+ * android.system.Os, so the serial store's rename survives a power loss. Errors propagate
+ * (ErrnoException), and the core store then refuses to return a serial. Device-only.
+ */
+internal object AndroidDirectorySync : DirectorySync {
+    override fun sync(directory: File) {
+        val fd = Os.open(directory.path, OsConstants.O_RDONLY, 0)
+        try {
+            Os.fsync(fd)
+        } finally {
+            Os.close(fd)
+        }
+    }
+}
 
 /** Pins compiled from config/pins.json (see app/build.gradle.kts), checked by the core parser. */
 internal object PayConfig {
