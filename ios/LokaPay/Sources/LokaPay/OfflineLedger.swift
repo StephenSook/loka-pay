@@ -25,6 +25,15 @@ public final class OfflineLedger: @unchecked Sendable {
         public var state: State
         /// The 238-byte note wire, kept so a pending note can be uploaded or re-injected.
         public let wireHex: String
+        /// The allowance certificate wire the note was accepted against, kept so a pending note can
+        /// be settled after Next payment or a relaunch. Nil in entries written before it was kept.
+        /// The reader verifies it again with the pinned server key before using it.
+        public let allowanceWireHex: String?
+        /// The phone's report at receipt that it had no internet path. Never signed (PLAN 3.53).
+        public let receivedWithZeroBars: Bool?
+        /// The merchant's signed ACK wire once it exists (`attachAck`), so settling the note later
+        /// needs no new signature, so no new Face ID prompt. The reader verifies it against the note.
+        public var ackWireHex: String?
     }
 
     private let url: URL
@@ -37,9 +46,11 @@ public final class OfflineLedger: @unchecked Sendable {
     }
 
     /// Records `note` as accepted offline, or throws `serialSeen` / `offlineLimit` and
-    /// changes nothing. Call after `SignedNote.validate` and `Acceptance.check`.
+    /// changes nothing. Call after `SignedNote.validate` and `Acceptance.check`. `allowanceWire` is
+    /// the verified wire of `certificate`, kept with the note so it can be settled later.
     @discardableResult
-    public func accept(note: SignedNote, certificate: AllowanceCertificate, now: Int64) throws -> Entry {
+    public func accept(note: SignedNote, certificate: AllowanceCertificate, now: Int64,
+                       allowanceWire: Data? = nil, receivedWithZeroBars: Bool? = nil) throws -> Entry {
         let (lock, file) = try FileLocks.resolve(url)
         lock.lock()
         defer { lock.unlock() }
@@ -53,10 +64,24 @@ public final class OfflineLedger: @unchecked Sendable {
         let (total, overflow) = unsettled.addingReportingOverflow(note.note.amount)
         guard !overflow, total <= certificate.offlineLimit else { throw PaymentError.offlineLimit }
         let entry = Entry(noteIdHex: note.noteId.hex, allowanceId: allowance, serial: note.note.serial,
-                          amount: note.note.amount, acceptedAt: now, state: .pending, wireHex: note.wire.hex)
+                          amount: note.note.amount, acceptedAt: now, state: .pending, wireHex: note.wire.hex,
+                          allowanceWireHex: allowanceWire?.hex, receivedWithZeroBars: receivedWithZeroBars,
+                          ackWireHex: nil)
         entries.append(entry)
         try save(entries, to: file)
         return entry
+    }
+
+    /// Keeps the merchant's signed ACK with its note, so the note can be settled later without
+    /// signing again. The caller has verified the ACK against the note. Changes no reservation.
+    public func attachAck(noteId: Data, ackWire: Data) throws {
+        let (lock, file) = try FileLocks.resolve(url)
+        lock.lock()
+        defer { lock.unlock() }
+        var entries = try load(file)
+        guard let i = entries.firstIndex(where: { $0.noteIdHex == noteId.hex }) else { throw PaymentError.storage }
+        entries[i].ackWireHex = ackWire.hex
+        try save(entries, to: file)
     }
 
     /// Moves a pending note to settled or refused. Either way it stops counting against the

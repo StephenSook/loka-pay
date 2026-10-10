@@ -366,6 +366,9 @@ struct ReceiveLayoutTests {
             ("ready, note before allowance", .preview(.ready, issue: .allowanceNeeded, waitingNote: PreviewFixtures.note0)),
             ("ready, conflicting spend", .preview(.ready, issue: .payment(.serialSeen), conflict: true, unsettled: 1_000_000)),
             ("ready, over the offline limit", .preview(.ready, issue: .payment(.offlineLimit), unsettled: 2_750_000)),
+            ("ready, unsettled on this phone", .preview(.ready, held: [
+                PreviewFixtures.unsettled(), PreviewFixtures.unsettled(withAck: false, withCertificate: false),
+            ])),
             ("received", .preview(.received, payment: PreviewFixtures.received(), unsettled: 1_000_000)),
             ("received, not signed", .preview(.received, payment: PreviewFixtures.received(withAck: false),
                                               issue: .signing("Authentication canceled."), unsettled: 1_000_000)),

@@ -254,12 +254,16 @@ struct ReceiveModelTests {
         #expect(model.issue?.kind == .busy)
         #expect(model.payment?.note == note)
 
-        // After Next payment, the identical note again is "already received", not a reuse.
+        // After Next payment, the identical note again is not a reuse: it is still unsettled, so it
+        // comes back on screen to settle with its signed ACK, and is not reserved a second time.
         model.nextPayment()
         await model.accept(text: noteText(note))
-        #expect(model.issue?.kind == .alreadyReceived)
+        #expect(model.phase == .received)
+        #expect(model.issue == nil)
+        #expect(model.payment?.ack == ack)
         #expect(model.conflictingSpend == false)
         #expect(try ledger.entries().count == 1)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000)
     }
 
     @Test("a note that arrives before its allowance waits, then is accepted")

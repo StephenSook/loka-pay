@@ -36,7 +36,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
     case busy
     /// A different note arrived while one note already waits for its allowance; it was not taken.
     case otherNoteWaiting
-    /// This exact note is already in the merchant's offline ledger.
+    /// This exact note is already in the merchant's offline ledger with nothing to settle here: the
+    /// chain decided it (an unsettled one that can be read back comes on screen to settle instead).
     case alreadyReceived
     /// No settlement client is connected in this build.
     case serverNotConnected
@@ -107,7 +108,8 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         case .otherNoteWaiting:
             return "Another payment note is already waiting for its allowance (code 1 of 2), so this note was not taken. "
                 + "Scan that allowance, or tap Clear the waiting note, then send this note again."
-        case .alreadyReceived: return "This exact note was already received on this phone. It is held in the ledger; nothing new was accepted."
+        case .alreadyReceived:
+            return "This exact note was already received on this phone and is recorded in its ledger, so nothing new was accepted."
         case .serverNotConnected: return "No settlement server is connected in this build. The note stays held on this phone."
         case .settlement(let e): return Self.settlementMessage(e)
         case .ledgerNotUpdated(let paid):

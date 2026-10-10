@@ -61,6 +61,7 @@ enum PreviewFixtures {
     }
 
     static var note0: SignedNote { try! SignedNote.validate(wire: note0Wire, deployment: deployment) }
+    static var note1: SignedNote { try! SignedNote.validate(wire: note1Wire, deployment: deployment) }
     static var ack0: Ack { try! Ack.verify(wire: ackWire, for: note0) }
 
     static func receipt(conf: Data?) -> VerifiedReceipt {
@@ -76,6 +77,13 @@ enum PreviewFixtures {
     static func received(withAck: Bool = true) -> ReceivedPayment {
         ReceivedPayment(note: note0, certificate: allowance, receivedAt: receivedAt, receivedWithZeroBars: true,
                         ack: withAck ? ack0 : nil)
+    }
+
+    /// A row of "Unsettled on this phone": vector note 0 with its vector ACK, or vector note 1
+    /// with none (the vector ACK is for note 0).
+    static func unsettled(withAck: Bool = true, withCertificate: Bool = true) -> UnsettledPayment {
+        UnsettledPayment(note: withAck ? note0 : note1, receivedAt: receivedAt, receivedWithZeroBars: true,
+                         certificate: withCertificate ? allowance : nil, ack: withAck ? ack0 : nil)
     }
 
     static func settled(conf: Data) -> SettledPayment {

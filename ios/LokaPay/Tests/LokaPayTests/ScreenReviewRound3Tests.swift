@@ -316,3 +316,220 @@ struct OutcomeUnknownTests {
         #expect(try ledger.entries().first?.state == .pending)
     }
 }
+
+@Suite("a held note stays settleable after Next payment and a relaunch (review 3, finding 1)")
+@MainActor
+struct UnsettledRecoveryTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+    /// Built once: CryptoKit's Ed25519 signatures are randomized, so a rebuilt wire differs.
+    let merchantWire: Data
+    let allowanceWire: Data
+
+    init() {
+        merchantWire = F.merchantWire(merchant: merchant.keyHash)
+        allowanceWire = F.allowanceWire(payer: payer.keyHash)
+    }
+
+    var allowanceText: String { PaymentTransport.encode(.allowance, allowanceWire) }
+
+    func makeModel(ledger: OfflineLedger, signer: (any PaymentSigner)? = nil,
+                   replies: [StubReply]? = nil) -> (ReceiveModel, StubTransport?) {
+        let stub = replies.map { StubTransport($0) }
+        let model = ReceiveModel(merchantWire: merchantWire, signer: signer ?? merchant, ledger: ledger,
+                                 settlementClient: stub.map { APIFixtures.client($0, retry: .never) },
+                                 deployment: F.deployment, serverPublicKey: F.serverKey,
+                                 internetState: { InternetState.none }, now: { F.now })
+        return (model, stub)
+    }
+
+    func note(serial: UInt8 = 0, amount: UInt64 = 1_000_000) throws -> SignedNote {
+        try F.note(payer: payer, payee: merchant.keyHash, amount: amount, serial: serial)
+    }
+
+    /// Accepts `note` on `model` and returns its signed ACK.
+    func accept(_ note: SignedNote, on model: ReceiveModel) async throws -> Ack {
+        await model.accept(text: allowanceText)
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.phase == .received)
+        return try #require(model.payment?.ack)
+    }
+
+    func settledReply(_ note: SignedNote) -> StubReply {
+        StubReply(status: 200, body: F.decisionBody(conf: F.confWire(noteId: note.noteId, status: 1), noteId: note.noteId,
+                                                    jsonStatus: "settled"))
+    }
+
+    @Test("accept, Next payment, Settle from the list: Paid from the verified CONF, and the ledger releases it")
+    func settleFromListAfterNextPayment() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let note = try self.note()
+        let (model, stub) = makeModel(ledger: ledger, replies: [settledReply(note)])
+        let ack = try await accept(note, on: model)
+        #expect(model.unsettledPayments.isEmpty, "the list is read when the screen is ready for a payer")
+
+        model.nextPayment()
+        #expect(model.phase == .ready)
+        #expect(model.unsettledPayments.count == 1)
+        let row = try #require(model.unsettledPayments.first)
+        #expect(row.note.wire == note.wire)
+        #expect(row.ack == ack)
+        #expect(row.certificate?.allowanceId == F.allowanceId)
+        #expect(row.receivedWithZeroBars)
+        #expect(model.canSettle(row))
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000)
+
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.phase == .settled)
+        #expect(model.settlement?.status == .paid)
+        #expect(model.payment?.ack == ack, "the stored ACK, not a new signature")
+        #expect(model.payment?.receivedWithZeroBars == true)
+        #expect(try ledger.entries().first?.state == .settled)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 0)
+        let request = try #require(stub?.requests.first)
+        let body = APIFixtures.bodyObject(request)
+        #expect(body["note"] as? String == Base64URL.encode(note.wire))
+        #expect(body["ack"] as? String == Base64URL.encode(ack.wire))
+
+        model.nextPayment()
+        #expect(model.unsettledPayments.isEmpty)
+    }
+
+    @Test("accept, relaunch (model and ledger rebuilt from disk), settle: no new signature, no second reservation")
+    func settleAfterRelaunch() async throws {
+        let url = F.tempURL("ledger.json")
+        let note = try self.note()
+        let (first, _) = makeModel(ledger: OfflineLedger(url: url))
+        let ack = try await accept(note, on: first)
+
+        // The relaunched phone's signer fails if asked to sign (a cancelled Face ID prompt), so Paid
+        // below proves the stored ACK was used.
+        let ledger = OfflineLedger(url: url)
+        let (model, stub) = makeModel(ledger: ledger, signer: CancelledSigner(inner: merchant), replies: [settledReply(note)])
+        #expect(model.phase == .ready)
+        let row = try #require(model.unsettledPayments.first)
+        #expect(row.ack == ack)
+        #expect(row.certificate != nil)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000)
+
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue == nil)
+        #expect(model.settlement?.status == .paid)
+        #expect(try ledger.entries().count == 1)
+        #expect(try ledger.entries().first?.state == .settled)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 0)
+        let body = APIFixtures.bodyObject(try #require(stub?.requests.first))
+        #expect(body["note"] as? String == Base64URL.encode(note.wire))
+    }
+
+    @Test("re-scanning a held note restores it to settle without a second reservation, also after a relaunch")
+    func rescanRestores() async throws {
+        let url = F.tempURL("ledger.json")
+        let ledger = OfflineLedger(url: url)
+        let note = try self.note(amount: 2_000_000)
+        let (model, _) = makeModel(ledger: ledger)
+        let ack = try await accept(note, on: model)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 2_000_000)
+
+        model.nextPayment()
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.phase == .received)
+        #expect(model.issue == nil)
+        #expect(model.payment?.note.wire == note.wire)
+        #expect(model.payment?.ack == ack)
+        #expect(try ledger.entries().count == 1)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 2_000_000)
+
+        // A relaunched phone that has not seen the allowance yet restores from the stored certificate,
+        // with the stored ACK (its signer cannot sign).
+        let reopened = OfflineLedger(url: url)
+        let (fresh, _) = makeModel(ledger: reopened, signer: CancelledSigner(inner: merchant))
+        await fresh.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(fresh.phase == .received)
+        #expect(fresh.issue == nil)
+        #expect(fresh.waitingNote == nil)
+        #expect(fresh.payment?.ack == ack)
+        #expect(try reopened.entries().count == 1)
+        #expect(try reopened.unsettledTotal(allowanceId: F.allowanceId) == 2_000_000)
+
+        // The re-scans freed nothing: 2.00 held plus 1.50 passes the 3.00 offline limit.
+        fresh.nextPayment()
+        await fresh.accept(text: allowanceText)
+        await fresh.accept(text: PaymentTransport.encode(.note, try self.note(serial: 1, amount: 1_500_000).wire))
+        #expect(fresh.issue?.kind == .payment(.offlineLimit))
+        #expect(try reopened.unsettledTotal(allowanceId: F.allowanceId) == 2_000_000)
+    }
+
+    @Test("re-scanning a note the chain decided says already received; nothing comes back")
+    func rescanDecided() async throws {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let note = try self.note()
+        let (model, _) = makeModel(ledger: ledger, replies: [settledReply(note)])
+        _ = try await accept(note, on: model)
+        await model.settle()
+        #expect(model.settlement?.status == .paid)
+        model.nextPayment()
+        #expect(model.unsettledPayments.isEmpty)
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.issue?.kind == .alreadyReceived)
+        #expect(model.phase == .ready)
+    }
+
+    @Test("a note stored before certificates and ACKs were kept is listed, asks for its allowance, then settles")
+    func entryWithoutStoredParts() async throws {
+        let url = F.tempURL("ledger.json")
+        let ledger = OfflineLedger(url: url)
+        let note = try self.note()
+        let certificate = try AllowanceCertificate.verify(wire: allowanceWire, deployment: F.deployment,
+                                                          serverPublicKey: F.serverKey)
+        // The earlier call shape: the record holds the note only.
+        try ledger.accept(note: note, certificate: certificate, now: Int64(F.now.timeIntervalSince1970))
+        #expect(try !String(contentsOf: url, encoding: .utf8).contains("allowanceWireHex"))
+        let (model, stub) = makeModel(ledger: ledger, replies: [settledReply(note)])
+        let row = try #require(model.unsettledPayments.first)
+        #expect(row.certificate == nil)
+        #expect(row.ack == nil)
+        #expect(!model.canSettle(row))
+        #expect(ReceiveModel.unsettledRowText(row, canSettle: false).contains("Scan its allowance code"))
+
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.issue?.kind == .allowanceNeeded)
+        #expect(model.phase == .ready)
+        #expect(stub?.requests.isEmpty == true)
+
+        await model.accept(text: allowanceText)
+        #expect(model.canSettle(row))
+        await model.settleUnsettled(noteId: note.noteId)
+        #expect(model.settlement?.status == .paid)
+        #expect(model.payment?.ack != nil, "the ACK was signed first, since none was stored")
+        #expect(try ledger.entries().first?.state == .settled)
+    }
+
+    @Test("a ledger that cannot be read is shown as unreadable, never as an empty list")
+    func unreadableLedger() throws {
+        let url = F.tempURL("ledger.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("damaged".utf8).write(to: url)
+        let (model, _) = makeModel(ledger: OfflineLedger(url: url))
+        #expect(model.unsettledPaymentsUnreadable)
+        #expect(model.unsettledPayments.isEmpty)
+        #expect(ReceiveModel.unsettledSummary(count: 0, total: 0, unlisted: 0, unreadable: true)
+                .hasPrefix("This phone could not read its offline ledger"))
+    }
+
+    @Test("the list copy names the count, the total and the allowance, in plain words")
+    func listCopy() {
+        let summary = ReceiveModel.unsettledSummary(count: 2, total: 1_500_000, unlisted: 1, unreadable: false)
+        #expect(summary.hasPrefix("2 notes, $1.50 sandbox, accepted offline and not settled yet."))
+        #expect(summary.contains("1 more held note could not be read back"))
+        #expect(ReceiveModel.unsettledSummary(count: 1, total: 1_000_000, unlisted: 0, unreadable: false)
+                .hasPrefix("1 note, $1.00 sandbox"))
+        let row = PreviewFixtures.unsettled(withAck: false)
+        let text = ReceiveModel.unsettledRowText(row, canSettle: true)
+        #expect(text.hasPrefix("Allowance #" + String(row.note.note.allowanceId) + ", received "))
+        #expect(text.contains("Settling signs its receipt first."))
+        for line in [summary, text, ReceiveModel.unsettledNextPaymentText] {
+            #expect(!line.contains("\u{2014}") && !line.contains("\u{2013}"))
+        }
+    }
+}
