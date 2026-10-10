@@ -517,112 +517,80 @@ struct MeshPaymentTests {
         #expect(router.takeOutgoing(for: "merchant-a").isEmpty)
     }
 
-    @Test("each merchant reply goes once per presentation of its payment, ack first")
-    func repliesDue() {
-        let y1 = MeshReturns.replyKey("Y1", presentation: 1)
-        #expect(MeshReturns.repliesDue(ack: nil, receipt: nil, presentation: 1, sent: []).isEmpty)
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 1, sent: []) == ["Y1"])
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 1, sent: [y1]).isEmpty)
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", presentation: 1, sent: [y1]) == ["X1"])
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: "X1", presentation: 1, sent: []) == ["Y1", "X1"])
-        // The same ack bytes on a new presentation (a resend brought the payment back) go again.
-        #expect(MeshReturns.repliesDue(ack: "Y1", receipt: nil, presentation: 2, sent: [y1]) == ["Y1"])
+    // MARK: The merchant's replies (events only, no timer)
+
+    /// Records every send per text; `failing` texts report a passing failure.
+    final class SendLog {
+        var sends: [String] = []
+        var failing: Set<String> = []
+        func count(_ text: String) -> Int { sends.filter { $0 == text }.count }
+        @MainActor func send(_ text: String, _ origin: MeshOrigin) -> Bool { sends.append(text); return !failing.contains(text) }
     }
 
-    @Test("the retry delays are 5, 20 and 60 seconds, then none")
-    func replyRetryDelays() {
-        #expect(MeshReturns.replyRetryDelay(attempt: 0) == 5)
-        #expect(MeshReturns.replyRetryDelay(attempt: 1) == 20)
-        #expect(MeshReturns.replyRetryDelay(attempt: 2) == 60)
-        #expect(MeshReturns.replyRetryDelay(attempt: 3) == nil)
-        #expect(MeshReturns.replyRetryDelay(attempt: -1) == nil)
+    @Test("while hidden, a link or radio event sends nothing; shown again, the ack goes once")
+    func hiddenEventsSendNothing() {
+        let log = SendLog()
+        let sender = MeshReplySender(send: log.send)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: false)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: false)
+        #expect(log.sends.isEmpty)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: true)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.sends == ["Y1"])
     }
 
-    @Test("a reply that keeps failing is retried exactly three times, at 5, 20 and 60 seconds")
-    func retryAttemptCounts() {
-        let timers = FakeTimers()
-        let retry = MeshReplyRetry(schedule: timers.schedule)
-        var retries = 0
-        func pass() { retry.passFinished(presentation: 1, failed: ["1|Y"], stillCurrent: { true }) { retries += 1; pass() } }
-        pass()
-        while let next = timers.pending { next.fire() }
-        #expect(retries == 3)
-        #expect(timers.all.map(\.delay) == [5, 20, 60])
-        #expect(!retry.isScheduled)
+    @Test("a settlement that completes while hidden sends nothing until the screens show again")
+    func settlementWhileHidden() {
+        let log = SendLog()
+        let sender = MeshReplySender(send: log.send)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: true)
+        // The merchant opens the Offline corner; the CONF arrives and the receipt is ready.
+        sender.event(ack: "Y1", receipt: "X1", presentation: 1, origin: .delivery(7), active: false)
+        #expect(log.sends == ["Y1"])
+        sender.event(ack: "Y1", receipt: "X1", presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.sends == ["Y1", "X1"])
     }
 
-    @Test("a new presentation cancels the old timer, and the old one can never fire")
-    func retryCancelledOnReplacement() {
-        let timers = FakeTimers()
-        let retry = MeshReplyRetry(schedule: timers.schedule)
-        var fired: [UInt64] = []
-        retry.passFinished(presentation: 1, failed: ["1|Y"], stillCurrent: { true }) { fired.append(1) }
-        let old = timers.all[0]
-        retry.passFinished(presentation: 2, failed: ["2|Y"], stillCurrent: { true }) { fired.append(2) }
-        #expect(old.cancelled)
-        old.fire()
-        #expect(fired.isEmpty)
-        // The new payment starts its own budget at the first step.
-        #expect(timers.all.last?.delay == 5)
-        timers.all.last?.fire()
-        #expect(fired == [2])
+    @Test("one link-up event sends each failed reply exactly once")
+    func linkUpSendsEachFailedReplyOnce() {
+        let log = SendLog()
+        log.failing = ["Y1", "X1"]
+        let sender = MeshReplySender(send: log.send)
+        sender.event(ack: "Y1", receipt: "X1", presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.count("Y1") == 1 && log.count("X1") == 1)
+        #expect(sender.hasFailedReplies(for: 1))
+
+        // The link comes up: one event, each failed reply once.
+        log.failing = []
+        sender.event(ack: "Y1", receipt: "X1", presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.count("Y1") == 2 && log.count("X1") == 2)
+        #expect(!sender.hasFailedReplies(for: 1))
+        // Settled replies are never sent again for this presentation.
+        sender.event(ack: "Y1", receipt: "X1", presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.sends.count == 4)
     }
 
-    @Test("budgets reset for a new payment, and a receipt still gets retries after the ack's ran out")
-    func retryBudgets() {
-        let timers = FakeTimers()
-        let retry = MeshReplyRetry(schedule: timers.schedule)
-        var failing = ["1|Y"]
-        var retries = 0
-        func pass(_ presentation: UInt64) {
-            retry.passFinished(presentation: presentation, failed: failing, stillCurrent: { true }) { retries += 1; pass(presentation) }
-        }
-        pass(1)
-        while let next = timers.pending { next.fire() }
-        #expect(retries == 3)
-        #expect(!retry.isScheduled)
+    @Test("the retry button resends only the payment on screen's failed replies, and only while shown")
+    func buttonResendsOnlyCurrentFailures() {
+        let log = SendLog()
+        log.failing = ["Y1", "Y2"]
+        let sender = MeshReplySender(send: log.send)
+        sender.event(ack: "Y1", receipt: nil, presentation: 1, origin: .delivery(7), active: true)
+        #expect(sender.hasFailedReplies(for: 1))
+        // Next payment: presentation 2 takes over and its ack fails too.
+        sender.event(ack: "Y2", receipt: nil, presentation: 2, origin: .delivery(8), active: true)
+        #expect(!sender.hasFailedReplies(for: 1))
+        #expect(sender.failed == ["Y2"])
 
-        // The receipt arrives while the ack still cannot go: the receipt has its own budget.
-        failing = ["1|Y", "1|X"]
-        pass(1)
-        #expect(timers.pending?.delay == 5)
-        while let next = timers.pending { next.fire() }
-        #expect(retries == 6)
-
-        // A new payment (presentation 2) starts fresh, even for a reply key it shares with the last one.
-        failing = ["1|Y"]
-        pass(2)
-        #expect(timers.pending?.delay == 5)
-        #expect(retry.attempts == ["1|Y": 1])
-    }
-
-    @Test("hiding the screens stops the timer; a stale presentation or a success never retries")
-    func retryStopsWhenHiddenOrStale() {
-        let timers = FakeTimers()
-        let retry = MeshReplyRetry(schedule: timers.schedule)
-        var retries = 0
-        retry.passFinished(presentation: 1, failed: ["1|Y"], stillCurrent: { true }) { retries += 1 }
-        let first = timers.all[0]
-        retry.cancel()
-        #expect(first.cancelled)
-        first.fire()
-        #expect(retries == 0)
-
-        // Shown again: the budget starts over.
-        var current = true
-        retry.passFinished(presentation: 1, failed: ["1|Y"], stillCurrent: { current }) { retries += 1 }
-        #expect(timers.all.last?.delay == 5)
-        // The payment changed before the timer fired: nothing is retried.
-        current = false
-        timers.all.last?.fire()
-        #expect(retries == 0)
-
-        // A pass with nothing failing stops a pending timer.
-        retry.passFinished(presentation: 1, failed: ["1|Y"], stillCurrent: { true }) { retries += 1 }
-        let pending = timers.all.last
-        retry.passFinished(presentation: 1, failed: [], stillCurrent: { true }) { retries += 1 }
-        #expect(pending?.cancelled == true)
-        #expect(!retry.isScheduled)
+        log.failing = []
+        sender.resendFailed(presentation: 2, origin: .delivery(8), active: false)
+        // A tap meant for the earlier payment sends nothing at all, neither its ack nor the new one.
+        sender.resendFailed(presentation: 1, origin: .delivery(7), active: true)
+        #expect(log.sends == ["Y1", "Y2"])
+        sender.resendFailed(presentation: 2, origin: .delivery(8), active: true)
+        #expect(log.count("Y2") == 2)
+        #expect(log.count("Y1") == 1)
+        #expect(!sender.hasFailedReplies(for: 2))
     }
 
     @Test("a resend that brings a payment back re-offers its stored ack to the first sender")
@@ -630,23 +598,29 @@ struct MeshPaymentTests {
         let router = MeshPaymentRouter(deployment: F.deployment, serverPublicKey: F.serverKey)
         let receive = receiveModel(router)
         receive.startInbox()
+        let log = SendLog()
+        let sender = MeshReplySender(send: log.send)
         let signed = try note()
         router.receive(allowanceText, from: "contact-a", fromContact: true, packetID: "a-1")
         router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-1")
         await receive.inboxDrained()
         let ack = try #require(receive.payment?.ackText)
-        let first = receive.paymentPresentation
-        let sent = [MeshReturns.replyKey(ack, presentation: first)]
-        #expect(MeshReturns.repliesDue(ack: ack, receipt: nil, presentation: first, sent: sent).isEmpty)
+        func event() {
+            sender.event(ack: receive.payment?.ackText, receipt: receive.settlement?.receiptText,
+                         presentation: receive.paymentPresentation, origin: receive.payment?.meshOrigin ?? .notOverBluetooth,
+                         active: true)
+        }
+        event()
+        event()
+        #expect(log.count(ack) == 1)
 
         // The ack expired undelivered; the merchant tapped Next payment and the payer resent.
         receive.nextPayment()
         router.receive(noteText(signed), from: "contact-a", fromContact: true, packetID: "n-2")
         await receive.inboxDrained()
         #expect(receive.payment?.ackText == ack)
-        #expect(receive.paymentPresentation == first + 1)
-        #expect(MeshReturns.repliesDue(ack: receive.payment?.ackText, receipt: nil,
-                                       presentation: receive.paymentPresentation, sent: sent) == [ack])
+        event()
+        #expect(log.count(ack) == 2)
         #expect(router.replyTarget(for: ack, origin: try #require(receive.payment?.meshOrigin)) == .peer("contact-a"))
     }
 
@@ -740,31 +714,5 @@ struct MeshPaymentTests {
         #expect(pay.receipt == nil)
         // Taken, not held: nothing waits to surprise a later payment.
         #expect(router.payInbox.held.isEmpty)
-    }
-}
-
-/// TEST-ONLY timers for `MeshReplyRetry`: they record each delay and fire only when a test says so.
-@MainActor
-final class FakeTimers {
-    final class Timer: MeshRetryTimer {
-        let delay: TimeInterval
-        let action: @MainActor () -> Void
-        private(set) var cancelled = false
-        private(set) var fired = false
-        init(delay: TimeInterval, action: @escaping @MainActor () -> Void) { self.delay = delay; self.action = action }
-        func cancel() { cancelled = true }
-        /// Runs the action even when cancelled, to prove a stale timer does nothing.
-        @MainActor func fire() { fired = true; action() }
-    }
-
-    private(set) var all: [Timer] = []
-
-    /// The newest timer that has neither fired nor been cancelled.
-    var pending: Timer? { all.last.flatMap { $0.cancelled || $0.fired ? nil : $0 } }
-
-    func schedule(_ delay: TimeInterval, _ action: @escaping @MainActor () -> Void) -> any MeshRetryTimer {
-        let timer = Timer(delay: delay, action: action)
-        all.append(timer)
-        return timer
     }
 }

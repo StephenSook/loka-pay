@@ -404,89 +404,68 @@ public final class MeshPaymentRouter {
     }
 }
 
-/// A cancellable timer for `MeshReplyRetry`.
-public protocol MeshRetryTimer: AnyObject {
-    func cancel()
-}
-
-/// Times the retries of the merchant's replies that failed for a passing reason (a locked phone, a
-/// full queue), for one payment presentation at a time:
-/// - a pass for a new presentation cancels the pending timer and starts fresh budgets, and a timer
-///   that outlives its presentation (or its activation) never fires;
-/// - each reply has its own budget (`MeshReturns.replyRetryDelay`: 5, 20, 60 s), so a receipt
-///   still gets its timed retries after the ack used up its own;
-/// - `cancel()` (the screens are hidden or gone) stops the timer and resets the budgets.
+/// Sends the merchant's ack and receipt over the mesh, on events only and never on a timer. An
+/// event is Receive being shown, LOKA reporting a local link up, the radio turning on, an ack or a
+/// receipt becoming available, or the Receive card's "Send the reply again over Bluetooth" button.
+/// Every send needs the screens to be active and belongs to one payment presentation; each event
+/// sends each eligible reply at most once.
 @MainActor
-public final class MeshReplyRetry {
-    public typealias Schedule = @MainActor (_ delay: TimeInterval, _ fire: @escaping @MainActor () -> Void) -> any MeshRetryTimer
+@Observable
+public final class MeshReplySender {
+    /// The glue's send (`LokaPayDependencies.meshReply`): true when the reply is queued or has no
+    /// Bluetooth route, false on a passing failure (a locked phone, a full queue).
+    @ObservationIgnored private let send: @MainActor (_ text: String, _ origin: MeshOrigin) -> Bool
+    /// "presentation|text" for each reply settled (queued, or no Bluetooth route), newest last.
+    @ObservationIgnored private var settled: [String] = []
+    /// The replies of `failedPresentation` whose last try hit a passing failure, oldest first.
+    public private(set) var failed: [String] = []
+    public private(set) var failedPresentation: UInt64?
 
-    private let schedule: Schedule
-    /// The presentation whose replies the budgets and the timer belong to.
-    public private(set) var presentation: UInt64?
-    /// Timed retries used per reply key in this presentation.
-    public private(set) var attempts: [String: Int] = [:]
-    private var timer: (any MeshRetryTimer)?
-    /// Changes whenever the pending timer is replaced or stopped, so a stale one never fires.
-    private var timerID: UInt64 = 0
-
-    public init(schedule: @escaping Schedule = MeshReplyRetry.taskTimer) {
-        self.schedule = schedule
+    public init(send: @escaping @MainActor (_ text: String, _ origin: MeshOrigin) -> Bool) {
+        self.send = send
     }
 
-    /// True while a timed retry is pending.
-    public var isScheduled: Bool { timer != nil }
+    /// One event. While `active`, offers each reply of `presentation` not yet settled, once, ack
+    /// first. While not active (the screens are hidden), sends nothing; the replies wait for the
+    /// next event after the screens show again.
+    public func event(ack: String?, receipt: String?, presentation: UInt64, origin: MeshOrigin, active: Bool) {
+        guard active else { return }
+        forgetOtherPresentations(presentation)
+        let due = [ack, receipt].compactMap { $0 }.filter { !settled.contains(Self.key($0, presentation)) }
+        offer(due, presentation: presentation, origin: origin)
+    }
 
-    /// Called after each pass that offered `presentation`'s replies. `failed` holds the reply keys
-    /// that hit a passing failure in that pass. When the timer fires it asks `stillCurrent` (is that
-    /// presentation still on screen) before calling `retry`, which runs the next pass.
-    public func passFinished(presentation: UInt64, failed: [String], stillCurrent: @escaping @MainActor () -> Bool,
-                             retry: @escaping @MainActor () -> Void) {
-        if self.presentation != presentation {
-            cancel()
-            self.presentation = presentation
+    /// True when a reply of `presentation` failed for a passing reason: the Receive card then shows
+    /// the retry button.
+    public func hasFailedReplies(for presentation: UInt64) -> Bool {
+        failedPresentation == presentation && !failed.isEmpty
+    }
+
+    /// The button: sends the failed replies of the payment on screen (`presentation`) only, once each.
+    public func resendFailed(presentation: UInt64, origin: MeshOrigin, active: Bool) {
+        guard active, hasFailedReplies(for: presentation) else { return }
+        offer(failed, presentation: presentation, origin: origin)
+    }
+
+    private func offer(_ texts: [String], presentation: UInt64, origin: MeshOrigin) {
+        for text in texts {
+            if send(text, origin) {
+                settled = Array((settled + [Self.key(text, presentation)]).suffix(32))
+                failed.removeAll { $0 == text }
+            } else if !failed.contains(text) {
+                failed.append(text)
+            }
         }
-        guard !failed.isEmpty else { return stopTimer() }
-        guard timer == nil else { return }
-        let budgets = failed.compactMap { key in MeshReturns.replyRetryDelay(attempt: attempts[key] ?? 0).map { (key, $0) } }
-        guard let delay = budgets.map(\.1).min() else { return }
-        for (key, _) in budgets { attempts[key, default: 0] += 1 }
-        timerID &+= 1
-        let id = timerID
-        timer = schedule(delay) { [weak self] in
-            guard let self, self.timerID == id, self.presentation == presentation else { return }
-            self.timer = nil
-            guard stillCurrent() else { return }
-            retry()
-        }
     }
 
-    /// The screens are hidden or gone: no timer stays pending and the budgets start again.
-    public func cancel() {
-        stopTimer()
-        attempts = [:]
-        presentation = nil
+    /// A reply never carries to another payment: failures of an earlier presentation are dropped.
+    private func forgetOtherPresentations(_ presentation: UInt64) {
+        guard failedPresentation != presentation else { return }
+        failedPresentation = presentation
+        failed = []
     }
 
-    private func stopTimer() {
-        timer?.cancel()
-        timer = nil
-        timerID &+= 1
-    }
-
-    /// The real timer: a main-actor task that sleeps, then fires unless cancelled.
-    public nonisolated static func taskTimer(_ delay: TimeInterval, _ fire: @escaping @MainActor () -> Void) -> any MeshRetryTimer {
-        TaskTimer(Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            fire()
-        })
-    }
-
-    private final class TaskTimer: MeshRetryTimer {
-        let task: Task<Void, Never>
-        init(_ task: Task<Void, Never>) { self.task = task }
-        func cancel() { task.cancel() }
-    }
+    private static func key(_ text: String, _ presentation: UInt64) -> String { String(presentation) + "|" + text }
 }
 
 /// The screens' half of the mesh glue.
@@ -513,23 +492,4 @@ public enum MeshReturns {
     public static func follow(_ inbox: PaymentInbox, model: PayModel, active: Bool) {
         if active { attach(inbox, to: model) } else { inbox.detach(model) }
     }
-
-    /// The merchant's replies that still need to go back over the mesh, in order: the ack once the
-    /// note is on screen, then the receipt once the chain decided. `sent` holds the `replyKey`s of
-    /// what already went. Keys include the payment's presentation, so the same verified ack goes
-    /// again when a resend brings the payment back, and never twice for one presentation.
-    public static func repliesDue(ack: String?, receipt: String?, presentation: UInt64, sent: [String]) -> [String] {
-        [ack, receipt].compactMap { $0 }.filter { !sent.contains(replyKey($0, presentation: presentation)) }
-    }
-
-    /// How long to wait before offering a reply again after a passing failure (a locked phone, a
-    /// full queue), by attempt: 5, 20 and 60 seconds, then no more timed tries. Showing Receive
-    /// again, or a local link coming up, still offers it.
-    public static func replyRetryDelay(attempt: Int) -> TimeInterval? {
-        let delays: [TimeInterval] = [5, 20, 60]
-        return delays.indices.contains(attempt) ? delays[attempt] : nil
-    }
-
-    /// What `repliesDue` remembers for a reply that went (or has no Bluetooth route).
-    public static func replyKey(_ text: String, presentation: UInt64) -> String { String(presentation) + "|" + text }
 }

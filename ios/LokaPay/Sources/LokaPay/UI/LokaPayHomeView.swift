@@ -36,8 +36,9 @@ public struct LokaPayDependencies {
     /// (`ReceivedPayment.meshOrigin`: camera, a first delivery, or unknown). The glue sends a text only to the
     /// sender of that one delivery (`MeshPaymentRouter.replyTarget`). It returns true when the reply
     /// is settled (queued, or there is no Bluetooth route for it) and false on a passing failure (a
-    /// locked phone, a full queue), so the reply is offered again: when Receive is shown again, when
-    /// a local link comes up, and on a short bounded timer (`MeshReturns.replyRetryDelay`).
+    /// locked phone, a full queue). Replies are offered on events only (`MeshReplySender`), never on
+    /// a timer, and only while these screens are shown; a reply that failed is offered again on the
+    /// next event or by the Receive card's "Send the reply again over Bluetooth" button.
     /// nil: replies go by camera only.
     public var meshReply: (@MainActor (_ text: String, _ origin: MeshOrigin) -> Bool)?
     /// The mesh layer's report that a local LOKA link is up; nil when not reported. A change to true
@@ -91,11 +92,9 @@ public struct LokaPayHomeView: View {
     /// accepted, reserved or signed unseen; codes wait in the inbox. The models keep their state.
     private let isActive: Bool
     private let meshLinkReady: Bool?
-    /// Times retries of replies that failed for a passing reason, bound to the payment presentation.
-    @State private var replyRetry = MeshReplyRetry()
-    /// Reply keys (`MeshReturns.replyKey`) `meshReply` settled, newest last and bounded, so each reply
-    /// goes once per presentation of its payment.
-    @State private var repliesSent: [String] = []
+    /// Sends the merchant's replies on events, while shown, per payment presentation. nil without a
+    /// `meshReply` (camera only).
+    @State private var replies: MeshReplySender?
 
     public init(dependencies: LokaPayDependencies, startOn tab: Tab = .pay, isActive: Bool = true) {
         let d = dependencies
@@ -114,6 +113,7 @@ public struct LokaPayHomeView: View {
         meshReturns = d.meshReturns
         meshReply = d.meshReply
         meshLinkReady = d.meshLinkReady
+        _replies = State(initialValue: d.meshReply.map { MeshReplySender(send: $0) })
         self.isActive = isActive
     }
 
@@ -128,7 +128,8 @@ public struct LokaPayHomeView: View {
             if isActive {
                 switch tab {
                 case .pay: PayView(model: payModel, connectivity: connectivity)
-                case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn)
+                case .receive: ReceiveView(model: receiveModel, connectivity: connectivity, bluetoothOn: bluetoothOn,
+                                           resendReply: resendReplyAction)
                 }
             } else {
                 Spacer(minLength: 0)
@@ -139,44 +140,43 @@ public struct LokaPayHomeView: View {
             connectivity.start()
             // Acks and receipts over Bluetooth reach the payment on screen, on either tab, while shown.
             if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
-            sendDueReplies()
+            replyEvent()
         }
         .onDisappear {
             connectivity.stop()
             meshReturns?.detach(payModel)
-            replyRetry.cancel()
         }
-        // A reply that could not be queued is offered again when Receive is shown again and when a
-        // local link or the radio comes back.
-        .onChange(of: tab) { if tab == .receive { sendDueReplies() } }
+        // Reply events: Receive shown, these screens shown again, a local link up, the radio on, an ack
+        // or a receipt newly available. Each is gated on isActive inside MeshReplySender.
+        .onChange(of: tab) { if tab == .receive { replyEvent() } }
         .onChange(of: isActive) {
             if let meshReturns { MeshReturns.follow(meshReturns, model: payModel, active: isActive) }
-            if isActive { sendDueReplies() } else { replyRetry.cancel() }
+            replyEvent()
         }
-        .onChange(of: meshLinkReady) { if meshLinkReady == true { sendDueReplies() } }
-        .onChange(of: bluetoothOn) { if bluetoothOn == true { sendDueReplies() } }
-        .onChange(of: receiveModel.payment?.ackText) { sendDueReplies() }
-        .onChange(of: receiveModel.paymentPresentation) { sendDueReplies() }
-        .onChange(of: receiveModel.settlement?.receiptText) { sendDueReplies() }
+        .onChange(of: meshLinkReady) { if meshLinkReady == true { replyEvent() } }
+        .onChange(of: bluetoothOn) { if bluetoothOn == true { replyEvent() } }
+        .onChange(of: receiveModel.payment?.ackText) { replyEvent() }
+        .onChange(of: receiveModel.paymentPresentation) { replyEvent() }
+        .onChange(of: receiveModel.settlement?.receiptText) { replyEvent() }
     }
 
-    /// Hands the Receive screen's new ack or receipt to the Bluetooth glue, with the delivery the
-    /// note was accepted from. The glue sends it only to that delivery's sender.
-    private func sendDueReplies() {
-        guard let meshReply else { return }
-        let origin = receiveModel.payment?.meshOrigin ?? .notOverBluetooth
+    /// One reply event for the payment on screen now: its ack and receipt, its presentation and the
+    /// origin its note was first accepted from. Nothing is sent while these screens are hidden.
+    private func replyEvent() {
+        replies?.event(ack: receiveModel.payment?.ackText, receipt: receiveModel.settlement?.receiptText,
+                       presentation: receiveModel.paymentPresentation,
+                       origin: receiveModel.payment?.meshOrigin ?? .notOverBluetooth, active: isActive)
+    }
+
+    /// The Receive card's retry button, only while a reply of the payment on screen failed for a
+    /// passing reason. It resends that payment's failed replies only.
+    private var resendReplyAction: (() -> Void)? {
         let presentation = receiveModel.paymentPresentation
-        let due = MeshReturns.repliesDue(ack: receiveModel.payment?.ackText, receipt: receiveModel.settlement?.receiptText,
-                                         presentation: presentation, sent: repliesSent)
-        var failed: [String] = []
-        for text in due {
-            let key = MeshReturns.replyKey(text, presentation: presentation)
-            if meshReply(text, origin) { repliesSent = Array((repliesSent + [key]).suffix(32)) } else { failed.append(key) }
+        guard let replies, replies.hasFailedReplies(for: presentation) else { return nil }
+        return {
+            replies.resendFailed(presentation: receiveModel.paymentPresentation,
+                                 origin: receiveModel.payment?.meshOrigin ?? .notOverBluetooth, active: isActive)
         }
-        // A passing failure: a timed retry for this presentation only (MeshReplyRetry).
-        let model = receiveModel
-        replyRetry.passFinished(presentation: presentation, failed: failed,
-                                stillCurrent: { model.paymentPresentation == presentation }) { sendDueReplies() }
     }
 }
 
