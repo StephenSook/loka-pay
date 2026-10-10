@@ -27,6 +27,7 @@ Every error is `{ "error": "<name>", "message": "<plain English>" }`.
 | 400 | `bad_pubkey` | A public key is not a 33-byte compressed P-256 point |
 | 400 | `name_length` | Merchant name is not 1 to 64 bytes of UTF-8 after NFC |
 | 404 | `unknown_note` | `GET /v1/notes/{noteId}` for a note this server never saw |
+| 409 | `registration_failed` | Registration has a confirmed failure; includes its transaction signature and explorer link, without a certificate |
 | 422 | a PAYMENT-V1 section 6 name, `bad_ack`, `unknown_allowance`, `unknown_merchant` or `payer_mismatch` | The note or ack failed a stateless check or an identity check (section 4) |
 | 429 | `rate_limited` | The in-memory burst guard tripped; retry after `Retry-After` seconds |
 | 429 | `budget_exhausted` | That wallet's daily budget is spent (team and public pools are separate) |
@@ -45,6 +46,12 @@ Request:
 The server opens an on-chain allowance for that key (`open_allowance`) and signs its certificate. It picks the allowance id uniformly at random from the full `u64` range, never sequentially: the allowance account's address comes from the id alone, so anyone can reserve an id by funding their own allowance first (`programs/README.md`). If `open_allowance` fails because that account already exists, the server picks a new id and retries, and it signs the certificate only after the open transaction confirms. Team devices draw from the table-demo wallet and the demo fee payer; every other key draws from the public-onboarding wallet and the public fee payer, with a smaller cap. The server decides the pool from a list of team key hashes in its own configuration, never from anything in the request.
 
 Idempotent by key: calling again with the same key while its allowance is open returns the same allowance (HTTP 200) instead of opening a second one. A new allowance returns HTTP 201.
+
+Registration pending responses use HTTP 202: `{ "status": "pending", "kind": "payer", "keyHash": "<hex>", "signature": null, "retryAfter": 2 }`. The signature is the saved transaction signature when available. Repost the same request to observe it. Unsigned preparation follows the claim lease. Saved attempts follow the bounded broadcast recovery below. Only the original request can retry an allocation collision proven by a confirmed failed transaction. Confirmed failure and collision rules remain unchanged.
+
+Saved-attempt recovery: after the separate 30 second broadcast lease, a request may resend identical saved bytes at most twice after the original send, only if a history search finds nothing and confirmed height is no greater than the saved last valid height. Ownership is checked immediately before sending. Resends do not sign or reserve again. If an attempt expired and a subsequent history search finds nothing, registration may prepare one replacement per job, with the same plan and allowance id and a new budget reservation. A fenced atomic save consumes that recovery slot; pre-save failures do not. All signatures remain stored. Any found prior result is resolved first; a found signature without a final result blocks replacement. Exhausted recovery remains HTTP 202. Saved settlement replacements use the same exact-byte resend rule but keeps its single replacement and second-expiry rule in section 4.
+
+Expiry controls renewal: only a completed allowance whose recorded expiry has passed may open a new allowance on a later call. Pending registrations never renew. No cap, serial or redeemed-balance lookup triggers renewal. Daily budgets use UTC days and atomically reserve token deposits, funding-wallet rent and fee-payer lamports before signing. Every collision retry has a separate conservative reservation; reservations are never automatically refunded. Team membership, limits and certificate terms are server configuration.
 
 Response:
 
@@ -78,6 +85,8 @@ Request:
 
 The server creates the merchant record on chain (`register_merchant`) if it does not exist and signs the merchant certificate. Idempotent by key; the name in the certificate is the one sent on the first call.
 
+Pending responses have the same shape as payer registration with `kind: "merchant"`; repost to observe the saved signature. Existing on-chain records require verified creation-transaction evidence before a certificate can be issued. Merchant rent and transaction fees consume the selected pool's fee-payer budget, with no funding-wallet transfer.
+
 Response (201 new, 200 existing):
 
 ```json
@@ -102,13 +111,17 @@ Request:
 - When `ack` is present, the server then checks it: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is HTTP 422 `bad_ack`. A valid note with a bad ack is refused rather than settled without the ack, so the caller learns its ack is broken.
 - Then the identity checks, before the note id is claimed or anything is sent: the allowance account for the note's allowance id must exist (else 422 `unknown_allowance`), the merchant record for its payee key hash must exist (else 422 `unknown_merchant`), and the note's payer key must equal the allowance's stored payer key (else 422 `payer_mismatch`). Neither the allowance's payer key nor the existence of a record changes once created, so the server may cache them. Without the payer check, anyone who had seen a note could re-sign its 141 bytes with their own key: the chain would reject that wire, and its failed decision would be cached under the genuine note's id and block the real payment. Found by the Codex review of #19.
 - **The server does not pre-check spend state** (used serial, cap, expiry, earmark). The identity checks above are not spend state: the genuine payer's reused serial still reaches the chain. Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+- The server reads the allowance and merchant accounts and checks their owners, discriminators and stored identities. An RPC failure returns an unsigned HTTP 503 and nothing is claimed.
 
-Only an outcome on chain is final. Once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and it never changes the decision or the CONF.
+Only an outcome on chain is final. Except for the late original-signature rule below, once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and attaching an ack never changes the decision or the CONF.
 
 **One attempt per note id.** The server holds at most one in-flight attempt for a note id (for example a lock or a unique row keyed by note id):
 
 - A second upload while the first is in flight does not build a second transaction. It answers HTTP 202 with the pending body in section 5, and the client polls `GET /v1/notes/{noteId}`.
-- The server records the transaction signature before sending it. If the send or the confirmation wait times out, the server resolves that same signature (`getSignatureStatuses`) until it is confirmed, failed, or its blockhash has expired. It builds a new transaction for that note id only after the old blockhash has expired with the signature unconfirmed, so one note can never produce two redeem attempts that both land.
+- Confirmed transaction failures outside the redeem_note Custom u16 range return status failed, error TransactionFailed and errorCode null. CONF uses failed status with code 0 meaning no representable redeem_note code. A signature without confirmed metadata, slot or block time remains pending. No numeric program error is invented.
+- Settlement fees use a required configured dailyLamports cap per fee payer and shared-clock UTC day, atomically reserved before signing the exact quoted unsigned transaction. Original budget exhaustion returns unsigned HTTP 429 budget_exhausted and releases its unsigned claim. Replacement exhaustion stays pending with the saved signature. Fresh transactions reserve again; exact-byte resends do not. Reservations are never automatically refunded. Unknown admission outcomes do not sign.
+- An unsigned note claim can recover through POST or GET after its 30 second fenced lease. GET revalidates the stored note, ACK and payer identity and preserves the original upload time. Before lease expiry it returns pending with a null signature. Only the token owner may save and broadcast. GET does not consume upload quota.
+- The server records each signature before sending. One rebuild is allowed only after the confirmed block height is strictly past the original last valid block height and a subsequent `getSignatureStatuses` lookup with `searchTransactionHistory: true` finds nothing. Workers prepare before one compare-and-set claims and saves the replacement. Preparation or a failed save before that durable write does not consume the rebuild. Only the worker whose save succeeds may send. Both signatures remain stored, and a second expiry stays pending. A found signature without final metadata does not permit rebuilding. If the original signature is found later, its result takes precedence, including over a recorded replacement result. This is the only exception to the otherwise immutable decision rule.
 - Two gateways uploading the same note together therefore share one attempt and both end with the same CONF.
 
 Response, HTTP 200 once the chain has decided:
@@ -132,7 +145,7 @@ Response, HTTP 200 once the chain has decided:
 | `status` | CONF status byte | `signature` / `explorer` | `error` |
 |---|---|---|---|
 | `settled` | 1 | the redeem transaction | `null` |
-| `failed` | 2 | the failed transaction (opens on the explorer) | the program's error name, `errorCode` its number |
+| `failed` | 2 | the failed transaction (opens on the explorer) | the redeem_note error name and code, or `TransactionFailed` with `errorCode: null` when unavailable |
 
 The phone shows a status only from the verified `conf` bytes, never from these JSON fields (PAYMENT-V1 4.9).
 

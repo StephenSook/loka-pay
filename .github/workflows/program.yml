@@ -85,6 +85,7 @@ jobs:
         run: |
           cargo fmt --all --check
           pnpm typecheck
+          node --test scripts/initialize-vault.test.mjs
           anchor build --ignore-keys
           cargo test --locked -p loka_vault
           diff -u idl/loka_vault.json target/idl/loka_vault.json

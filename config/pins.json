@@ -2,8 +2,8 @@
   "cluster": "devnet",
   "programId": "HSgcxix3LGjdCQ7FGexBosdvzmHz7ZfHdkpyXYYteBGG",
   "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-  "serverEd25519PublicKey": null,
-  "settlementNodeFingerprint": null,
+  "serverEd25519PublicKey": "cce245d81e79e785ddb47967ddf7aeb4f4198aae9d850fc04a0489b4872b7ad4",
+  "settlementNodeFingerprint": "b10d2da8c56dc4588da17772b0047c0e71d7287fd9d49f0e029a015d1daed162",
   "upgradeAuthority": "4RaquyuY9zseQTP5cTBoh8bmvMRvUyJzaHeMqKcbSksS",
   "accounts": {
     "config": "BJwtFZHH5sieHV4doCyWwYgrdgrJt5H29Bft1z9ZAMu9",
