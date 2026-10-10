@@ -142,7 +142,7 @@ export default function PrivacyPage() {
         </p>
         <p>
           The voice is made by ElevenLabs from public payment details only: the amount, how long ago
-          the payment settled, and that the chain checked the payer phone&apos;s signature. Your number
+          the payment settled, and that the chain checked the payer&apos;s signature. Your number
           is never sent to ElevenLabs.
         </p>
       </Section>

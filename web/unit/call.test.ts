@@ -200,7 +200,7 @@ test.describe("speechFor", () => {
     expect(text).toBe(
       "Hello. This is an automated demo call from LOKA Pay at the Hacklanta hackathon, asked for on zerobars dot U S. " +
         "A sandbox payment of 2 dollars and 50 cents was settled on Solana devnet 3 minutes ago. " +
-        "Before paying the shop, the chain checked the signature made by the payer's phone. " +
+        "Before paying the shop, the chain checked the payer's signature. " +
         "This is test money with no real value. Goodbye.",
     );
     expect(text).not.toContain(EM_DASH);
@@ -212,7 +212,7 @@ test.describe("speechFor", () => {
     expect(text).toBe(
       "Bonjour. Ceci est un appel de démonstration automatique de LOKA Pay, au hackathon Hacklanta, demandé sur zerobars point U S. " +
         "Un paiement en bac à sable de 2 dollars et 50 cents a été réglé sur Solana devnet il y a 3 minutes. " +
-        "Avant de payer la boutique, la blockchain a vérifié la signature créée par le téléphone du payeur. " +
+        "Avant de payer la boutique, la blockchain a vérifié la signature du payeur. " +
         "C'est de l'argent de test, sans valeur réelle. Au revoir.",
     );
     expect(text).not.toContain(EM_DASH);

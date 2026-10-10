@@ -1,6 +1,6 @@
 // The words the phone call says (PLAN.md 3.9). Pure: the same payment, language and time always
 // give the same text, which unit/call.test.ts checks. Only public payment details go in: the
-// amount, when it settled and that the program checked the payer phone's signature. Never a
+// amount, when it settled and that the program checked the payer's signature. Never a
 // phone number. ElevenLabs turns this text into the voice (lib/call-server.ts).
 
 import type { CallLang } from "./call-shared";
@@ -71,7 +71,7 @@ export function speechFor(payment: SpokenPayment, lang: CallLang, nowMs: number)
       "Bonjour.",
       "Ceci est un appel de démonstration automatique de LOKA Pay, au hackathon Hacklanta, demandé sur zerobars point U S.",
       `Un paiement en bac à sable de ${amount} a été réglé sur Solana devnet ${ago}.`,
-      "Avant de payer la boutique, la blockchain a vérifié la signature créée par le téléphone du payeur.",
+      "Avant de payer la boutique, la blockchain a vérifié la signature du payeur.",
       "C'est de l'argent de test, sans valeur réelle.",
       "Au revoir.",
     ].join(" ");
@@ -80,7 +80,7 @@ export function speechFor(payment: SpokenPayment, lang: CallLang, nowMs: number)
     "Hello.",
     "This is an automated demo call from LOKA Pay at the Hacklanta hackathon, asked for on zerobars dot U S.",
     `A sandbox payment of ${amount} was settled on Solana devnet ${ago}.`,
-    "Before paying the shop, the chain checked the signature made by the payer's phone.",
+    "Before paying the shop, the chain checked the payer's signature.",
     "This is test money with no real value.",
     "Goodbye.",
   ].join(" ");

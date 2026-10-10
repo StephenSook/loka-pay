@@ -32,8 +32,8 @@ export default async function CallPage() {
         </div>
         <p className="text-xl leading-relaxed">
           Enter your phone number and press a button. Your phone rings, and a voice reads a real settled LOKA Pay payment
-          from Solana devnet: the amount, how long ago it settled, and that the chain checked the signature made by the
-          payer&apos;s phone.
+          from Solana devnet: the amount, how long ago it settled, and that the chain checked the payer&apos;s
+          signature.
         </p>
         <p className="text-muted">Sandbox only: test money on Solana devnet with no value. No real money moves.</p>
       </header>
