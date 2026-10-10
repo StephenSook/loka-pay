@@ -27,6 +27,8 @@ Every error is `{ "error": "<name>", "message": "<plain English>" }`.
 | 400 | `bad_pubkey` | A public key is not a 33-byte compressed P-256 point |
 | 400 | `name_length` | Merchant name is not 1 to 64 bytes of UTF-8 after NFC |
 | 404 | `unknown_note` | `GET /v1/notes/{noteId}` for a note this server never saw |
+| 409 | `registration_failed` | Registration has a confirmed failure; includes its transaction signature and explorer link, without a certificate |
+| 422 | `unknown_allowance`, `unknown_merchant`, `payer_mismatch` | An identity record is missing or invalid, or the payer key does not match the allowance |
 | 422 | a PAYMENT-V1 section 6 name, or `bad_ack` | The note or ack failed a stateless check (section 4) |
 | 429 | `rate_limited` | The in-memory burst guard tripped; retry after `Retry-After` seconds |
 | 429 | `budget_exhausted` | That wallet's daily budget is spent (team and public pools are separate) |
@@ -45,6 +47,10 @@ Request:
 The server opens an on-chain allowance for that key (`open_allowance`) and signs its certificate. It picks the allowance id uniformly at random from the full `u64` range, never sequentially: the allowance account's address comes from the id alone, so anyone can reserve an id by funding their own allowance first (`programs/README.md`). If `open_allowance` fails because that account already exists, the server picks a new id and retries, and it signs the certificate only after the open transaction confirms. Team devices draw from the table-demo wallet and the demo fee payer; every other key draws from the public-onboarding wallet and the public fee payer, with a smaller cap. The server decides the pool from a list of team key hashes in its own configuration, never from anything in the request.
 
 Idempotent by key: calling again with the same key while its allowance is open returns the same allowance (HTTP 200) instead of opening a second one. A new allowance returns HTTP 201.
+
+Registration pending responses use HTTP 202: `{ "status": "pending", "kind": "payer", "keyHash": "<hex>", "signature": null, "retryAfter": 2 }`. The signature is the saved transaction signature when available. Repost the same request to observe it. An uncertain preparation or send is never automatically retried, even after blockhash expiry. Only the original request can retry an allocation collision proven by a confirmed failed transaction. These registration rules differ from the bounded settlement rebuild in section 4.
+
+Expiry controls renewal: only a completed allowance whose recorded expiry has passed may open a new allowance on a later call. Pending registrations never renew. No cap, serial or redeemed-balance lookup triggers renewal. Daily budgets use UTC days and atomically reserve token deposits, funding-wallet rent and fee-payer lamports before signing. Every collision retry has a separate conservative reservation; reservations are never automatically refunded. Team membership, limits and certificate terms are server configuration.
 
 Response:
 
@@ -78,6 +84,8 @@ Request:
 
 The server creates the merchant record on chain (`register_merchant`) if it does not exist and signs the merchant certificate. Idempotent by key; the name in the certificate is the one sent on the first call.
 
+Pending responses have the same shape as payer registration with `kind: "merchant"`; repost to observe the saved signature. Existing on-chain records require verified creation-transaction evidence before a certificate can be issued. Merchant rent and transaction fees consume the selected pool's fee-payer budget, with no funding-wallet transfer.
+
 Response (201 new, 200 existing):
 
 ```json
@@ -100,14 +108,15 @@ Request:
 - `ack` is what the merchant normally sends. It is optional so a payer phone (the Sat 3 AM checkpoint) or a stranger (task 3.29) can settle a note without one; the chain does not need it. Without it, no "held offline" time exists for that note.
 - The server runs the note through PAYMENT-V1 section 6 in order. A failure is HTTP 422 named by that check (`length`, `prefix`, `cluster`, `currency`, `amount_zero`, `wrong_program`, `wrong_mint`, `bad_pubkey`, `high_s`, `bad_signature`). A note shorter than 141 bytes has no note id, which is fine: a 422 does not need one.
 - When `ack` is present, the server then checks it: its signature verifies, its note id equals the note's id, and its key hash equals the note's payee key hash. A bad ack is HTTP 422 `bad_ack`. A valid note with a bad ack is refused rather than settled without the ack, so the caller learns its ack is broken.
-- **The server does not pre-check state** (used serial, cap, expiry, earmark). Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+- **The server does not pre-check spend state** (used serial, cap, expiry, earmark). Those are the chain's job, so a reused serial is sent with preflight skipped and lands as a failed transaction with the program's named error and its own explorer link (task 2.13).
+- Before claiming a note id, the server checks both allowance and merchant PDAs, owners, discriminators and stored identities. The allowance must exist (else unsigned, unsaved HTTP 422 `unknown_allowance`), the merchant record must exist (else 422 `unknown_merchant`), and the payer key must match the allowance (else 422 `payer_mismatch`). RPC failure returns unsigned HTTP 503. These identity checks follow the contract merged in #20 and do not inspect spend state.
 
-Only an outcome on chain is final. Once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and it never changes the decision or the CONF.
+Only an outcome on chain is final. Except for the late original-signature rule below, once a note id has a decision (`settled` or `failed`), every later upload of that note id returns that decision with `replayed: true` and sends nothing new to the chain. A later upload may attach a valid ack the first one lacked; the server stores it for the timing figures, and attaching an ack never changes the decision or the CONF.
 
 **One attempt per note id.** The server holds at most one in-flight attempt for a note id (for example a lock or a unique row keyed by note id):
 
 - A second upload while the first is in flight does not build a second transaction. It answers HTTP 202 with the pending body in section 5, and the client polls `GET /v1/notes/{noteId}`.
-- The server records the transaction signature before sending it. If the send or the confirmation wait times out, the server resolves that same signature (`getSignatureStatuses`) until it is confirmed, failed, or its blockhash has expired. It builds a new transaction for that note id only after the old blockhash has expired with the signature unconfirmed, so one note can never produce two redeem attempts that both land.
+- The server records each signature before sending. One rebuild is allowed only after the confirmed block height is strictly past the original last valid block height and a subsequent `getSignatureStatuses` lookup with `searchTransactionHistory: true` finds nothing. A durable atomic claim permits only one process to rebuild; uncertain preparation consumes that claim. Both signatures remain stored, and a second expiry stays pending. A found signature without final metadata does not permit rebuilding. If the original signature is found later, its result takes precedence, including over a recorded replacement result. This is the only exception to the otherwise immutable decision rule.
 - Two gateways uploading the same note together therefore share one attempt and both end with the same CONF.
 
 Response, HTTP 200 once the chain has decided:
