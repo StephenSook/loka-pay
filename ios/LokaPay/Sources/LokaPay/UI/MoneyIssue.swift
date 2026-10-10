@@ -190,13 +190,17 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
         }
     }
 
+    /// "Nothing was decided" only where API v1 says the chain was not reached; where no answer this
+    /// phone can trust came back (`SettlementError.leavesOutcomeUnknown`), the outcome is unknown.
     static func settlementMessage(_ e: SettlementError) -> String {
         let held = "Nothing was decided on chain; the note stays held on this phone."
+        let unknown = "The note stays held on this phone; Check again asks the server by note id."
         switch e {
         case .refused(let check, _):
             return "The server refused this note before it reached the chain (check: \(check)). \(held)"
         case .network(let code):
-            return "Could not reach the settlement server (\(networkWords(code))). \(held) Try again with signal."
+            return "The connection to the settlement server failed (\(networkWords(code))). The server may have "
+                + "settled the note before the answer was lost, so the outcome is unknown. \(unknown)"
         case .chainUnavailable:
             return "The server could not reach Solana devnet and signed nothing. Try again."
         case .rateLimited(let retryAfter, _):
@@ -204,13 +208,19 @@ public enum MoneyIssueKind: Error, Equatable, Sendable {
                 ?? "The server asked to wait before trying again."
         case .budgetExhausted: return "Today's sandbox budget on the server is spent. \(held)"
         case .http(let status, _, _):
-            return "The settlement server answered HTTP \(status). It may not be running yet. \(held)"
-        case .transport: return "A network error stopped the upload. \(held)"
+            return "The settlement server answered HTTP \(status). It may not be running yet; this phone cannot "
+                + "tell whether it settled the note, so the outcome is unknown. \(unknown)"
+        case .transport:
+            return "A network error stopped the exchange with the settlement server. The server may have settled "
+                + "the note before the answer was lost, so the outcome is unknown. \(unknown)"
         case .invalidResponse, .verification, .confirmationMismatch, .payerMismatch, .merchantMismatch,
              .protocolViolation:
-            return "The server's answer did not verify, so it was not trusted. \(held)"
+            return "The server's answer did not verify, so it was not trusted and the outcome is unknown. \(unknown)"
         case .stillPending: return "The chain has not decided yet. Check again in a moment."
-        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote:
+        case .unknownNote:
+            return "The server has no record of this note, so nothing was decided on chain. Settle it again to "
+                + "upload it; the note stays held on this phone."
+        case .badJSON, .badBase64url, .badPubkey, .nameLength:
             return "The server rejected the request (\(settlementName(e))). \(held)"
         }
     }

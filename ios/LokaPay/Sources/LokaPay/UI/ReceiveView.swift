@@ -173,11 +173,13 @@ public struct ReceiveView: View {
             .buttonStyle(LokaButtonStyle())
             .disabled(payment.ack == nil || model.isWorking)
             if model.isWorking, payment.ack != nil { ProgressView() }
-            if model.pendingSettlement != nil {
-                Text("The server has the note; the chain has not decided yet.")
+            if model.offersCheckAgain {
+                Text(model.settlementOutcomeUnknown ? ReceiveModel.outcomeUnknownText
+                                                    : "The server has the note; the chain has not decided yet.")
                     .font(LokaStyle.body).foregroundStyle(LokaColor.ink)
                 Button("Check again") { Task { await model.checkAgain() } }
                     .buttonStyle(LokaButtonStyle(fill: LokaColor.card, text: LokaColor.ink))
+                    .disabled(model.isWorking)
             }
             Text("Settling needs internet. The status changes only when a server-signed confirmation verifies on this phone.")
                 .font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
@@ -289,6 +291,12 @@ public struct ReceiveView: View {
                                 pending: PendingSettlement(noteId: PreviewFixtures.note0.noteId, signature: nil,
                                                            explorer: nil, retryAfter: 2),
                                 unsettled: 1_000_000),
+                connectivity: ConnectivityMonitor())
+}
+
+#Preview("Receive: answer lost, outcome unknown") {
+    ReceiveView(model: .preview(.received, payment: PreviewFixtures.received(),
+                                issue: .settlement(.network(.timedOut)), unsettled: 1_000_000, outcomeUnknown: true),
                 connectivity: ConnectivityMonitor())
 }
 

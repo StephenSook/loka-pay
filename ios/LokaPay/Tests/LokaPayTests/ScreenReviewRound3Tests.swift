@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import LokaPay
@@ -190,5 +191,128 @@ struct InboxOwnershipTests {
         #expect(old.lastAllowance == nil)
         #expect(fresh.phase == .received)
         #expect(try freshLedger.entries().count == 1)
+    }
+}
+
+@Suite("a lost answer leaves the outcome unknown and offers Check again (review 3, finding 2)")
+@MainActor
+struct OutcomeUnknownTests {
+    let payer = SoftwareP256Signer()
+    let merchant = SoftwareP256Signer()
+
+    /// A Receive model holding one accepted, acknowledged note, with a settlement stub that never retries.
+    func received(_ replies: [StubReply]) async throws -> (ReceiveModel, SignedNote, OfflineLedger, StubTransport) {
+        let ledger = OfflineLedger(url: F.tempURL("ledger.json"))
+        let stub = StubTransport(replies)
+        let model = ReceiveModel(merchantWire: F.merchantWire(merchant: merchant.keyHash), signer: merchant,
+                                 ledger: ledger, settlementClient: APIFixtures.client(stub, retry: .never),
+                                 deployment: F.deployment, serverPublicKey: F.serverKey, now: { F.now })
+        await model.accept(text: PaymentTransport.encode(.allowance, F.allowanceWire(payer: payer.keyHash)))
+        let note = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        await model.accept(text: PaymentTransport.encode(.note, note.wire))
+        #expect(model.payment?.ack != nil)
+        return (model, note, ledger, stub)
+    }
+
+    func settledReply(_ note: SignedNote) -> StubReply {
+        StubReply(status: 200, body: F.decisionBody(conf: F.confWire(noteId: note.noteId, status: 1), noteId: note.noteId,
+                                                    jsonStatus: "settled"))
+    }
+
+    @Test("a dropped or unverifiable answer says the outcome is unknown; a refusal still says nothing was decided")
+    func copy() {
+        let unknown: [SettlementError] = [
+            .network(.timedOut), .network(.networkConnectionLost), .network(.notConnectedToInternet), .transport("x"),
+            .http(status: 502, error: nil, message: nil), .invalidResponse("x"), .verification(.badSignature),
+            .confirmationMismatch, .protocolViolation("x"),
+        ]
+        for error in unknown {
+            let message = MoneyIssueKind.settlement(error).message
+            #expect(error.leavesOutcomeUnknown, "\(error)")
+            #expect(message.contains("the outcome is unknown"), "\(error): \(message)")
+            #expect(message.contains("Check again asks the server by note id"), "\(error)")
+            #expect(!message.contains("Nothing was decided"), "\(error): \(message)")
+        }
+        let decidedNothing: [SettlementError] = [
+            .refused(check: "bad_signature", message: ""), .chainUnavailable(message: ""), .budgetExhausted(message: ""),
+            .unknownNote(message: ""), .badJSON(message: ""), .rateLimited(retryAfter: 2, message: ""),
+        ]
+        for error in decidedNothing {
+            #expect(!error.leavesOutcomeUnknown, "\(error)")
+            #expect(!MoneyIssueKind.settlement(error).message.contains("unknown"), "\(error)")
+        }
+        #expect(MoneyIssueKind.settlement(.refused(check: "bad_ack", message: "")).message
+                .contains("Nothing was decided on chain"))
+        #expect(!ReceiveModel.outcomeUnknownText.contains("\u{2014}") && !ReceiveModel.outcomeUnknownText.contains("\u{2013}"))
+    }
+
+    @Test("after a timeout the note stays reserved and Check again reads GET /v1/notes/{id}, verifying the CONF")
+    func checkAgainAfterTimeout() async throws {
+        let n = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let (model, note, ledger, stub) = try await received([StubReply(failure: URLError(.timedOut)), settledReply(n)])
+        #expect(note.noteId == n.noteId)
+        #expect(!model.offersCheckAgain, "nothing to check before any call")
+        await model.settle()
+        #expect(model.issue?.kind == .settlement(.network(.timedOut)))
+        #expect(model.phase == .received)
+        #expect(model.pendingSettlement == nil, "no 202 came back")
+        #expect(model.settlementOutcomeUnknown)
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+        #expect(try ledger.unsettledTotal(allowanceId: F.allowanceId) == 1_000_000)
+
+        await model.checkAgain()
+        let request = try #require(stub.requests.last)
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.path == "/v1/notes/\(note.noteId.hex)")
+        #expect(model.phase == .settled)
+        #expect(model.settlement?.status == .paid)
+        #expect(!model.settlementOutcomeUnknown)
+        #expect(try ledger.entries().first?.state == .settled)
+    }
+
+    @Test("a CONF from another key on Check again is not trusted: the outcome stays unknown and the note reserved")
+    func checkAgainRogueConf() async throws {
+        let n = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let rogue = F.confWire(noteId: n.noteId, status: 1, signedBy: Curve25519.Signing.PrivateKey())
+        let (model, _, ledger, _) = try await received([
+            StubReply(failure: URLError(.networkConnectionLost)),
+            StubReply(status: 200, body: F.decisionBody(conf: rogue, noteId: n.noteId, jsonStatus: "settled")),
+        ])
+        await model.settle()
+        await model.checkAgain()
+        #expect(model.phase == .received)
+        #expect(model.issue?.kind == .settlement(.verification(.badSignature)))
+        #expect(model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
+    }
+
+    @Test("Settle again after a lost answer uploads the original note bytes and the same ACK")
+    func reuploadSendsOriginalBytes() async throws {
+        let n = try F.note(payer: payer, payee: merchant.keyHash, amount: 1_000_000, serial: 0)
+        let (model, note, _, stub) = try await received([StubReply(failure: URLError(.networkConnectionLost)),
+                                                         settledReply(n)])
+        await model.settle()
+        #expect(model.offersCheckAgain)
+        await model.settle()
+        #expect(model.settlement?.status == .paid)
+        #expect(stub.requests.count == 2)
+        let bodies = stub.requests.map { APIFixtures.bodyObject($0) }
+        #expect(bodies[0]["note"] as? String == Base64URL.encode(note.wire))
+        #expect(bodies[1]["note"] as? String == Base64URL.encode(note.wire))
+        #expect(bodies[0]["ack"] as? String == bodies[1]["ack"] as? String)
+        #expect(stub.requests.allSatisfy { $0.httpMethod == "POST" && $0.url?.path == "/v1/notes" })
+    }
+
+    @Test("404 unknown_note on Check again means nothing was decided: Check again gives way to Settle")
+    func unknownNoteSettlesTheQuestion() async throws {
+        let (model, _, ledger, _) = try await received([StubReply(failure: URLError(.timedOut)),
+                                                        APIFixtures.errorReply(404, "unknown_note")])
+        await model.settle()
+        await model.checkAgain()
+        #expect(model.issue?.kind == .settlement(.unknownNote(message: "m")))
+        #expect(model.issue?.message.contains("Settle it again") == true)
+        #expect(!model.offersCheckAgain)
+        #expect(try ledger.entries().first?.state == .pending)
     }
 }

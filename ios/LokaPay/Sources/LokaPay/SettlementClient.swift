@@ -155,6 +155,23 @@ extension SettlementError {
         .timedOut, .networkConnectionLost, .notConnectedToInternet,
         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
     ]
+
+    /// True when a note upload or read got no answer this phone can trust: the request may have
+    /// reached the server, which may have settled the note before the answer was lost (or sent one
+    /// that did not verify). Only a verified CONF says what happened, so the note stays reserved and
+    /// the screen offers Check again (`GET /v1/notes/{noteId}`). False for the answers API v1
+    /// defines as reaching no decision: a 422 refusal, the 400 errors, `unknown_note`, the 429s and
+    /// `chain_unavailable` (nothing was signed), and for `stillPending` (the chain is deciding).
+    public var leavesOutcomeUnknown: Bool {
+        switch self {
+        case .network, .transport, .http, .invalidResponse, .verification, .confirmationMismatch,
+             .payerMismatch, .merchantMismatch, .protocolViolation:
+            return true
+        case .badJSON, .badBase64url, .badPubkey, .nameLength, .unknownNote, .refused, .rateLimited,
+             .budgetExhausted, .chainUnavailable, .stillPending:
+            return false
+        }
+    }
 }
 
 /// Ends a budgeted call; `waitForDecision` and `settleAndWait` turn it into `.stillPending`.

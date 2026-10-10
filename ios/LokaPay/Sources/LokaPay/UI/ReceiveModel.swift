@@ -64,6 +64,10 @@ public final class ReceiveModel {
     public private(set) var settlement: SettledPayment?
     /// The last HTTP 202 for this note: the chain has not decided yet. Unsigned.
     public private(set) var pendingSettlement: PendingSettlement?
+    /// The last settlement call for the note on screen got no answer this phone can trust
+    /// (`SettlementError.leavesOutcomeUnknown`): the server may have settled it, so the note stays
+    /// reserved and Check again is offered.
+    public private(set) var settlementOutcomeUnknown = false
     public private(set) var issue: MoneyIssue?
     /// The allowance a proven conflicting spend was seen for (a second valid note from that
     /// certificate's payer on a serial already in the ledger). Read it through `conflictingSpend`,
@@ -560,7 +564,20 @@ public final class ReceiveModel {
         }
     }
 
-    /// Asks the server again after a pending answer (`GET /v1/notes/{noteId}`).
+    /// True while the note on screen has a pending answer, or a call whose outcome is unknown: Check
+    /// again then asks the server by note id.
+    public var offersCheckAgain: Bool {
+        phase == .received && (pendingSettlement != nil || settlementOutcomeUnknown)
+    }
+
+    /// Shown with Check again when the outcome is unknown. A constant string, so it is readable from
+    /// any isolation domain.
+    public nonisolated static let outcomeUnknownText =
+        "No answer this phone can trust came back, so whether the server settled this note is unknown. "
+        + "Check again asks the server by note id; Settle again sends the same note."
+
+    /// Asks the server by note id (`GET /v1/notes/{noteId}`) after a pending answer or a call whose
+    /// outcome is unknown. The CONF it returns is verified exactly as for an upload.
     public func checkAgain() async {
         guard phase == .received, let current = payment, let ack = current.ack, !isWorking else { return }
         guard let client = settlementClient else { return report(.serverNotConnected) }
@@ -578,6 +595,7 @@ public final class ReceiveModel {
         switch outcome {
         case .pending(let pending):
             pendingSettlement = pending
+            settlementOutcomeUnknown = false
             issue = nil
         case .decided(let decision):
             let bytes = Bundles.receipt(note: current.note, ack: ack, confirmationWire: decision.confirmationWire)
@@ -585,13 +603,14 @@ public final class ReceiveModel {
             do {
                 receipt = try Receipts.verify(bytes, deployment: deployment, serverPublicKey: serverPublicKey)
             } catch let error as PaymentError {
-                return report(.settlement(.verification(error)))
+                return reportSettlement(SettlementError.verification(error))
             } catch {
-                return report(.settlement(.verification(.transport)))
+                return reportSettlement(SettlementError.verification(.transport))
             }
             settlement = SettledPayment(receipt: receipt, receiptText: PaymentTransport.encode(.receipt, bytes),
                                         replayed: decision.replayed, reasonUnsigned: decision.reason)
             pendingSettlement = nil
+            settlementOutcomeUnknown = false
             issue = nil
             phase = .settled
             do {
@@ -604,13 +623,20 @@ public final class ReceiveModel {
         }
     }
 
+    /// Shows a failed settlement call. The ledger is never touched here, so the note stays reserved
+    /// whatever went wrong. Only an answer API v1 defines as "no decision" settles the question;
+    /// any other failure leaves the outcome unknown and offers Check again.
     private func reportSettlement(_ error: Error) {
         if error is CancellationError { return }
-        if let settlement = error as? SettlementError {
-            if case .stillPending(let pending) = settlement { pendingSettlement = pending }
-            return report(.settlement(settlement))
+        let settlement = (error as? SettlementError) ?? .transport(String(describing: error))
+        switch settlement {
+        case .stillPending(let pending): pendingSettlement = pending
+        // The server never attempted this note id, so no attempt is in flight: Settle uploads it.
+        case .unknownNote: pendingSettlement = nil
+        default: break
         }
-        report(.settlement(.transport(String(describing: error))))
+        settlementOutcomeUnknown = settlement.leavesOutcomeUnknown
+        report(.settlement(settlement))
     }
 
     /// Drops the note waiting for its allowance (the payer left, or sent the wrong note). Only the
@@ -637,6 +663,7 @@ public final class ReceiveModel {
         payment = nil
         settlement = nil
         pendingSettlement = nil
+        settlementOutcomeUnknown = false
         issue = nil
         conflictAllowanceId = nil
         // The previous payer's allowance is not progress for the next one.
@@ -677,6 +704,7 @@ extension ReceiveModel {
     static func preview(_ phase: Phase, payment: ReceivedPayment? = nil, settlement: SettledPayment? = nil,
                         pending: PendingSettlement? = nil, issue: MoneyIssueKind? = nil, conflict: Bool = false,
                         unsettled: UInt64? = nil, waitingNote: SignedNote? = nil, bluetoothInbox: Bool = false,
+                        outcomeUnknown: Bool = false,
                         serverKey: Data? = PreviewFixtures.serverKey) -> ReceiveModel {
         let model = ReceiveModel(merchantWire: PreviewFixtures.merchantWire, signer: PreviewFixtures.merchantSigner,
                                  ledger: OfflineLedger(url: PreviewFixtures.scratchURL("preview-ledger.json")),
@@ -688,6 +716,7 @@ extension ReceiveModel {
         model.payment = payment
         model.settlement = settlement
         model.pendingSettlement = pending
+        model.settlementOutcomeUnknown = outcomeUnknown
         model.waitingNote = waitingNote
         // A ready screen with an unsettled figure has seen the payer's allowance; a bare ready
         // screen has seen nothing yet.
