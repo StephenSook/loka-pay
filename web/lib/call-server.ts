@@ -446,7 +446,18 @@ async function callFlow(request: Request, deps: CallDeps): Promise<Response> {
   // compared (in constant time) before the failure limiter is looked at. A correct code never
   // meets the limiter, so wrong codes from a shared address (a venue's Wi-Fi) cannot block a
   // judge who has the right one; only wrong or missing codes are counted, and only they are
-  // refused once that address is past its limit.
+  // refused once that address is past its limit, still before any upstream call.
+  //
+  // The tradeoff, chosen on purpose: the brute-force defense is the code itself, not this
+  // limiter. DESK_CODE_RULE asks for 8 or more letters and digits, and the production code is 8
+  // characters from a 31-symbol alphabet, 31^8 = 852,891,037,441 (about 8.5 x 10^11) codes, far
+  // beyond what any request rate a serverless function can serve could try. The per-address
+  // limiter only cuts noise, and the code can be rotated in Vercel at any time.
+  //
+  // What the code does not prove: that the caller owns the number they typed. A holder of the
+  // code can make our number ring any US number, within the caps. That risk is accepted (the
+  // same model as ATLAS); the page says "Only enter your own number", and the bounds are the
+  // desk code, US numbers only, the caps, and the Vonage account's destination limits.
   const client = clientKey(request, deps.clientSecret);
   if (client === null) return refuse(400, "bad_request", "the request carries no client address");
   if (deskCode !== null && (code === null || !deskCodeMatches(deskCode, code))) {
