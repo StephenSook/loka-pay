@@ -100,15 +100,20 @@ export class RegistrationGateway implements RegistrationChain {
     const signature = await this.connection.sendRawTransaction(Buffer.from(attempt.rawTransaction, 'base64'), { skipPreflight: true, maxRetries: 0 });
     if (signature !== attempt.signature) throw new Error('Unexpected RPC signature');
   }
+  async blockHeight(): Promise<number> { return this.connection.getBlockHeight('confirmed'); }
   async observe(attempt: PreparedAttempt, plan: RegistrationPlan): Promise<'ok' | 'collision' | 'failed' | null> {
+    return (await this.lookup(attempt, plan)).outcome;
+  }
+  async lookup(attempt: PreparedAttempt, plan: RegistrationPlan): Promise<{ found: boolean; outcome: 'ok' | 'collision' | 'failed' | null }> {
     const { value: [status] } = await this.connection.getSignatureStatuses([attempt.signature], { searchTransactionHistory: true });
-    if (!status || !['confirmed', 'finalized'].includes(status.confirmationStatus ?? '')) return null;
-    if (status.err === null) return 'ok';
+    if (!status) return { found: false, outcome: null };
+    if (!['confirmed', 'finalized'].includes(status.confirmationStatus ?? '')) return { found: true, outcome: null };
+    if (status.err === null) return { found: true, outcome: 'ok' };
     if (JSON.stringify(status.err) === JSON.stringify({ InstructionError: [0, { Custom: 0 }] })) {
       const tx = await this.connection.getTransaction(attempt.signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
       const a = addresses(this.deployment, plan), expected = (plan.kind === 'payer' ? a.allowance : a.merchant).toBase58();
-      if (tx?.meta?.err && tx.meta.logMessages?.some(line => line.startsWith('Allocate:') && line.includes(expected) && line.includes('already in use'))) return 'collision';
+      if (tx?.meta?.err && tx.meta.logMessages?.some(line => line.startsWith('Allocate:') && line.includes(expected) && line.includes('already in use'))) return { found: true, outcome: 'collision' };
     }
-    return 'failed';
+    return { found: true, outcome: 'failed' };
   }
 }

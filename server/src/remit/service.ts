@@ -39,7 +39,7 @@ export class RegistrationService {
     }
     // A takeover keeps the original name, pool, policy and expiry. Renewal has a new plan and job id.
     job = await this.options.store.get(kind, request.keyHash);
-    // Only a fenced winner can save then send. A saved attempt is never taken over by the lease.
+    // Only the fenced winner can save then send. Saved-attempt recovery has a separate lease.
     let reserved = false;
     try {
       if (kind === 'merchant') {
@@ -76,7 +76,7 @@ export class RegistrationService {
           return this.resolve(await this.options.store.get(kind, request.keyHash), false);
         }
         job.plan = plan; job.attempt = attempt;
-        await this.options.chain.send(attempt);
+        await this.options.store.broadcast(job, attempt, a => this.options.chain.send(a));
         const outcome = await this.options.chain.observe(attempt, plan);
         if (kind === 'payer' && outcome === 'collision') continue;
         return this.resolve(job, true, outcome);
@@ -96,6 +96,42 @@ export class RegistrationService {
       if (error instanceof HttpError) throw error;
       throw new HttpError(503, 'chain_unavailable');
     }
+  }
+  private async recover(job: Job): Promise<Result> {
+    // A prior transaction can supply the result even after a saved replacement was prepared.
+    for (const saved of await this.options.store.history(job)) {
+      if (saved.attempt.signature === job.attempt!.signature) continue;
+      const prior = await this.options.chain.lookup(saved.attempt, saved.plan);
+      if (prior.outcome === 'ok') return this.complete({ ...job, plan: saved.plan }, saved.attempt.signature, false);
+      if (prior.found && prior.outcome === null) return this.pending(job);
+    }
+    const height = await this.options.chain.blockHeight();
+    if (!Number.isSafeInteger(height) || height < 0) return this.pending(job);
+    // Search history after observing height so an absent cached lookup cannot authorize a replacement.
+    const current = await this.options.chain.lookup(job.attempt!, job.plan);
+    if (current.outcome !== null) return this.resolve(job, false, current.outcome);
+    if (current.found) return this.pending(job);
+    if (height <= job.attempt!.lastValidBlockHeight) {
+      await this.options.store.broadcast(job, job.attempt!, a => this.options.chain.send(a));
+      return this.pending(job);
+    }
+    const token = await this.options.store.claimRecovery(job);
+    if (!token) return this.pending(job);
+    // An expired certificate plan cannot open a new allowance. Never silently change its terms.
+    if (job.plan.kind === 'payer' && job.plan.expiry <= this.now()) return this.pending(job);
+    const quote = await this.options.chain.quote(job.plan);
+    if (quote.blockhash === job.attempt!.blockhash || quote.lastValidBlockHeight <= height) return this.pending(job);
+    const latest = await this.options.chain.lookup(job.attempt!, job.plan);
+    if (latest.outcome !== null) return this.resolve(job, false, latest.outcome);
+    if (latest.found) return this.pending(job);
+    const day = new Date(this.now() * 1000).toISOString().slice(0, 10);
+    if (!await this.options.store.reserve(job.plan.pool, day, quote.cost, job.plan.policy.daily, { id: job.id, token, liveLease: true })) return this.pending(job);
+    const attempt = await this.options.chain.sign(quote, job.plan);
+    if (attempt.signature === job.attempt!.signature) return this.pending(job);
+    if (!await this.options.store.saveRecovery(job, attempt, token)) return this.pending(job);
+    job = { ...job, attempt };
+    await this.options.store.broadcast(job, attempt, a => this.options.chain.send(a));
+    return this.resolve(job, false);
   }
   private async complete(job: Job, signature: string, created: boolean): Promise<Result> {
     const p = job.plan;
@@ -127,6 +163,7 @@ export class RegistrationService {
         error: 'registration_failed', message: 'The registration transaction failed on chain.',
         signature: job.attempt.signature, explorer: `https://explorer.solana.com/tx/${job.attempt.signature}?cluster=devnet`,
       } });
+      if (outcome === null) return await this.recover(job);
       return this.pending(job);
     } catch { return this.pending(job); }
   }

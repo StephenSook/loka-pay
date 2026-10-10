@@ -14,6 +14,8 @@ export interface RegistrationPlan extends RegistrationRequest {
 }
 export interface Quote { message: string; blockhash: string; lastValidBlockHeight: number; cost: Cost }
 export interface RegistrationChain {
+  blockHeight(): Promise<number>;
+  lookup(attempt: PreparedAttempt, plan: RegistrationPlan): Promise<{ found: boolean; outcome: 'ok' | 'collision' | 'failed' | null }>;
   taken(id: string): Promise<boolean>;
   existingMerchant(publicKey: string): Promise<string | null>;
   quote(plan: RegistrationPlan): Promise<Quote>;

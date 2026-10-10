@@ -1,3 +1,4 @@
+import type { PreparedAttempt } from '../settle/types.js';
 import { randomBytes } from 'node:crypto';
 import { afterEach, expect, test, vi } from 'vitest';
 import Fastify from 'fastify';
@@ -18,6 +19,8 @@ const key = () => P.base64urlEncode(p256.getPublicKey(randomBytes(32)));
 const policy: Policy = { capUnits: '100', offlineLimitUnits: '50', bondUnits: '5', lifetimeSeconds: 3600, earmarks: [],
   daily: { units: '210', funderLamports: '20', feeLamports: '30' } };
 class Chain implements RegistrationChain {
+  blockHeight = vi.fn(async () => 0);
+  lookup = vi.fn(async (_attempt: PreparedAttempt, _plan: RegistrationPlan) => ({ found: this.outcome !== null, outcome: this.outcome }));
   taken = vi.fn(async (_id: string) => false);
   existingMerchant = vi.fn(async (_publicKey: string): Promise<string | null> => null);
   quote = vi.fn(async (_plan: RegistrationPlan): Promise<Quote> => ({ message: 'unsigned', blockhash: 'test',
@@ -25,7 +28,7 @@ class Chain implements RegistrationChain {
       funderLamports: _plan.kind === 'payer' ? '10' : '0', feeLamports: '10' } }));
   sign = vi.fn(async (_quote: Quote, _plan: RegistrationPlan) => ({ signature: `signature-${this.sign.mock.calls.length}`,
     rawTransaction: 'test-only', blockhash: 'test', lastValidBlockHeight: 100 }));
-  send = vi.fn(async () => {});
+  send = vi.fn(async (_attempt: PreparedAttempt) => {});
   outcome: 'ok' | 'collision' | 'failed' | null = 'ok';
   observe = vi.fn(async () => this.outcome);
 }
@@ -185,14 +188,15 @@ test('concurrent service instances share one claim, signature and certificate', 
   expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
 });
 
-test('uncertain sends stay pending across restarts, midnight and expiry without new budgets or sends', async () => {
+test('uncertain sends recover with identical bytes across restarts and without new budgets', async () => {
   const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
   f.chain.send.mockImplementation(async () => { throw new Error('timeout'); });
   expect((await f.post('payers', { publicKey })).statusCode).toBe(202);
   f.setNow(1800200000);
   const other = new RegistrationService({ ...f.options, store: new RegistrationStore(f.db, 'test-deployment', f.options.now) });
   expect((await other.submit('payer', { publicKey })).statusCode).toBe(202);
-  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1); expect(f.allow).not.toHaveBeenCalled();
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(2); expect(f.allow).not.toHaveBeenCalled();
+  expect(f.chain.send.mock.calls[1]).toEqual(f.chain.send.mock.calls[0]);
 });
 
 test('atomic budgets reject concurrent overflow and public traffic cannot consume team budgets', async () => {
@@ -283,4 +287,99 @@ test('each budget dimension caps independently and arithmetic stays exact above 
     expect(await f.store.reserve('public', dimension, { ...zero, [dimension]: '2' }, limit)).toBe(false);
     expect(await f.store.reserve('public', dimension, { ...zero, [dimension]: '1' }, limit)).toBe(true);
   }
+});
+
+test('saved registration resends are leased, bounded and use the saved signature', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  f.chain.send.mockRejectedValueOnce(new Error('lost send'));
+  const first = await f.service.submit('payer', { publicKey });
+  f.setNow(1800000029); await f.service.submit('payer', { publicKey });
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  f.setNow(1800000030);
+  const other = new RegistrationService({ ...f.options, store: new RegistrationStore(f.db, 'test-deployment', f.options.now) });
+  await Promise.all([f.service.submit('payer', { publicKey }), other.submit('payer', { publicKey })]);
+  expect(f.chain.send).toHaveBeenCalledTimes(2);
+  f.setNow(1800000060); await other.submit('payer', { publicKey });
+  f.setNow(1800000090); await other.submit('payer', { publicKey });
+  expect(f.chain.send).toHaveBeenCalledTimes(3);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+  expect(f.chain.send.mock.calls.every(([a]) => a.signature === first.body.signature)).toBe(true);
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
+});
+
+test('a crash after saving registration but before broadcast resumes saved bytes', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  vi.spyOn(f.store, 'broadcast').mockRejectedValueOnce(new Error('crash'));
+  const first = await f.service.submit('payer', { publicKey });
+  expect(f.chain.send).not.toHaveBeenCalled();
+  f.setNow(1800000030);
+  await f.service.submit('payer', { publicKey });
+  expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(f.chain.send.mock.calls[0][0].signature).toBe(first.body.signature);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1);
+});
+
+test('expired absent registration replaces once with the same plan and id after history search', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  await f.service.submit('payer', { publicKey });
+  const original = await f.store.get('payer', unsignedJob('payer', publicKey).plan.keyHash);
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.quote.mockImplementation(async plan => ({ message: 'fresh', blockhash: 'fresh', lastValidBlockHeight: 200,
+    cost: { units: (BigInt(plan.policy.capUnits) + BigInt(plan.policy.bondUnits)).toString(), funderLamports: '10', feeLamports: '10' } }));
+  f.chain.sign.mockImplementation(async () => ({ signature: 'replacement', rawTransaction: 'new-wire', blockhash: 'fresh', lastValidBlockHeight: 200 }));
+  const other = new RegistrationService({ ...f.options, store: new RegistrationStore(f.db, 'test-deployment', f.options.now) });
+  await Promise.all([f.service.submit('payer', { publicKey }), other.submit('payer', { publicKey })]);
+  const saved = await f.store.get('payer', original.plan.keyHash);
+  expect(saved.plan).toEqual(original.plan); expect(saved.attempt!.signature).toBe('replacement');
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  expect(await f.store.history(saved)).toHaveLength(2);
+  f.setNow(1800000060); f.chain.blockHeight.mockResolvedValue(201);
+  expect((await other.submit('payer', { publicKey })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(2);
+});
+
+test('expired registration found in history never signs a replacement', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  await f.service.submit('payer', { publicKey }); f.setNow(1800000030);
+  f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.lookup.mockResolvedValue({ found: true, outcome: 'ok' });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(200);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('registration recovery preparation failure leaves the fenced replacement available', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  await f.service.submit('payer', { publicKey });
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.quote.mockRejectedValueOnce(new Error('quote unavailable'));
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
+  f.setNow(1800000060);
+  f.chain.quote.mockResolvedValue({ message: 'fresh', blockhash: 'fresh', lastValidBlockHeight: 200,
+    cost: { units: '105', funderLamports: '10', feeLamports: '10' } });
+  f.chain.sign.mockResolvedValue({ signature: 'fresh', rawTransaction: 'fresh', blockhash: 'fresh', lastValidBlockHeight: 200 });
+  expect((await f.service.submit('payer', { publicKey })).body.signature).toBe('fresh');
+  expect(f.chain.sign).toHaveBeenCalledTimes(2); expect(f.chain.send).toHaveBeenCalledTimes(2);
+});
+
+test('a found registration signature without final metadata blocks recovery', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  await f.service.submit('payer', { publicKey });
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.lookup.mockResolvedValue({ found: true, outcome: null });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+});
+
+test('an expired registration recovery lease cannot reserve or save its prepared replacement', async () => {
+  const f = await fixture(); const publicKey = key(); f.chain.outcome = null;
+  await f.service.submit('payer', { publicKey });
+  f.setNow(1800000030); f.chain.blockHeight.mockResolvedValue(101);
+  f.chain.quote.mockImplementationOnce(async () => {
+    f.setNow(1800000060);
+    return { message: 'fresh', blockhash: 'fresh', lastValidBlockHeight: 200,
+      cost: { units: '105', funderLamports: '10', feeLamports: '10' } };
+  });
+  expect((await f.service.submit('payer', { publicKey })).statusCode).toBe(202);
+  expect(f.chain.sign).toHaveBeenCalledTimes(1); expect(f.chain.send).toHaveBeenCalledTimes(1);
+  expect(await f.store.spent('public', '2027-01-15')).toEqual({ units: '105', funderLamports: '10', feeLamports: '10' });
 });

@@ -1,3 +1,4 @@
+import { BroadcastLease } from '../settle/broadcast.js';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../settle/store.js';
 import type { PreparedAttempt } from '../settle/types.js';
@@ -6,11 +7,16 @@ import type { Cost, Job, Kind, PoolName, RegistrationPlan, Result } from './type
 export class RegistrationStore {
   // Production leases use the shared database clock. Override only for deterministic local tests.
   constructor(private readonly db: Database, private readonly namespace: string, private readonly clock?: () => number) {}
+  async broadcast(job: Job, attempt: PreparedAttempt, send: (attempt: PreparedAttempt) => Promise<void>): Promise<boolean> {
+    return new BroadcastLease(this.db, this.clock).send(`registration:${this.namespace}:${job.id}`, attempt, send);
+  }
   async migrate(): Promise<void> {
+    await new BroadcastLease(this.db, this.clock).migrate();
     await this.db.query(`CREATE TABLE IF NOT EXISTS registration_jobs (
       namespace text NOT NULL, kind text NOT NULL, key_hash text NOT NULL,
       id text NOT NULL UNIQUE, plan jsonb NOT NULL, attempt jsonb, result jsonb,
       PRIMARY KEY(namespace,kind,key_hash))`);
+    await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS recovery_used boolean NOT NULL DEFAULT false');
     await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS claim_token text');
     await this.db.query('ALTER TABLE registration_jobs ADD COLUMN IF NOT EXISTS lease_expires_at double precision');
     await this.db.query(`CREATE TABLE IF NOT EXISTS registration_attempts (
@@ -30,7 +36,7 @@ export class RegistrationStore {
       ON CONFLICT(namespace,kind,key_hash) DO UPDATE
       SET id=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.id ELSE EXCLUDED.id END,
         plan=CASE WHEN registration_jobs.result IS NULL THEN registration_jobs.plan ELSE EXCLUDED.plan END,
-        attempt=NULL,result=NULL,claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at
+        attempt=NULL,result=NULL,recovery_used=false,claim_token=EXCLUDED.claim_token,lease_expires_at=EXCLUDED.lease_expires_at
       WHERE (registration_jobs.attempt IS NULL AND registration_jobs.result IS NULL
           AND COALESCE(registration_jobs.lease_expires_at,0)<=EXCLUDED.lease_expires_at-30)
         OR (registration_jobs.kind='payer' AND registration_jobs.result->>'statusCode' IN ('200','201')
@@ -51,7 +57,7 @@ export class RegistrationStore {
     [this.namespace, id, token, this.clock?.() ?? null]);
     return rows.length === 1;
   }
-  async reserve(pool: PoolName, day: string, cost: Cost, limits: Cost, owner?: { id: string; token: string }): Promise<boolean> {
+  async reserve(pool: PoolName, day: string, cost: Cost, limits: Cost, owner?: { id: string; token: string; liveLease?: boolean }): Promise<boolean> {
     for (const value of [...Object.values(cost), ...Object.values(limits)]) {
       if (!/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > (1n << 64n) - 1n) throw new Error('Invalid budget units');
     }
@@ -59,6 +65,7 @@ export class RegistrationStore {
     // This single statement is atomic on pg.Pool too, without a connection-bound transaction.
     const result = await this.db.query(`WITH owner AS (
       SELECT id FROM registration_jobs WHERE namespace=$1 AND id=$8 AND claim_token=$9 AND result IS NULL
+        AND (NOT $11::boolean OR lease_expires_at>COALESCE($10::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
         AND (attempt IS NOT NULL OR lease_expires_at>COALESCE($10::double precision,EXTRACT(EPOCH FROM clock_timestamp())))
       FOR UPDATE)
       INSERT INTO registration_budgets(namespace,pool,day,units,funder,fee,limits)
@@ -74,7 +81,7 @@ export class RegistrationStore {
         AND registration_budgets.funder+EXCLUDED.funder <= ($7::jsonb->>'funderLamports')::numeric
         AND registration_budgets.fee+EXCLUDED.fee <= ($7::jsonb->>'feeLamports')::numeric RETURNING pool`,
     [this.namespace, pool, day, cost.units, cost.funderLamports, cost.feeLamports, JSON.stringify(limits),
-      owner?.id ?? null, owner?.token ?? null, this.clock?.() ?? null]);
+      owner?.id ?? null, owner?.token ?? null, this.clock?.() ?? null, owner?.liveLease ?? false]);
     return result.rows.length === 1;
   }
   async spent(pool: PoolName, day: string): Promise<Cost | null> {
@@ -93,6 +100,30 @@ export class RegistrationStore {
       SELECT id,$6,plan,attempt FROM saved RETURNING job_id`,
     [this.namespace, job.id, JSON.stringify(plan), JSON.stringify(attempt), job.attempt?.signature ?? null, attempt.signature,
       token, this.clock?.() ?? null]);
+    return rows.length === 1;
+  }
+  async history(job: Job): Promise<{ plan: RegistrationPlan; attempt: PreparedAttempt }[]> {
+    const { rows } = await this.db.query('SELECT plan,attempt FROM registration_attempts WHERE job_id=$1', [job.id]);
+    return rows as unknown as { plan: RegistrationPlan; attempt: PreparedAttempt }[];
+  }
+  async claimRecovery(job: Job): Promise<string | null> {
+    const token = randomUUID();
+    const { rows } = await this.db.query(`UPDATE registration_jobs SET claim_token=$4,
+      lease_expires_at=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))+30
+      WHERE namespace=$1 AND id=$2 AND attempt->>'signature'=$3 AND result IS NULL AND NOT recovery_used
+        AND COALESCE(lease_expires_at,0)<=COALESCE($5::double precision,EXTRACT(EPOCH FROM clock_timestamp()))
+      RETURNING id`, [this.namespace, job.id, job.attempt!.signature, token, this.clock?.() ?? null]);
+    return rows.length ? token : null;
+  }
+  async saveRecovery(job: Job, attempt: PreparedAttempt, token: string): Promise<boolean> {
+    const { rows } = await this.db.query(`WITH saved AS (
+      UPDATE registration_jobs SET attempt=$4::jsonb,recovery_used=true
+      WHERE namespace=$1 AND id=$2 AND attempt->>'signature'=$3 AND result IS NULL AND NOT recovery_used
+        AND claim_token=$5 AND lease_expires_at>COALESCE($6::double precision,EXTRACT(EPOCH FROM clock_timestamp()))
+      RETURNING id,plan,attempt)
+      INSERT INTO registration_attempts(job_id,signature,plan,attempt)
+      SELECT id,$7,plan,attempt FROM saved RETURNING job_id`,
+    [this.namespace, job.id, job.attempt!.signature, JSON.stringify(attempt), token, this.clock?.() ?? null, attempt.signature]);
     return rows.length === 1;
   }
   async finish(job: Job, result: Result): Promise<Result> {

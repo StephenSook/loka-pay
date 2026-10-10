@@ -455,3 +455,23 @@ test('successful resolution clears pending diagnostics and diagnostic write fail
   const { rows } = await f.db.query('SELECT pending_stage,failure_stage FROM settlement_attempts WHERE note_id=$1', [noteId]);
   expect(rows[0]).toEqual({ pending_stage: null, failure_stage: null });
 });
+
+test('a saved replacement whose send failed resends identical bytes under the lease', async () => {
+  const f = await fixture(); f.chain.decision = null;
+  await f.service.submit({ note }); f.chain.blockHeight.mockResolvedValue(101);
+  const replacement = { signature: base58.encode(new Uint8Array(64).fill(9)), rawTransaction: 'saved-replacement',
+    blockhash: base58.encode(new Uint8Array(32).fill(9)), lastValidBlockHeight: 200 };
+  f.chain.prepare.mockResolvedValue(replacement); f.chain.send.mockRejectedValueOnce(new Error('send lost'));
+  expect((await f.service.get(noteId)).statusCode).toBe(202);
+  await f.service.get(noteId); expect(f.chain.send).toHaveBeenCalledTimes(2);
+  f.advance(30);
+  const other = new SettlementService({ deployment, store: new SettlementStore(f.db, f.clock), chain: f.chain, signConfirmation: f.sign });
+  await Promise.all([f.service.get(noteId), other.get(noteId)]);
+  expect(f.chain.send).toHaveBeenCalledTimes(3); expect(f.chain.send.mock.calls[2][0]).toEqual(replacement);
+  expect(f.chain.prepare).toHaveBeenCalledTimes(2);
+  f.advance(30); await other.get(noteId);
+  f.advance(30); await other.get(noteId);
+  expect(f.chain.send).toHaveBeenCalledTimes(4);
+  f.chain.blockHeight.mockResolvedValue(201); f.advance(30); await other.get(noteId);
+  expect(f.chain.send).toHaveBeenCalledTimes(4); expect(f.chain.prepare).toHaveBeenCalledTimes(2);
+});

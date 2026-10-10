@@ -49,7 +49,7 @@ export class SettlementService {
       if (!await this.options.store.saveAttempt(upload.noteId, attempt, token)) return this.get(upload.noteId);
       row = { ...row, attempt };
       stage = 'send';
-      await this.options.chain.send(attempt);
+      await this.options.store.broadcast(row.noteId, attempt, a => this.options.chain.send(a));
     } catch {
       // A timeout cannot tell us whether it landed. Only the expiry/history gate can allow a rebuild.
       return this.pending(row, stage, true);
@@ -82,7 +82,25 @@ export class SettlementService {
       if (original.found) return this.pending(row);
       if (row.replacement) {
         const current = await this.options.chain.lookup(row.replacement.signature);
-        if (!current.decision) return this.pending(row);
+        if (!current.decision) {
+          if (!current.found) {
+            stage = 'height_lookup';
+            const height = await this.options.chain.blockHeight();
+            stage = 'lookup';
+            const latest = await this.options.chain.lookup(row.replacement.signature);
+            if (latest.decision) {
+              const originalAgain = await this.options.chain.lookup(row.attempt.signature);
+              if (originalAgain.decision) return this.finalize(row, row.attempt.signature, originalAgain.decision, replayed);
+              if (originalAgain.found) return this.pending(row);
+              return this.finalize(row, row.replacement.signature, latest.decision, replayed);
+            }
+            if (!latest.found && Number.isSafeInteger(height) && height >= 0 && height <= row.replacement.lastValidBlockHeight) {
+              stage = 'rebuild_send';
+              await this.options.store.broadcast(row.noteId, row.replacement, a => this.options.chain.send(a));
+            }
+          }
+          return this.pending(row);
+        }
         const again = await this.options.chain.lookup(row.attempt.signature);
         if (again.decision) return await this.finalize(row, row.attempt.signature, again.decision, replayed);
         if (again.found) return this.pending(row);
@@ -111,7 +129,7 @@ export class SettlementService {
       }
       row = { ...row, replacement, rebuildClaimed: true };
       stage = 'rebuild_send';
-      await this.options.chain.send(replacement);
+      await this.options.store.broadcast(row.noteId, replacement, a => this.options.chain.send(a));
       return this.resolve(row, replayed);
     } catch {
       if (row.decision) return { statusCode: 200, body: { ...row.decision, replayed } };

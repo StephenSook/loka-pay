@@ -1,3 +1,4 @@
+import { BroadcastLease } from './broadcast.js';
 import { randomUUID } from 'node:crypto';
 import { admitSubmission, migrateRateLimit, type AllowanceRateLimit } from './rate-limit.js';
 import type { AttemptRow, Claim, Decision, PendingStage, PreparedAttempt } from './types.js';
@@ -10,7 +11,12 @@ export class SettlementStore {
   // Production leases use the shared database clock. The override is for deterministic local tests.
   constructor(private readonly db: Database, private readonly clock?: () => number) {}
 
+  async broadcast(noteId: string, attempt: PreparedAttempt, send: (attempt: PreparedAttempt) => Promise<void>): Promise<boolean> {
+    return new BroadcastLease(this.db, this.clock).send(`note:${noteId}`, attempt, send);
+  }
+
   async migrate(): Promise<void> {
+    await new BroadcastLease(this.db, this.clock).migrate();
     await migrateRateLimit(this.db);
     await this.db.query(`CREATE TABLE IF NOT EXISTS settlement_attempts (
       note_id text PRIMARY KEY CHECK (note_id ~ '^[0-9a-f]{64}$'),
