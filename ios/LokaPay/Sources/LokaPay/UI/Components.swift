@@ -344,7 +344,7 @@ public struct IssueBanner: View {
             Text(issue.message)
                 .font(LokaStyle.body)
                 .fixedSize(horizontal: false, vertical: true)
-            if let layer = issue.kind.refusedBy {
+            if let layer = issue.refusedBy {
                 Text(layer.text)
                     .font(LokaStyle.label)
                     .fixedSize(horizontal: false, vertical: true)

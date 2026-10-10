@@ -373,6 +373,51 @@ struct TryToCheatPayerTests {
             #expect(try serials.remaining(allowanceId: F.allowanceId) == 254)
         }
     }
+
+    @Test("a damaged receipt scanned after settlement names the receipt check and claims nothing about the chain (Codex round 1)")
+    func damagedReceiptAfterSettlement() async throws {
+        let model = try await paid(signer: payer, serials: SerialReservations(url: F.tempURL("s.json")),
+                                   allowanceWire: F.allowanceWire(payer: payer.keyHash))
+        let note = try #require(model.payment?.note)
+        let ack = try Ack.sign(note: note, receivedAt: 1_800_000_010, with: merchantA)
+        let settled = Bundles.receipt(note: note, ack: ack, confirmationWire: F.confWire(noteId: note.noteId, status: 1))
+        model.acceptReturn(text: PaymentTransport.encode(.receipt, settled))
+        let paidReceipt = try #require(model.receipt)
+        #expect(MoneyStatus(receipt: paidReceipt) == .paid)
+
+        // The same receipt with one byte of the server's signature changed.
+        var damaged = settled
+        damaged[damaged.index(before: damaged.endIndex)] ^= 0x01
+        model.acceptReturn(text: PaymentTransport.encode(.receipt, damaged))
+        let issue = try #require(model.issue)
+        #expect(issue.kind == .payment(.badSignature))
+        #expect(issue.refusedBy == .receiptCheck)
+        let line = try #require(issue.refusedBy?.text)
+        #expect(line.contains("the receipt did not verify"))
+        #expect(line.contains("says nothing about whether the payment settled"))
+        #expect(!line.contains("sent nothing to Solana"))
+        #expect(!line.contains("before anything reached Solana"))
+        #expect(model.receipt == paidReceipt)
+
+        // Damaged text in the receipt step is the receipt check too; a valid receipt for another
+        // note names no layer.
+        model.acceptReturn(text: "L1|P|1|X|AAA=")
+        #expect(model.issue?.refusedBy == .receiptCheck)
+        let other = try F.note(payer: payer, payee: merchantA.keyHash, amount: 1, serial: 9)
+        let otherAck = try Ack.sign(note: other, receivedAt: 1, with: merchantA)
+        model.acceptReturn(text: PaymentTransport.encode(.receipt, Bundles.receipt(note: other, ack: otherAck,
+                                                                                    confirmationWire: nil)))
+        #expect(model.issue?.kind == .receiptMismatch)
+        #expect(model.issue?.refusedBy == nil)
+
+        // The same check failure on a payment step (a forged merchant B) is this phone's payment check.
+        model.startCheat()
+        let rogue = Curve25519.Signing.PrivateKey()
+        model.acceptCheatMerchant(text: PaymentTransport.encode(.merchant, F.merchantWire(merchant: merchantB.keyHash,
+                                                                                           signedBy: rogue)))
+        #expect(model.issue?.kind == .payment(.badSignature))
+        #expect(model.issue?.refusedBy == .thisPhone)
+    }
 }
 
 @Suite("Try to cheat screens fit a 390 pt phone width (2.13)")

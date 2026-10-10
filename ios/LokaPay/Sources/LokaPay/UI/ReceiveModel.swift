@@ -685,7 +685,14 @@ public final class ReceiveModel {
         } else if settlement.resolvesUnknownOutcome {
             settlementOutcomeUnknown = false
         }
-        report(.settlement(settlement))
+        let kind = MoneyIssueKind.settlement(settlement)
+        // A server refusal speaks only for this request. While an earlier upload of the note has no
+        // decision here (its answer was lost, or it is still in flight), the banner says so.
+        var layer = kind.refusedBy
+        if case .settlementServer? = layer {
+            layer = .settlementServer(earlierUploadUndecided: settlementOutcomeUnknown || pendingSettlement != nil)
+        }
+        issue = MoneyIssue(kind, at: now(), refusedBy: layer)
     }
 
     /// Drops the note waiting for its allowance (the payer left, or sent the wrong note). Only the

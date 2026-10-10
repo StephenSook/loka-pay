@@ -135,8 +135,8 @@ struct TryToCheatMerchantTests {
         await offline.accept(text: PaymentTransport.encode(.note, original.wire))
         let refused = try #require(offline.issue)
         #expect(refused.kind == .payment(.payeeMismatch))
-        #expect(refused.kind.refusedBy == .thisPhone)
-        #expect(refused.kind.refusedBy?.text == "Refused by this phone's own checks, before anything reached Solana.")
+        #expect(refused.refusedBy == .thisPhone)
+        #expect(refused.refusedBy?.text == "Refused by this phone's own checks. This step sent nothing to Solana.")
         #expect(try offlineLedger.entries().isEmpty)
 
         // The settlement server: the merchant record is not on chain.
@@ -146,8 +146,8 @@ struct TryToCheatMerchantTests {
         await server.settle()
         let issue = try #require(server.issue)
         #expect(issue.kind == .settlement(.refused(check: "unknown_merchant", message: "no merchant record")))
-        #expect(issue.kind.refusedBy == .settlementServer)
-        #expect(issue.kind.refusedBy?.text == "Refused by the settlement server, before anything reached Solana.")
+        #expect(issue.refusedBy == .settlementServer(earlierUploadUndecided: false))
+        #expect(issue.refusedBy?.text == "The settlement server refused this request, so this request sent nothing to Solana.")
         #expect(server.phase == .received)
         #expect(try serverLedger.entries().first?.state == .pending)
 
@@ -157,6 +157,34 @@ struct TryToCheatMerchantTests {
             .payment(.storage), .allowanceNeeded, .notPaymentCode,
         ]
         for kind in unnamed { #expect(kind.refusedBy == nil, "\(kind.name)") }
+    }
+
+    @Test("a server refusal after an upload whose answer was lost, or that is in flight, keeps the earlier upload undecided (Codex round 1)")
+    func refusalAfterUndecidedUpload() async throws {
+        let (_, cheat) = try pair()
+        let limited = StubReply(status: 429, headers: ["Retry-After": "5"],
+                                body: APIFixtures.json(["error": "rate_limited", "message": "slow down"]))
+        let inFlight = StubReply(status: 202, body: APIFixtures.json(["noteId": cheat.noteId.hex, "status": "pending",
+                                                                     "signature": NSNull(), "retryAfter": 2]))
+        let earlier: [(String, StubReply)] = [("answer lost", StubReply(failure: URLError(.timedOut))), ("in flight", inFlight)]
+        for (name, first) in earlier {
+            let (model, ledger) = await merchantBModel([first, limited])
+            await model.accept(text: PaymentTransport.encode(.note, cheat.wire))
+            await model.settle()
+            #expect(model.offersCheckAgain, "\(name)")
+            await model.settle()
+            let issue = try #require(model.issue, "\(name)")
+            #expect(issue.kind == .settlement(.rateLimited(retryAfter: 5, message: "slow down")), "\(name)")
+            #expect(issue.refusedBy == .settlementServer(earlierUploadUndecided: true), "\(name)")
+            let line = try #require(issue.refusedBy?.text)
+            #expect(line.hasPrefix("The settlement server refused this request, so this request sent nothing to Solana."))
+            #expect(line.contains("may have settled"), "\(name)")
+            #expect(!line.contains("before anything reached Solana"), "\(name)")
+            // The earlier upload is still undecided on this phone: Check again stays, the note stays held.
+            #expect(model.offersCheckAgain, "\(name)")
+            #expect(model.phase == .received, "\(name)")
+            #expect(try ledger.entries().first?.state == .pending, "\(name)")
+        }
     }
 }
 

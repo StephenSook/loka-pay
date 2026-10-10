@@ -304,7 +304,7 @@ public final class PayModel {
         guard phase == .showNote || phase == .receipt, let payment, let serverPublicKey else { return }
         switch ScanParser.parse(text, accepting: [.ack, .receipt]) {
         case .failure(let kind):
-            report(kind)
+            reportReceipt(kind)
         case .success(let decoded):
             do {
                 let bytes: Data
@@ -325,7 +325,7 @@ public final class PayModel {
                 issue = nil
                 phase = .receipt
             } catch {
-                report(Self.kind(of: error))
+                reportReceipt(Self.kind(of: error))
             }
         }
     }
@@ -475,6 +475,12 @@ public final class PayModel {
 
     private func report(_ kind: MoneyIssueKind) {
         issue = MoneyIssue(kind, at: now())
+    }
+
+    /// A receipt or ack handed back that this phone refused. Its check failure is the receipt's,
+    /// not the payment's, so the banner names the receipt check and claims nothing about the chain.
+    private func reportReceipt(_ kind: MoneyIssueKind) {
+        issue = MoneyIssue(kind, at: now(), refusedBy: kind.refusedBy == nil ? nil : .receiptCheck)
     }
 
     static func kind(of error: Error) -> MoneyIssueKind {
