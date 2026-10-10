@@ -219,6 +219,20 @@ export function decodeProgramDataHeader(data: Uint8Array): { slot: bigint; upgra
 /** Bytes before the program's ELF in its program data account. */
 export const PROGRAM_DATA_HEADER_LEN = 45;
 
+/** The runtime feature that enables Solana's secp256r1 precompile (programs/TOOLCHAIN.md). */
+export const SECP256R1_FEATURE = "srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q";
+/** The owner of every runtime feature account. */
+export const FEATURE_PROGRAM = "Feature111111111111111111111111111111111111";
+
+/** A runtime feature account: bincode Option<u64>, the slot it was activated at, or none yet. */
+export function decodeFeature(data: Uint8Array): { activatedAt: bigint | null } {
+  const r = new Reader(data, 0, "feature account");
+  const option = r.u8();
+  if (option === 0) return { activatedAt: null };
+  if (option !== 1) throw new DecodeError(`feature account option byte is ${option}, not 0 or 1`);
+  return { activatedAt: r.u64() };
+}
+
 const LOADER_INSTRUCTIONS: Record<number, string> = {
   0: "InitializeBuffer",
   1: "Write",

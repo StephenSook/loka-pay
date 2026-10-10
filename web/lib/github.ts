@@ -1,14 +1,20 @@
-// "Built this weekend" (PLAN.md 3.60): what changed in the repository since the pre-event
-// kit tag, read from GitHub's public compare API with no token, cached for 5 minutes
-// (lib/cached-read.ts). A rate-limited or failed read is never replaced by an old or
-// typed-in number: the page shows the compare link and says the count is unavailable.
+// GitHub reads, from the public API with no token, cached for 5 minutes (lib/cached-read.ts):
+// - "Built this weekend" (PLAN.md 3.60): what changed in the repository since the pre-event
+//   kit tag (the compare API). A rate-limited or failed read is never replaced by an old or
+//   typed-in number: the page shows the compare link and says the count is unavailable;
+// - main's checks: the result of each GitHub Actions job on main's latest commit (the check
+//   runs API), behind the program CI claim on /proof.
 
-import { cachedRead, type Read, type ReadPolicy } from "./cached-read";
+import { cachedRead, type CachedReadOptions, type Read, type ReadPolicy } from "./cached-read";
 import { KIT_TAG } from "./facts";
 import { REPO_URL } from "./site";
 
 export const REPO = "StephenSook/loka-pay";
 export const COMPARE_API_URL = `https://api.github.com/repos/${REPO}/compare/${KIT_TAG}...main`;
+/** The check runs of main's latest commit (one per GitHub Actions job), newest attempt of each. */
+export const CHECKS_API_URL = `https://api.github.com/repos/${REPO}/commits/main/check-runs?per_page=100&filter=latest`;
+/** The program workflow's one job (.github/workflows/program.yml): the secp256r1 feature check, then anchor test. */
+export const PROGRAM_JOB = "program (secp256r1 feature check, anchor test)";
 export const COMPARE_PAGE_URL = `${REPO_URL}/compare/${KIT_TAG}...main`;
 /**
  * GitHub reads: cached 5 minutes; current for 60 s; at most 3 reads of each kind per minute
@@ -94,8 +100,8 @@ export function summarizeCompare(body: unknown): BuiltThisWeekend {
   };
 }
 
-/** The compare read. The URL and limit are parameters only so tests can point it at a local server. */
-export async function readCompareUncached(url: string = COMPARE_API_URL, timeoutMs = 10_000): Promise<BuiltThisWeekend> {
+/** A GitHub API answer as JSON, or a GitHubError that says what failed (a timeout, the rate limit, an HTTP status). */
+async function getGitHubJson(url: string, timeoutMs: number): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -104,7 +110,7 @@ export async function readCompareUncached(url: string = COMPARE_API_URL, timeout
         "x-github-api-version": "2022-11-28",
         "user-agent": "loka-pay-web (https://zerobars.us)",
       },
-      // The answer is large and grows with every commit; lib/cached-read.ts caches the summary.
+      // lib/cached-read.ts caches the decoded summary with its read time, never the raw answer.
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -125,18 +131,83 @@ export async function readCompareUncached(url: string = COMPARE_API_URL, timeout
     }
   }
   if (!response.ok) throw new GitHubError(`GitHub answered HTTP ${response.status}`);
-  let body: unknown;
   try {
-    body = await response.json();
+    return await response.json();
   } catch (e) {
-    // The answer is over 1 MB: a limit that passes mid-body is a timeout, not bad JSON.
+    // The compare answer is over 1 MB: a limit that passes mid-body is a timeout, not bad JSON.
     const name = e instanceof Error ? e.name : "";
     if (name === "TimeoutError" || name === "AbortError") {
       throw new GitHubError(`GitHub did not finish answering within ${timeoutMs / 1000} s`);
     }
     throw new GitHubError("GitHub's answer was not JSON");
   }
-  return summarizeCompare(body);
+}
+
+/** The compare read. The URL and limit are parameters only so tests can point it at a local server. */
+export async function readCompareUncached(url: string = COMPARE_API_URL, timeoutMs = 10_000): Promise<BuiltThisWeekend> {
+  return summarizeCompare(await getGitHubJson(url, timeoutMs));
+}
+
+/** One GitHub Actions job on main's latest commit, as GitHub's check runs API reports it. */
+export interface CheckRun {
+  /** The job's name, for example PROGRAM_JOB. */
+  name: string;
+  /** "queued", "in_progress", "completed", or another state GitHub names. */
+  status: string;
+  /** Set once completed: "success", "failure", "cancelled", "timed_out", "skipped", ... */
+  conclusion: string | null;
+  /** The job's page on github.com. */
+  htmlUrl: string;
+}
+
+export interface MainChecks {
+  /** The commit main pointed at when GitHub answered; null when it listed no GitHub Actions job. */
+  sha: string | null;
+  /** GitHub Actions jobs only; another app's check with the same name is not one of ours. */
+  runs: CheckRun[];
+}
+
+const SHA = /^[0-9a-f]{40}$/;
+const JOB_URL_PREFIX = `https://github.com/${REPO}/`;
+
+/** Reduces a check runs answer to main's GitHub Actions jobs. Throws GitHubError on an unexpected shape. */
+export function summarizeCheckRuns(body: unknown): MainChecks {
+  const b = body as { check_runs?: unknown } | null;
+  if (!b || typeof b !== "object" || !Array.isArray(b.check_runs)) {
+    throw new GitHubError("GitHub's check runs answer had an unexpected shape");
+  }
+  const runs: CheckRun[] = [];
+  const shas = new Set<string>();
+  for (const item of b.check_runs as unknown[]) {
+    const c = item as { name?: unknown; head_sha?: unknown; status?: unknown; conclusion?: unknown; html_url?: unknown; app?: { slug?: unknown } | null } | null;
+    if (
+      !c ||
+      typeof c.name !== "string" ||
+      typeof c.head_sha !== "string" ||
+      !SHA.test(c.head_sha) ||
+      typeof c.status !== "string" ||
+      !(c.conclusion === null || typeof c.conclusion === "string") ||
+      typeof c.html_url !== "string"
+    ) {
+      throw new GitHubError("GitHub's check runs answer listed a check of an unexpected shape");
+    }
+    if (c.app?.slug !== "github-actions") continue;
+    if (!c.html_url.startsWith(JOB_URL_PREFIX)) throw new GitHubError("a check run's page is not in this repository");
+    shas.add(c.head_sha);
+    runs.push({ name: c.name, status: c.status, conclusion: c.conclusion, htmlUrl: c.html_url });
+  }
+  if (shas.size > 1) throw new GitHubError("GitHub listed check runs for more than one commit");
+  return { sha: shas.size === 1 ? [...shas][0] : null, runs };
+}
+
+/** The check runs read. The URL and limit are parameters only so tests can point it at a local server. */
+export async function readMainChecksUncached(url: string = CHECKS_API_URL, timeoutMs = 10_000): Promise<MainChecks> {
+  return summarizeCheckRuns(await getGitHubJson(url, timeoutMs));
+}
+
+/** `needCurrent` for a page whose claims say Live (lib/cached-read.ts). */
+export function readMainChecks(options: CachedReadOptions = {}): Promise<Read<MainChecks>> {
+  return cachedRead(`github-checks:${REPO}:main`, GITHUB_READS, () => readMainChecksUncached(), options);
 }
 
 export function readBuiltThisWeekend(): Promise<Read<BuiltThisWeekend>> {

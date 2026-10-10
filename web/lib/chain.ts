@@ -22,10 +22,13 @@ import {
   ACCOUNT_DISCRIMINATORS,
   ACCOUNT_NAMES,
   BPF_UPGRADEABLE_LOADER,
+  FEATURE_PROGRAM,
   MINT_DECIMALS,
   PROGRAM_DATA_HEADER_LEN,
+  SECP256R1_FEATURE,
   computeReserves,
   decodeAllowance,
+  decodeFeature,
   decodeMerchant,
   decodeProgramAccount,
   decodeProgramDataHeader,
@@ -140,6 +143,25 @@ export interface ProgramFacts {
   vault: Part<VaultTokenFacts>;
   counts: Part<{ byType: Record<AccountName, number>; other: number }>;
   init: Part<{ found: boolean; slot: number | null; blockTimeMs: number | null; failed: boolean; actions: string[] }>;
+  /**
+   * The runtime feature behind Solana's secp256r1 precompile, read at the same slot as the
+   * program: active when it was activated at or before that slot.
+   */
+  secp256r1: Part<{ exists: boolean; activatedAt: number | null; active: boolean; slot: number }>;
+}
+
+/** The secp256r1 feature account's answer, at the slot it was read; a part that failed when it is not a feature account. */
+export function secp256r1FeaturePart(info: { owner: string; data: Uint8Array } | null, slot: number): ProgramFacts["secp256r1"] {
+  try {
+    if (info === null) return { ok: true, value: { exists: false, activatedAt: null, active: false, slot } };
+    if (info.owner !== FEATURE_PROGRAM) throw new RpcError("shape", "the secp256r1 feature account is not owned by the feature program");
+    const { activatedAt } = decodeFeature(info.data);
+    const at = activatedAt === null ? null : Number(activatedAt);
+    if (at !== null && !Number.isSafeInteger(at)) throw new RpcError("shape", "the secp256r1 feature account names an impossible slot");
+    return { ok: true, value: { exists: true, activatedAt: at, active: at !== null && at <= slot, slot } };
+  } catch (e) {
+    return { ok: false, reason: describeFailure(e) };
+  }
 }
 
 export async function readProgramFactsUncached(options: RpcOptions = serverReadOptions()): Promise<ProgramFacts> {
@@ -149,7 +171,7 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
       [
         {
           method: "getMultipleAccounts",
-          params: [[PINS.programId, PINS.accounts.config, PINS.accounts.vaultUsdcAccount], { encoding: "base64" }],
+          params: [[PINS.programId, PINS.accounts.config, PINS.accounts.vaultUsdcAccount, SECP256R1_FEATURE], { encoding: "base64" }],
         },
         { method: "getTokenAccountBalance", params: [PINS.accounts.vaultUsdcAccount] },
         {
@@ -169,10 +191,16 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
   // The program account is the one read the page cannot do without.
   const accountsRead = withContext(unwrap(accounts));
   slots.push(accountsRead.slot);
-  if (!Array.isArray(accountsRead.value) || accountsRead.value.length !== 3) {
+  if (!Array.isArray(accountsRead.value) || accountsRead.value.length !== 4) {
     throw new RpcError("shape", "getMultipleAccounts answered the wrong number of accounts");
   }
-  const [programInfo, configInfo, vaultInfo] = accountsRead.value.map(accountInfo);
+  const [programInfo, configInfo, vaultInfo] = accountsRead.value.slice(0, 3).map(accountInfo);
+  let featurePart: ProgramFacts["secp256r1"];
+  try {
+    featurePart = secp256r1FeaturePart(accountInfo(accountsRead.value[3]), accountsRead.slot);
+  } catch (e) {
+    featurePart = { ok: false, reason: describeFailure(e) };
+  }
   const programData =
     programInfo && programInfo.owner === BPF_UPGRADEABLE_LOADER ? decodeProgramAccount(programInfo.data).programData : null;
 
@@ -278,6 +306,7 @@ export async function readProgramFactsUncached(options: RpcOptions = serverReadO
     vault: vaultPart,
     counts: countsPart,
     init: initPart,
+    secp256r1: featurePart,
   };
 }
 

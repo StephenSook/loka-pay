@@ -8,11 +8,13 @@
 // Live from an older read. Everything else says Building and has no link.
 
 import type { ProgramFacts, ReservesRead } from "./chain";
+import { PROGRAM_JOB, type MainChecks } from "./github";
 import { FIRST_REDEEM_TX_SIGNATURE, INIT_TX_SIGNATURE, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "./facts";
 import { PINS } from "./pins";
 import type { Read } from "./read-state";
 import { REPO_URL } from "./site";
 import { explorerAddress, explorerTx } from "./solana";
+import { SECP256R1_FEATURE } from "./vault";
 import { formatAge, formatEt } from "./time";
 
 /** LIVE (evidence linked), BUILDING (no link) or NOT CHECKED (the read behind it failed). */
@@ -49,10 +51,9 @@ export interface Checked {
  * was not made, or only an older read is available. A claim is never decided from an older
  * read: Live needs a read younger than its window.
  */
-export function current<T>(
-  read: Read<T>,
-  source = "Solana devnet",
-): { data: T; problem: null; checked: Checked } | { data: null; problem: string; checked: null } {
+export type Current<T> = { data: T; problem: null; checked: Checked } | { data: null; problem: string; checked: null };
+
+export function current<T>(read: Read<T>, source = "Solana devnet"): Current<T> {
   if (!read.ok) return { data: null, problem: read.reason, checked: null };
   const age = formatAge(read.askedAtMs - read.readAtMs);
   const window = formatAge(read.currentForMs);
@@ -74,9 +75,66 @@ function stamped(claim: Claim, checked: Checked | null): Claim {
   return claim.status === "live" && checked ? { ...claim, checked } : claim;
 }
 
-export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRead>): Claim[] {
+const PRECOMPILE_TEXT =
+  "The program checks the phone's P-256 signature on chain through Solana's secp256r1 precompile, whose runtime feature is active on devnet.";
+
+/** Decided by the secp256r1 feature account, read with the program facts. */
+function precompileClaim(facts: Current<ProgramFacts>): Claim {
+  const base = { id: "precompile", text: PRECOMPILE_TEXT };
+  if (!facts.data) return { ...base, status: "unchecked", note: facts.problem };
+  const feature = facts.data.secp256r1;
+  if (!feature.ok) return { ...base, status: "unchecked", note: `The secp256r1 feature account could not be read: ${feature.reason}.` };
+  const f = feature.value;
+  if (!f.active) {
+    const note = !f.exists
+      ? "Devnet has no secp256r1 feature account, so the precompile is not active."
+      : f.activatedAt === null
+        ? "The secp256r1 feature account on devnet is not activated."
+        : `The secp256r1 feature activates at slot ${f.activatedAt}, after the read's slot ${f.slot}.`;
+    return { ...base, status: "building", note };
+  }
+  return stamped(
+    {
+      ...base,
+      status: "live",
+      evidence: { href: explorerAddress(SECP256R1_FEATURE), label: `The secp256r1 feature account on Solana Explorer (active since slot ${f.activatedAt})` },
+      more: { href: `${REPO_URL}/blob/main/programs/loka_vault/src/wire.rs`, label: "wire.rs (verify_precompile)" },
+    },
+    facts.checked,
+  );
+}
+
+const PROGRAM_CI_TEXT =
+  "The program's Anchor tests passed on a local validator for main's latest commit, after a check that the secp256r1 feature is active there. They run for every pull request and every push to main.";
+
+/** Decided by the program job's result on main's latest commit, from GitHub's check runs. */
+function programCiClaim(checks: Current<MainChecks>): Claim {
+  const base = { id: "program-ci", text: PROGRAM_CI_TEXT };
+  if (!checks.data) return { ...base, status: "unchecked", note: checks.problem };
+  const commit = checks.data.sha ? checks.data.sha.slice(0, 7) : "unknown";
+  const run = checks.data.runs.find((r) => r.name === PROGRAM_JOB);
+  if (!run) return { ...base, status: "unchecked", note: `GitHub lists no "${PROGRAM_JOB}" job for main's latest commit (${commit}).` };
+  if (run.status !== "completed") {
+    return { ...base, status: "unchecked", note: `The program job for main's latest commit (${commit}) has not finished: GitHub says ${run.status}.` };
+  }
+  if (run.conclusion !== "success") {
+    return { ...base, status: "building", note: `GitHub reports the program job for main's latest commit (${commit}) ended: ${run.conclusion ?? "no conclusion"}.` };
+  }
+  return stamped(
+    {
+      ...base,
+      status: "live",
+      evidence: { href: run.htmlUrl, label: `The program job for main's latest commit (${commit}) on GitHub` },
+      more: { href: `${REPO_URL}/actions/workflows/program.yml`, label: "Every program workflow run" },
+    },
+    checks.checked,
+  );
+}
+
+export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<ReservesRead>, checksRead: Read<MainChecks>): Claim[] {
   const facts = current(factsRead);
   const reserves = current(reservesRead);
+  const checks = current(checksRead, "GitHub");
   const deployed: Claim = facts.data
     ? facts.data.program.exists && facts.data.program.executable
       ? {
@@ -131,23 +189,15 @@ export function claimsFrom(factsRead: Read<ProgramFacts>, reservesRead: Read<Res
       status: "live",
       evidence: { href: "/verify", label: "/verify and its labelled test receipt", internal: true },
     },
-    {
-      id: "precompile",
-      text: "The program checks the phone's P-256 signature on chain through Solana's secp256r1 precompile, and its tests run in CI.",
-      status: "live",
-      evidence: { href: `${REPO_URL}/blob/main/programs/loka_vault/src/wire.rs`, label: "wire.rs (verify_precompile)" },
-    },
-    {
-      id: "program-ci",
-      text: "The program's Anchor tests run on a local validator for every pull request and every push to main.",
-      status: "live",
-      evidence: { href: `${REPO_URL}/actions/workflows/program.yml`, label: "program workflow runs" },
-    },
+    precompileClaim(facts),
+    programCiClaim(checks),
     {
       id: "live",
       text: "A live feed of the program's transactions, read by your browser straight from devnet.",
-      status: "live",
-      evidence: { href: "/live", label: "/live", internal: true },
+      // Built, but whether it works is decided in each visitor's browser, which this server
+      // cannot see; /live itself says whether its WebSocket is carrying traffic.
+      status: "unchecked",
+      note: "Built, but this page cannot see your browser's connection. Open /live from the menu: it says Live only while its WebSocket to devnet carries traffic, and says so when it does not.",
     },
     stamped(
       {
