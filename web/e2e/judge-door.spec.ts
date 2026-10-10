@@ -192,7 +192,9 @@ test("/trust: pilot status from the authority read, custody, the checks and the 
   );
   const server = page.getByTestId("server-status");
   if (pins.serverEd25519PublicKey === null) {
-    await expect(server).toHaveText("The settlement server is not live yet: its key is not published in config/pins.json.");
+    await expect(server).toHaveText(
+      "Its Ed25519 key is not published in config/pins.json yet, so no phone can check a confirmation it signs.",
+    );
   } else {
     await expect(server).toContainText(pins.serverEd25519PublicKey);
   }

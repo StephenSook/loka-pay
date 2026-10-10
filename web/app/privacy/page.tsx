@@ -4,8 +4,8 @@ import { CONTACT_EMAIL } from "@/lib/site";
 import { DEFAULT_RPC_URL, RPC_URL, WS_URL, hostsOf, wsUrlFor } from "@/lib/solana";
 
 // Also the App Store Connect privacy policy URL for the TestFlight build
-// (https://zerobars.us/privacy). Every sentence here must be true today; when the
-// settlement server goes live, the "What we store" table lists each stored field.
+// (https://zerobars.us/privacy). Every sentence here must be true today. The "What we store"
+// table follows protocol/API-V1.md; re-check it against the server code when that merges.
 
 export const metadata: Metadata = {
   title: "Privacy | LOKA Pay",
@@ -22,6 +22,25 @@ const browserRpc =
     ? `Solana's public devnet server (${BROWSER_HOSTS.join(" and ")})`
     : `the Solana devnet RPC server at ${BROWSER_HOSTS.join(" and ")}`;
 const serverHosts = hostsOf(SERVER_RPC_URL).join(" and ");
+
+// What reaches the settlement server, per protocol/API-V1.md sections 2 to 4.
+const STORED = [
+  {
+    field: "A phone's public key and its sandbox allowance",
+    where: "The settlement server, and Solana devnet, where it is public",
+    why: "To open the allowance and let the program check that each payment was signed by that phone",
+  },
+  {
+    field: "A merchant's display name, typed by the merchant",
+    where: "The settlement server, inside the merchant's signed certificate",
+    why: "So the certificate shows the same name every time",
+  },
+  {
+    field: "Payment notes and acks: amount, key hashes, signatures and when the merchant received it",
+    where: "The settlement server; each settled payment is also public on Solana devnet",
+    why: "To settle each payment once and show how long it was held offline",
+  },
+];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -93,8 +112,13 @@ export default function PrivacyPage() {
 
       <Section title="The settlement server">
         <p>
-          The settlement server is not live yet. When it is, the table below will list exactly what
-          it stores, where it lives and why.
+          The settlement server at api.zerobars.us is running on Solana devnet. It has no accounts
+          and never asks for a name, phone number or email.
+        </p>
+        <p>
+          The table below lists what reaches it under our published API contract
+          (protocol/API-V1.md in the repository). The server&apos;s code is still in review and not
+          yet in the repository; we will check this table against that code when it merges.
         </p>
       </Section>
 
@@ -114,13 +138,13 @@ export default function PrivacyPage() {
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="break-words border-2 border-ink p-3 align-top">Nothing yet</td>
-              <td className="break-words border-2 border-ink p-3 align-top">Nowhere</td>
-              <td className="break-words border-2 border-ink p-3 align-top">
-                The settlement server is not live.
-              </td>
-            </tr>
+            {STORED.map((row) => (
+              <tr key={row.field}>
+                <td className="break-words border-2 border-ink p-3 align-top">{row.field}</td>
+                <td className="break-words border-2 border-ink p-3 align-top">{row.where}</td>
+                <td className="break-words border-2 border-ink p-3 align-top">{row.why}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </Section>
