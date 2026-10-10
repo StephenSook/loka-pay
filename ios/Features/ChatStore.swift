@@ -451,7 +451,9 @@ import UIKit
             if UIApplication.shared.isProtectedDataAvailable, mesh?.receive(frame, from: handle) == true { saveOrReport(); return }
             guard inbox.count < 128, !inbox.contains(frame) else { return }
             inbox.append(frame); try saveInbox()
-            LocalNotifications.shared.show(friend: packet.source, name: "LOKA", id: packet.id, detail: "Local activity · unlock to check messages", allowReply: false)
+            // Locked: the frame cannot be read yet and may be a LOKA Pay text, so the notice names no
+            // contact and opens no chat. A real message is notified when it is read after unlock.
+            LocalNotifications.shared.lockedActivity()
         } catch { notice = "Could not verify or save an incoming message" }
     }
     private func saveInbox() throws {
@@ -461,6 +463,7 @@ import UIKit
     }
     private func drainInbox() {
         guard ready, UIApplication.shared.isProtectedDataAvailable else { return }
+        if !inbox.isEmpty { LocalNotifications.shared.clearLockedActivity() }
         inbox = inbox.filter { frame in
             guard let packet = try? LokaPacket.decode(frame), packet.expiresAt > Int64(Date().timeIntervalSince1970 * 1000) else { return false }
             return mesh?.receive(frame) != true
