@@ -84,6 +84,9 @@ public struct ReceiptFacts: Equatable, Sendable {
     public let explorer: URL?
     /// The program's error code from a failed CONF (signed).
     public let errorCode: UInt16?
+    /// The program's name for `errorCode` (`LokaVaultError`); nil without a code or for a code the
+    /// program does not define.
+    public let errorName: String?
     /// CONF uploaded at minus ACK received at (server clock minus the merchant phone's clock);
     /// nil without a CONF.
     public let heldOffline: ClockSpan?
@@ -94,6 +97,42 @@ public struct ReceiptFacts: Equatable, Sendable {
     public var heldOfflineSeconds: Int64? { heldOffline?.seconds }
     /// The settled-after-upload figure, or nil when not settled or when the clocks disagree.
     public var settledAfterUploadSeconds: Int64? { settledAfterUpload?.seconds }
+
+    /// "already spent" only when the signed CONF says failed on chain with the program's
+    /// SerialUsed code (the serial was redeemed before). Never from the server's unsigned JSON.
+    public var statusDetail: String? {
+        errorCode == LokaVaultError.serialUsed ? "already spent" : nil
+    }
+
+    /// What the chain decided, in plain words, for a failed CONF; nil otherwise. It claims a reason
+    /// only from the signed error code, and points to the explorer only when there is a link.
+    public var chainLine: String? {
+        guard let code = errorCode else { return nil }
+        let look = explorer == nil
+            ? "the confirmation carries no transaction signature, so there is no explorer link."
+            : "open it on the explorer to see why."
+        if code == LokaVaultError.serialUsed {
+            return "Solana refused this note: its allowance serial was already spent by an earlier payment "
+                + "(program error SerialUsed, code " + String(code) + ", in the server-signed confirmation). "
+                + (explorer == nil ? "The confirmation carries no transaction signature, so there is no explorer link."
+                                   : "The failed transaction opens on the explorer.")
+        }
+        if let name = errorName {
+            return "Failed on chain. The transaction was refused with program error " + name + " (code "
+                + String(code) + ", in the server-signed confirmation); " + look
+        }
+        if code != 0 {
+            return "Failed on chain. The transaction was refused with error code " + String(code)
+                + ", which is not one of the program's named errors; " + look
+        }
+        return "Failed on chain. The transaction was refused; " + look
+    }
+
+    /// The error code row's value: the number, with the program's name when it has one.
+    public var errorCodeText: String? {
+        guard let code = errorCode, code != 0 else { return nil }
+        return errorName.map { String(code) + " (" + $0 + ")" } ?? String(code)
+    }
 
     public init(receipt: VerifiedReceipt, merchant: MerchantCertificate?, clusterId: UInt8) {
         amount = receipt.note.note.amount
@@ -110,6 +149,7 @@ public struct ReceiptFacts: Equatable, Sendable {
             explorer = nil
         }
         errorCode = conf?.status == .failedOnChain ? conf?.errorCode : nil
+        errorName = errorCode.flatMap(LokaVaultError.name(code:))
         heldOffline = conf.map { ClockSpan.between(later: $0.uploadedAt, earlier: receipt.ack.receivedAt) }
         settledAfterUpload = conf?.status == .settled
             ? conf.map { ClockSpan.between(later: $0.blockTime, earlier: $0.uploadedAt) } : nil
@@ -164,11 +204,15 @@ public struct ReceiptCard: View {
                 Spacer()
             }
             .accessibilityElement(children: .combine)
-            MoneyStatusChip(facts.status)
+            MoneyStatusChip(facts.status, detail: facts.statusDetail)
             FactRow(label: "To", value: facts.merchantName ?? "Merchant name not verified")
             FactRow(label: "Serial", value: "\(receipt.note.note.serial) of allowance #\(receipt.note.note.allowanceId)")
-            if let code = facts.errorCode {
-                FactRow(label: "Program error code", value: "\(code)")
+            if let code = facts.errorCodeText {
+                FactRow(label: "Program error code", value: code)
+            }
+            if let line = facts.chainLine {
+                Text(line).font(LokaStyle.body).foregroundStyle(LokaColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(facts.timingLines, id: \.self) { line in
                 Text(line).font(LokaStyle.caption).foregroundStyle(LokaColor.muted)
@@ -180,7 +224,8 @@ public struct ReceiptCard: View {
             }
             if let explorer = facts.explorer {
                 Link(destination: explorer) {
-                    Label("Open the transaction on Solana Explorer (\(receipt.note.note.clusterId == 0 ? "devnet" : "mainnet"))",
+                    Label("Open the \(facts.errorCode == nil ? "" : "failed ")transaction on Solana Explorer "
+                          + "(\(receipt.note.note.clusterId == 0 ? "devnet" : "mainnet"))",
                           systemImage: "arrow.up.right.square")
                         .font(LokaStyle.label)
                 }

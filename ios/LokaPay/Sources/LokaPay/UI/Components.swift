@@ -83,14 +83,26 @@ public enum MoneyStatus: Equatable, Sendable, CaseIterable {
 public struct MoneyStatusChip: View {
     let status: MoneyStatus
     var large = false
+    /// Words after the status in brackets, such as "already spent" (from verified bytes only).
+    var detail: String?
 
-    public init(_ status: MoneyStatus, large: Bool = false) {
+    public init(_ status: MoneyStatus, large: Bool = false, detail: String? = nil) {
         self.status = status
         self.large = large
+        self.detail = detail
+    }
+
+    /// "Failed (already spent)" with a detail, else the status word alone.
+    public static func word(_ status: MoneyStatus, detail: String?) -> String {
+        detail.map { status.word + " (" + $0 + ")" } ?? status.word
+    }
+
+    public static func accessibilityLabel(_ status: MoneyStatus, detail: String?) -> String {
+        detail.map { "Status: " + status.word.lowercased() + ", " + $0 + ". Sandbox." } ?? status.accessibilityLabel
     }
 
     public var body: some View {
-        Label(status.word, systemImage: status.symbol)
+        Label(Self.word(status, detail: detail), systemImage: status.symbol)
             .font(large ? LokaStyle.title : LokaStyle.label)
             .foregroundStyle(Color(rgb: status.textHex))
             .padding(.horizontal, large ? 18 : 12)
@@ -98,7 +110,7 @@ public struct MoneyStatusChip: View {
             .background(Capsule().fill(Color(rgb: status.fillHex)))
             .overlay(Capsule().strokeBorder(status.borderColor, lineWidth: LokaStyle.borderWidth))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(status.accessibilityLabel)
+            .accessibilityLabel(Self.accessibilityLabel(status, detail: detail))
     }
 }
 

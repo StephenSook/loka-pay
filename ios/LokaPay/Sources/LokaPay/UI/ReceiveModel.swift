@@ -27,6 +27,17 @@ public struct SettledPayment: Equatable, Sendable {
     public let reasonUnsigned: String?
 
     public var status: MoneyStatus { MoneyStatus(receipt: receipt) }
+
+    /// What the receipt card shows, from the verified receipt only: the failed CONF's signed error
+    /// code, its program name, "already spent" for SerialUsed, and the explorer link.
+    public func facts(clusterId: UInt8) -> ReceiptFacts {
+        ReceiptFacts(receipt: receipt, merchant: nil, clusterId: clusterId)
+    }
+
+    /// The caption under the receipt code: a failed decision is not called settled.
+    public var receiptCaption: String {
+        status == .paid ? "Settled receipt for the payer" : "Receipt with the chain's decision (failed), for the payer"
+    }
 }
 
 /// A note this phone accepted offline that no verified CONF has decided yet, read back from the
