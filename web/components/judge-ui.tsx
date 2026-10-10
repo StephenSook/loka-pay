@@ -3,6 +3,7 @@
 
 import { OutlineChip, StateChip } from "./chips";
 import { AlertIcon, ArrowUpRightIcon, CheckIcon, CircleIcon, ClockIcon } from "./icons";
+import type { ClaimStatus } from "@/lib/claims";
 import type { FailedRead } from "@/lib/read-state";
 import { formatEt, isoUtc } from "@/lib/time";
 
@@ -128,8 +129,6 @@ export function ReadFailure({ what, reason, ms, testId = "read-failure" }: { wha
     </div>
   );
 }
-
-export type ClaimStatus = "live" | "building" | "unchecked";
 
 /** LIVE (evidence linked), BUILDING (no link) or NOT CHECKED (the read behind it failed). */
 export function ClaimChip({ status }: { status: ClaimStatus }) {
