@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { expect, test, vi } from 'vitest';
 import * as anchor from '@anchor-lang/core';
 import * as P from '@lokapay/protocol';
+import { p256 } from '@noble/curves/nist.js';
 import { base58 } from '@scure/base';
 import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { buildRedeemTransaction, decodeChainError, SolanaGateway } from './transaction.js';
@@ -58,11 +60,27 @@ test.each(vectors.notes as { name: string; wireHex: string; precompileDataHex: s
   expect(decoded.name).toBe('redeem_note');
   expect(Buffer.from((decoded.data as { note: number[] }).note)).toEqual(Buffer.from(note.noteBytes));
   const programId = new PublicKey(deployment.programId);
+  expect(redeem.programId.equals(programId)).toBe(true);
+  expect(redeem.keys[0].pubkey.equals(PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0])).toBe(true);
   const id = Buffer.alloc(8); id.writeBigUInt64BE(note.note.allowanceId);
   expect(redeem.keys[1].pubkey.equals(PublicKey.findProgramAddressSync([Buffer.from('allowance'), id], programId)[0])).toBe(true);
   expect(redeem.keys[2].pubkey.equals(PublicKey.findProgramAddressSync([Buffer.from('merchant'), Buffer.from(note.note.payeeKeyHash)], programId)[0])).toBe(true);
   expect(redeem.keys[3].pubkey.toBase58()).toBe(P.INSTRUCTIONS_SYSVAR_ID);
   expect(redeem.keys.map(key => [key.isSigner, key.isWritable])).toEqual([[false, false], [false, true], [false, true], [false, false]]);
+});
+
+test('redeem targets the published deployment program and config account', () => {
+  const pins = JSON.parse(readFileSync(new URL('../../../config/pins.json', import.meta.url), 'utf8'));
+  const liveDeployment = { programId: new PublicKey(pins.programId).toBytes(), clusterId: 0,
+    mint: new PublicKey(pins.mint).toBytes() };
+  // Sign a note with an ephemeral local key. No transaction is signed or submitted.
+  const bytes = P.encodeNote(liveDeployment, validated.note);
+  const secret = randomBytes(32);
+  const wire = new Uint8Array([...bytes, ...p256.sign(bytes, secret, { lowS: true }), ...p256.getPublicKey(secret)]);
+  const [precompile, redeem] = buildRedeemTransaction(P.validateNoteWire(wire, liveDeployment)).instructions;
+  expect(precompile.programId.toBase58()).toBe(P.SECP256R1_PROGRAM_ID);
+  expect(redeem.programId.toBase58()).toBe(pins.programId);
+  expect(redeem.keys[0].pubkey.toBase58()).toBe(pins.accounts.config);
 });
 
 test('signs one transaction, skips preflight, sets zero retries and never reads program state', async () => {
