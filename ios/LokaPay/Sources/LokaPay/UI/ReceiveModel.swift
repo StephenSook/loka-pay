@@ -42,6 +42,15 @@ public struct SettledPayment: Equatable, Sendable {
     public var receiptCaption: String {
         status == .paid ? "Settled receipt for the payer" : "Receipt with the chain's decision (failed), for the payer"
     }
+
+    /// The same receipt as a zerobars.us/verify link (`ReceiptLink`), for the payer's own camera
+    /// app. Built from `receiptText`, so the two codes on the screen always carry the same bytes.
+    public var verifyLink: String? { ReceiptLink.verifyURL(receiptText: receiptText) }
+
+    /// The caption under the verify-link code.
+    public static let verifyLinkCaption =
+        "Scan with the phone's camera to check the signatures at zerobars.us/verify. "
+        + "The receipt rides after the # in the link, which the browser never sends to a server."
 }
 
 /// A note this phone accepted offline that no verified CONF has decided yet, read back from the

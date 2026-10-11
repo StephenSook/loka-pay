@@ -277,11 +277,23 @@ public struct ReceiveView: View {
                 }
                 PaymentQRView(text: settlement.receiptText, caption: settlement.receiptCaption)
                 resendReplyButton
+                if let link = settlement.verifyLink { verifyLinkCode(link) }
                 inboxNotes
                 Button("Next payment") { model.nextPayment() }.buttonStyle(LokaButtonStyle())
             }
             .lokaCard()
         }
+    }
+
+    /// Under the payer's receipt code: the same receipt as a zerobars.us/verify link (task 3.86), so
+    /// the payer's camera app opens a page that checks every signature in the browser, with no LOKA
+    /// app needed. The receipt is in the link's fragment, so it never reaches a server log.
+    private func verifyLinkCode(_ link: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Verify on your phone").font(LokaStyle.headline).foregroundStyle(LokaColor.ink)
+            PaymentQRView(text: link, caption: SettledPayment.verifyLinkCaption)
+        }
+        .padding(.top, 8)
     }
 
     /// Shown under the code only after a Bluetooth reply of this payment could not be queued for a

@@ -94,3 +94,28 @@ struct ScanArea {
         rect = converted.flatMap(ScanGeometry.rectOfInterest) ?? Self.wholeFrame
     }
 }
+
+/// Which code the scanner reports from one camera frame, decided here so it is tested without a
+/// camera. A frame can hold more than one code: the merchant's Paid screen shows the receipt code
+/// with the verify link under it. Every code in the frame is looked at, and a LOKA code ("L1|")
+/// comes before anything else, so the receipt is read even when the camera reads the link first.
+/// The chosen value is reported once and not again while it stays chosen; a different code (a
+/// new one, or an earlier one seen again on its own) is reported. Within the group that wins, the
+/// code already chosen keeps its place, so two codes in view never take turns being reported.
+struct ScanChoice {
+    static let lokaPrefix = "L1|"
+
+    /// The value reported last.
+    private(set) var lastValue: String?
+
+    /// The value to report for the code strings read in one frame, or nil when there is nothing new.
+    mutating func report(_ values: [String]) -> String? {
+        let present = values.filter { !$0.isEmpty }
+        let loka = present.filter { $0.hasPrefix(Self.lokaPrefix) }
+        let group = loka.isEmpty ? present : loka
+        guard let first = group.first else { return nil }
+        if let lastValue, group.contains(lastValue) { return nil }
+        lastValue = first
+        return first
+    }
+}
