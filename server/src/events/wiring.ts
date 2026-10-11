@@ -45,9 +45,11 @@ const SOURCES: Source[] = [
         COALESCE(result->'body'->>'openSignature', result->'body'->>'registerSignature') AS signature
       FROM registration_jobs WHERE result->>'statusCode' IN ('200', '201')
         AND COALESCE(result->'body'->>'openSignature', result->'body'->>'registerSignature') IS NOT NULL
-        -- Only the job's own transaction: a merchant already on chain is adopted with an empty rawTransaction and
-        -- an old signature, which would pair a fresh request time with someone else's success.
+        -- Only the job's own transaction, so a fresh request time is never paired with an older success. Two paths
+        -- complete with an existing merchant's old signature (remit/service.ts): an adopted attempt has an empty
+        -- rawTransaction, and a collision keeps its own attempt while the result names the old signature.
         AND COALESCE(attempt->>'rawTransaction', '') <> ''
+        AND COALESCE(result->'body'->>'openSignature', result->'body'->>'registerSignature') = attempt->>'signature'
       ORDER BY ${createdAt} DESC LIMIT 1`)).rows[0],
   },
   {

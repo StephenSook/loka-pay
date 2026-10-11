@@ -438,7 +438,7 @@ test('one client gets at most 3 /live streams; closing one frees its slot', asyn
  * are Record<string, unknown> in remit/types.ts, so their keys (openSignature, signature) are copied by name.
  */
 async function seedJob(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: 'registration_jobs' | 'remittance_jobs',
-  createdAt: number, signature: string, options: { adopted?: boolean } = {}) {
+  createdAt: number, signature: string, options: { adopted?: boolean; collidedWith?: string } = {}) {
   const policy: Policy = { capUnits: '1000000', offlineLimitUnits: '1000000', bondUnits: '0', lifetimeSeconds: 86400, earmarks: [],
     daily: { units: '1', funderLamports: '1', feeLamports: '1' } };
   const plan: RegistrationPlan = { publicKey: 'pk', keyHash: 'ab'.repeat(32), kind: 'payer', pool: 'public',
@@ -446,7 +446,8 @@ async function seedJob(db: { query: (sql: string, params?: unknown[]) => Promise
   // An adopted merchant (already on chain) gets an attempt with no transaction of its own (remit/service.ts).
   const attempt: PreparedAttempt = { signature, rawTransaction: options.adopted ? '' : 'signed-bytes', blockhash: 'b', lastValidBlockHeight: 1 };
   if (table === 'registration_jobs') {
-    const result: Result = { statusCode: 200, body: { openSignature: signature, payerKeyHash: plan.keyHash } };
+    // A collision completes with the existing merchant's old signature while the job keeps its own attempt.
+    const result: Result = { statusCode: 200, body: { openSignature: options.collidedWith ?? signature, payerKeyHash: plan.keyHash } };
     await db.query(`INSERT INTO registration_jobs (namespace, kind, key_hash, id, plan, attempt, result)
       VALUES ('ns', 'payer', $1, $1, $2::jsonb, $3::jsonb, $4::jsonb)`, [signature, JSON.stringify(plan), JSON.stringify(attempt), JSON.stringify(result)]);
   } else {
@@ -486,6 +487,8 @@ test('registration and remittance rows come from their stored jobs, and each row
   await seedJob(db, 'registration_jobs', 2000, 'regNew');
   // Newer, but adopted from an existing on-chain merchant: its signature is not this job's success, so it is skipped.
   await seedJob(db, 'registration_jobs', 2050, 'adoptedOld', { adopted: true });
+  // Also newer, but a collision: its own attempt sent 'mine', yet its result names an older signature. Skipped too.
+  await seedJob(db, 'registration_jobs', 2055, 'mine', { collidedWith: 'collidedOld' });
   await seedJob(db, 'remittance_jobs', 1500, 'remitSig');
   const at = (now: number) => computeWiring(db, { commit: 'abc', now: () => now });
   const fresh = await at(2060);
