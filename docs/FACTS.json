@@ -906,7 +906,8 @@
       "caveat": "The number of cell site outages in a specific area does not necessarily correspond to the availability of wireless service to consumers in that area.",
       "surfaces": [
         "slides",
-        "Devpost"
+        "Devpost",
+        "video"
       ]
     },
     "proof_pair_settled_tx": {
@@ -1013,6 +1014,32 @@
       "caveat": "Second iPhone run: a reused serial refused by Solana, SerialUsed (6011), Sat Oct 10 5:09 PM ET.",
       "surfaces": [
         "home"
+      ]
+    },
+    "proof_pair_live_settled_tx": {
+      "value": "4D8An2bR9vW7UY4CxWdpnSD2YpcDYEcWtNMhrFqcz7W8WgTSzjC2my3D4ZpGHJ7rjbwRSczA36jvg9J9nn1D91FN",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 11:50 PM ET: slot 509731772, meta.err null, loka_vault logged \"Instruction: RedeemNote\", fee 10000 lamports, fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries the 141-byte note: sha256 bccca92fd95811b7d904bd4ec7a1aa6e5cb14330c5839140c8f46b5c53ea1226, amount 50000 base units, serial 3, allowance 10652706154269594633. Settled through the deployed server (main 0680451) during the team's Saturday evening practice run, handed over by camera QR between two offline iPhones; the chain shows the payer's P-256 key, not the device. This is the payment in the demo video",
+      "as_of": "2026-10-11T01:10:43+00:00",
+      "caveat": "Practice run on the live server, paid offline by camera QR, Sat Oct 10 9:10 PM ET. Sandbox tokens on devnet.",
+      "surfaces": [
+        "video",
+        "Devpost"
+      ]
+    },
+    "proof_pair_live_refused_tx": {
+      "value": "5AWAZxy2AoRhwx25YRQaqMNcMTYVai7cDgFhVq6NX8hY2z5G7RdtjHUfybQD4nFNXHwpsTgRTbEbi7utrtocwtAo",
+      "unit": "devnet transaction signature",
+      "kind": "measured",
+      "status": "measured",
+      "source": "getTransaction on https://api.devnet.solana.com (commitment finalized), read 2026-10-10 11:50 PM ET: slot 509732255, meta.err InstructionError [1, Custom 6011], loka_vault logged \"Error Code: SerialUsed. Error Number: 6011\", fee 10000 lamports, fee payer 29v6qGTtertFu7mMwcsy7TXS9kQcYEiQYiDvXBRaBEzZ (config/pins.json feePayers.demo). Its secp256r1 precompile instruction carries the 141-byte note: sha256 dd6309414d021fc1647b2aeb2a801fe14eff260c1a4440d458c2b72bcddc058e, amount 50000 base units, serial 3, allowance 10652706154269594633, the same payer key as proof_pair_live_settled_tx and a different payee key hash. The cheat of the same practice run, signed with the app's \"Try to cheat\" control for a second merchant phone. This is the refusal in the demo video",
+      "as_of": "2026-10-11T01:12:39+00:00",
+      "caveat": "Same allowance and serial signed again for a second shop, refused by Solana: SerialUsed (6011), Sat Oct 10 9:12 PM ET.",
+      "surfaces": [
+        "video",
+        "Devpost"
       ]
     }
   }
