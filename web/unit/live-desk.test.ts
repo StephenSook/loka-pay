@@ -123,7 +123,7 @@ test.describe("what a failed row says once its details arrive", () => {
     expect(failure).toEqual({
       kind: "words",
       owner: "other",
-      words: "Error code 6011 at instruction 0, which another program ran, so it is not this program's error.",
+      words: "Error code 6011 at instruction 0, run by another program; not named as this program's error.",
     });
     expect(isRefusal(failure)).toBe(false);
   });

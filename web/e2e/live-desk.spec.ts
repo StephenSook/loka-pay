@@ -160,7 +160,7 @@ test("/live: another program's 6011 at instruction 0 is never named SerialUsed, 
   const crafted = row(page, CRAFTED);
   await expect(crafted).toHaveAttribute("data-details", "read");
   await expect(crafted.getByTestId("tx-action")).toHaveText("redeem_note");
-  await expect(crafted.getByTestId("tx-error")).toHaveText("Error code 6011 at instruction 0, which another program ran, so it is not this program's error.");
+  await expect(crafted.getByTestId("tx-error")).toHaveText("Error code 6011 at instruction 0, run by another program; not named as this program's error.");
   await expect(crafted.getByTestId("tx-status")).toHaveText("Failed");
   await expect(crafted).not.toContainText("SerialUsed");
   // The newest payment the program refused is still the recorded 5:09 PM cheat.
