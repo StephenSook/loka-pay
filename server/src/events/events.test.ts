@@ -18,6 +18,7 @@ import { writeCapped } from './routes.js';
 import { computeWiring } from './wiring.js';
 import { RegistrationStore } from '../remit/store.js';
 import { RemittanceStore } from '../remit/remittance.js';
+import type { Policy, RegistrationPlan, Result } from '../remit/types.js';
 
 // The real settlement service writes decisions against a stand-in chain; this module projects them.
 // That ties these tests to settle/store.ts's journal, so a change to its columns fails here first.
@@ -431,16 +432,27 @@ test('one client gets at most 3 /live streams; closing one frees its slot', asyn
   await again.body?.cancel();
 });
 
-/** Inserts a finished registration or remittance job shaped the way remit/service.ts and remittance.ts store them. */
+/**
+ * Inserts a finished registration or remittance job shaped the way remit/service.ts and remittance.ts store them.
+ * Plan and attempt use the producers' own types, so a renamed field there fails the typecheck here. Result bodies
+ * are Record<string, unknown> in remit/types.ts, so their keys (openSignature, signature) are copied by name.
+ */
 async function seedJob(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, table: 'registration_jobs' | 'remittance_jobs',
-  createdAt: number, signature: string) {
-  const plan = JSON.stringify({ expiry: createdAt + 86400, policy: { lifetimeSeconds: 86400 }, keyHash: 'ab'.repeat(32) });
+  createdAt: number, signature: string, options: { adopted?: boolean } = {}) {
+  const policy: Policy = { capUnits: '1000000', offlineLimitUnits: '1000000', bondUnits: '0', lifetimeSeconds: 86400, earmarks: [],
+    daily: { units: '1', funderLamports: '1', feeLamports: '1' } };
+  const plan: RegistrationPlan = { publicKey: 'pk', keyHash: 'ab'.repeat(32), kind: 'payer', pool: 'public',
+    allowanceId: '7', expiry: createdAt + policy.lifetimeSeconds, policy };
+  // An adopted merchant (already on chain) gets an attempt with no transaction of its own (remit/service.ts).
+  const attempt: PreparedAttempt = { signature, rawTransaction: options.adopted ? '' : 'signed-bytes', blockhash: 'b', lastValidBlockHeight: 1 };
   if (table === 'registration_jobs') {
-    await db.query(`INSERT INTO registration_jobs (namespace, kind, key_hash, id, plan, result) VALUES ('ns', 'payer', $1, $1, $2::jsonb, $3::jsonb)`,
-      [signature, plan, JSON.stringify({ statusCode: 200, body: { openSignature: signature, payerKeyHash: 'ab'.repeat(32) } })]);
+    const result: Result = { statusCode: 200, body: { openSignature: signature, payerKeyHash: plan.keyHash } };
+    await db.query(`INSERT INTO registration_jobs (namespace, kind, key_hash, id, plan, attempt, result)
+      VALUES ('ns', 'payer', $1, $1, $2::jsonb, $3::jsonb, $4::jsonb)`, [signature, JSON.stringify(plan), JSON.stringify(attempt), JSON.stringify(result)]);
   } else {
-    await db.query(`INSERT INTO remittance_jobs (namespace, recipient, plan, result, claim_token, lease_expires_at)
-      VALUES ('ns', $1, $2::jsonb, $3::jsonb, 't', 0)`, [signature, plan, JSON.stringify({ statusCode: 201, body: { signature, recipientAllowanceId: '7' } })]);
+    const result: Result = { statusCode: 201, body: { signature, recipientAllowanceId: '7' } };
+    await db.query(`INSERT INTO remittance_jobs (namespace, recipient, plan, attempt, result, claim_token, lease_expires_at)
+      VALUES ('ns', $1, $2::jsonb, $3::jsonb, $4::jsonb, 't', 0)`, [signature, JSON.stringify(plan), JSON.stringify(attempt), JSON.stringify(result)]);
   }
 }
 
@@ -472,11 +484,14 @@ test('registration and remittance rows come from their stored jobs, and each row
   await new RemittanceStore(db, 'ns').migrate();
   await seedJob(db, 'registration_jobs', 1000, 'regOld');
   await seedJob(db, 'registration_jobs', 2000, 'regNew');
+  // Newer, but adopted from an existing on-chain merchant: its signature is not this job's success, so it is skipped.
+  await seedJob(db, 'registration_jobs', 2050, 'adoptedOld', { adopted: true });
   await seedJob(db, 'remittance_jobs', 1500, 'remitSig');
   const at = (now: number) => computeWiring(db, { commit: 'abc', now: () => now });
   const fresh = await at(2060);
   const [, registration, remittance] = fresh.rows;
   expect(fresh.commit).toBe('abc');
+  expect(fresh.rows.map(r => r.timeBasis)).toEqual(['block_time', 'request_time', 'request_time']);
   expect(registration).toMatchObject({ lastSuccessAt: 2000, ageSeconds: 60, stale: false,
     evidence: { kind: 'payer', signature: 'regNew', explorer: 'https://explorer.solana.com/tx/regNew?cluster=devnet' } });
   expect(remittance).toMatchObject({ lastSuccessAt: 1500, ageSeconds: 560, stale: false, evidence: { signature: 'remitSig' } });

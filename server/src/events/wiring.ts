@@ -7,13 +7,17 @@ import type { Database } from '../settle/store.js';
 // belong to whichever service records their events.
 
 export interface WiringRow {
-  id: string; label: string; lastSuccessAt: number | null; ageSeconds: number | null;
+  id: string; label: string; lastSuccessAt: number | null;
+  /** What lastSuccessAt measures: the confirmed block time, or the time the server accepted the request
+   *  (registration and remittance jobs store no confirmation time; the success follows within seconds). */
+  timeBasis: 'block_time' | 'request_time';
+  ageSeconds: number | null;
   staleAfterSeconds: number; stale: boolean; evidence: Record<string, string | number> | null;
 }
 export interface Wiring { asOf: string; commit: string; rows: WiringRow[] }
 
 interface Source {
-  id: string; label: string; staleAfterSeconds: number;
+  id: string; label: string; staleAfterSeconds: number; timeBasis: WiringRow['timeBasis'];
   /** The table the row reads; a module that is not installed reports no success instead of failing the endpoint. */
   table: string;
   /** Returns the newest success as { at, ...evidence }, or nothing. `at` is unix seconds. */
@@ -30,22 +34,25 @@ const createdAt = `(plan->>'expiry')::bigint - (plan->'policy'->>'lifetimeSecond
 const SOURCES: Source[] = [
   {
     id: 'solana_settlement', label: 'Solana devnet: a payment note settled or refused on chain', staleAfterSeconds: 30 * 60,
-    table: 'payment_events',
+    table: 'payment_events', timeBasis: 'block_time',
     read: async db => (await db.query(`SELECT block_time::float8 AS at, slot::float8 AS slot, signature, status, source
       FROM payment_events ORDER BY block_time DESC, seq DESC LIMIT 1`)).rows[0],
   },
   {
     id: 'solana_registration', label: 'Solana devnet: an allowance or merchant record opened', staleAfterSeconds: 60 * 60,
-    table: 'registration_jobs',
+    table: 'registration_jobs', timeBasis: 'request_time',
     read: async db => (await db.query(`SELECT ${createdAt} AS at, kind,
         COALESCE(result->'body'->>'openSignature', result->'body'->>'registerSignature') AS signature
       FROM registration_jobs WHERE result->>'statusCode' IN ('200', '201')
         AND COALESCE(result->'body'->>'openSignature', result->'body'->>'registerSignature') IS NOT NULL
+        -- Only the job's own transaction: a merchant already on chain is adopted with an empty rawTransaction and
+        -- an old signature, which would pair a fresh request time with someone else's success.
+        AND COALESCE(attempt->>'rawTransaction', '') <> ''
       ORDER BY ${createdAt} DESC LIMIT 1`)).rows[0],
   },
   {
     id: 'remittance', label: 'Sandbox /send: a remittance allowance funded on devnet', staleAfterSeconds: 2 * 60 * 60,
-    table: 'remittance_jobs',
+    table: 'remittance_jobs', timeBasis: 'request_time',
     read: async db => (await db.query(`SELECT ${createdAt} AS at, result->'body'->>'signature' AS signature
       FROM remittance_jobs WHERE result->>'statusCode' IN ('200', '201') AND result->'body'->>'signature' IS NOT NULL
       ORDER BY ${createdAt} DESC LIMIT 1`)).rows[0],
@@ -66,7 +73,7 @@ export async function computeWiring(db: Database, options: { commit: string; now
       if (typeof evidence.signature === 'string') evidence.explorer = explorer(evidence.signature);
     }
     const ageSeconds = at === null ? null : Math.max(0, now - at);
-    rows.push({ id: source.id, label: source.label, lastSuccessAt: at, ageSeconds, staleAfterSeconds: source.staleAfterSeconds,
+    rows.push({ id: source.id, label: source.label, lastSuccessAt: at, timeBasis: source.timeBasis, ageSeconds, staleAfterSeconds: source.staleAfterSeconds,
       stale: ageSeconds === null || ageSeconds > source.staleAfterSeconds, evidence });
   }
   return { asOf: new Date(now * 1000).toISOString(), commit: options.commit, rows };
