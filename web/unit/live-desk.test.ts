@@ -176,6 +176,23 @@ test.describe("the kiosk's last payment", () => {
     expect(last).toMatchObject({ kind: "paid", newerReading: 1 });
   });
 
+  test("so does one whose details were given up on or unavailable: the older payment is never shown as last without the newer row counted", () => {
+    // TEST FIXTURE: the recorded 5:09 PM cheat as a logs notification without its AnchorError line
+    // (actions from its logs, error null, err InstructionError [1, Custom 6011]), then getTransaction
+    // given up on ("unread") or answering an unreadable shape ("unavailable").
+    const listedRow = listed().find((r) => r.signature === REFUSED_RUN2)!;
+    const older = read().filter((r) => r.signature !== REFUSED_RUN2);
+    for (const details of ["unread", "unavailable"] as const) {
+      const row: Row = { ...listedRow, actions: ["redeem_note"], error: null, details };
+      expect(failureOf(row), details).toMatchObject({ kind: "words", owner: "unknown" });
+      const last = lastPayment([row, ...older]);
+      expect(last, details).toMatchObject({ kind: "paid", newerReading: 1 });
+      expect(last.kind === "paid" && last.row.signature, details).not.toBe(REFUSED_RUN2);
+      // Alone, it is not a payment found, and it is counted as not read.
+      expect(lastPayment([row]), details).toEqual({ kind: "none", reading: 1 });
+    }
+  });
+
   test("a settled payment carries its NoteRedeemed amount", () => {
     const rows = read().filter((r) => r.signature !== REFUSED_RUN2);
     const last = lastPayment(rows);

@@ -72,8 +72,9 @@ export type LastPayment =
  * unknown. A failed one the program did not refuse (another program's instruction failed, or the
  * whole transaction) is not a payment and is passed over. A row whose details are still being
  * read cannot be told apart yet, nor can a failed redeem_note whose failing instruction is not
- * known yet: rows like that above the payment are counted in `newerReading`, and with no payment
- * found, in `reading`.
+ * known (its details still being read, given up on or unavailable, or its error unreadable): rows
+ * like that above the payment are counted in `newerReading`, and with no payment found, in
+ * `reading`, so the kiosk never shows an older payment as the last one without counting them.
  */
 export function lastPayment(rows: readonly Row[]): LastPayment {
   let reading = 0;
@@ -89,7 +90,7 @@ export function lastPayment(rows: readonly Row[]): LastPayment {
     const failure = failureOf(row);
     if (failure) {
       if (isRefusal(failure)) return { kind: "refused", row, failure, newerReading: reading };
-      if (failure.kind === "words" && failure.owner === "unknown" && row.details === "reading") reading += 1;
+      if (failure.kind === "words" && failure.owner === "unknown") reading += 1;
       continue;
     }
     return { kind: "unknown", row, newerReading: reading };
