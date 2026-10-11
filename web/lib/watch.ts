@@ -10,24 +10,30 @@
 // DETAIL_BUDGET calls in any DETAIL_WINDOW_MS, and nothing for RATE_LIMIT_PAUSE_MS after a
 // rate-limited answer, which also pauses the poll. While the page is hidden nothing is sent.
 //
-// A settled redeem_note is "paid", with the amount and serial from its NoteRedeemed event for
-// this allowance; one whose events name only other allowances is not a payment from this one. A
-// failed redeem_note is "refused" only when loka_vault itself raised the failure: its own log
-// line names the error, or the failing top-level instruction is addressed to loka_vault (then
-// its error code names it, lib/program-errors.ts). A transaction that failed in another
-// program's instruction, or for the whole transaction, was not refused by loka_vault, whatever
-// its instruction data says. Those and the other transactions on the account (its
-// open_allowance) are "other" and are not payments. Nothing is invented while a read is pending
-// or failed: the page says what it is waiting for and what failed.
+// A redeem_note is a payment from this allowance only when its allowance account (accounts[1],
+// as the IDL and buildRedeemTransaction order them: config, allowance, merchant, instructions
+// sysvar) is this allowance's address. redeem_note needs no signer, so anyone can replay a spent
+// note for another allowance with this allowance's address added as an extra account (Anchor
+// ignores it): that lists the replay on this allowance, and it is not a payment from it.
+// A settled redeem_note for this allowance is "paid", with the amount and serial from its
+// NoteRedeemed event for this allowance; one whose events name only other allowances is not a
+// payment from this one. A failed one is "refused" only when the failing top-level instruction
+// is that redeem_note, so loka_vault itself raised the failure (named by its own log line, or by
+// its error code, lib/program-errors.ts). A transaction that failed in another program's
+// instruction, or for the whole transaction, was not refused by loka_vault, whatever its
+// instruction data says. Those and the other transactions on the account (its open_allowance)
+// are "other" and are not payments. Nothing is invented while a read is pending or failed: the
+// page says what it is waiting for and what failed.
 
 import { readAllowanceAnswer, type AllowanceRead } from "./allowance-read";
+import { decodeBase58 } from "./base58";
 import { parseProgramLogs, resultOf, summarizeTransaction, type ProgramError, type TxResult } from "./logs";
 import { allowanceAddress } from "./pda";
 import { DETAIL_ATTEMPTS, DETAIL_BATCH, DETAIL_BUDGET, DETAIL_WINDOW_MS, RATE_LIMIT_PAUSE_MS } from "./program-feed";
-import { describeTxError, failureOwner, ownInstructionsOf, programErrorOf } from "./program-errors";
+import { describeTxError, ownInstructionsOf, programErrorOf, readTxError, type OwnInstructions } from "./program-errors";
 import { RpcError, describeFailure, rpcBatch, type RpcOutcome, type RpcRequest } from "./solana";
 import { isUnixSeconds } from "./time";
-import { formatUnits, type VaultEvent } from "./vault";
+import { formatUnits, instructionNameOf, type VaultEvent } from "./vault";
 
 /** How often the page reads devnet while it is visible. */
 export const POLL_MS = 5000;
@@ -56,18 +62,66 @@ export interface AllowanceTx {
 }
 
 interface RawTx {
-  meta?: { err?: unknown; fee?: unknown; logMessages?: unknown } | null;
+  meta?: { err?: unknown; fee?: unknown; logMessages?: unknown; loadedAddresses?: { writable?: unknown; readonly?: unknown } | null } | null;
+  transaction?: { message?: { accountKeys?: unknown; instructions?: unknown } };
+}
+
+const isIndex = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
+
+/**
+ * The allowance account each top-level loka_vault redeem_note in a getTransaction answer
+ * (encoding "json") names, by instruction index: an instruction addressed to `programId` whose
+ * data starts with redeem_note's discriminator, and the key at its accounts[1]. Keys are read as
+ * ownInstructionsOf reads them: the static account keys, then the loaded writable and read-only
+ * addresses. An instruction whose program, data or accounts cannot be read is left out.
+ */
+export function redeemAllowancesOf(raw: unknown, programId: string): Map<number, string> {
+  const found = new Map<number, string>();
+  if (typeof raw !== "object" || raw === null) return found;
+  const { meta, transaction } = raw as RawTx;
+  const message = transaction?.message;
+  if (!isStringList(message?.accountKeys) || !Array.isArray(message.instructions)) return found;
+  const loaded = typeof meta === "object" && meta !== null ? meta.loadedAddresses : null;
+  const keys = [
+    ...message.accountKeys,
+    ...(isStringList(loaded?.writable) ? loaded.writable : []),
+    ...(isStringList(loaded?.readonly) ? loaded.readonly : []),
+  ];
+  message.instructions.forEach((ix: unknown, index: number) => {
+    if (typeof ix !== "object" || ix === null) return;
+    const { programIdIndex, accounts, data } = ix as { programIdIndex?: unknown; accounts?: unknown; data?: unknown };
+    if (!isIndex(programIdIndex) || keys[programIdIndex] !== programId) return;
+    if (typeof data !== "string" || !Array.isArray(accounts) || !isIndex(accounts[1])) return;
+    let bytes: Uint8Array;
+    try {
+      bytes = decodeBase58(data);
+    } catch {
+      return;
+    }
+    const allowance = keys[accounts[1]];
+    if (instructionNameOf(bytes) === "redeem_note" && typeof allowance === "string") found.set(index, allowance);
+  });
+  return found;
+}
+
+/** The top-level instruction an `err` field says failed, or null (an error for the whole transaction, or unreadable). */
+function failingInstruction(err: unknown, own: OwnInstructions): number | null {
+  const reading = readTxError(err, own);
+  return reading.kind === "program" || reading.kind === "custom" || reading.kind === "instruction" ? reading.instruction : null;
 }
 
 /**
- * One getTransaction answer (encoding json) for a transaction on the allowance. Null for an
- * answer of the wrong shape. The amount and serial come only from a settled redeem_note's
- * NoteRedeemed event naming this allowance: a failed transaction moved nothing. A settled one
- * whose complete logs carry NoteRedeemed events, none for this allowance, paid another allowance
- * and is "other"; with no event to read (cut-short logs, or none logged) it is paid, amount
- * unknown. A failed one is "refused" only when loka_vault raised the failure (see above).
+ * One getTransaction answer (encoding json) for a transaction on the allowance at `address`.
+ * Null for an answer of the wrong shape. Only a redeem_note whose allowance account is `address`
+ * is a payment from this allowance (see above). The amount and serial come only from a settled
+ * redeem_note's NoteRedeemed event naming this allowance: a failed transaction moved nothing. A
+ * settled one whose complete logs carry NoteRedeemed events, none for this allowance, paid
+ * another allowance and is "other"; with no event to read (cut-short logs, or none logged) it is
+ * paid, amount unknown. A failed one is "refused" only when its failing top-level instruction is
+ * a redeem_note for this allowance.
  */
-export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceId: string): AllowanceTx | null {
+export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceId: string, address: string): AllowanceTx | null {
   const summary = summarizeTransaction(raw, programId);
   if (!summary) return null;
   const meta = (raw as RawTx).meta;
@@ -84,7 +138,10 @@ export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceI
     errorWords: null,
   };
   if (!summary.actions.includes("redeem_note")) return base;
+  const redeems = redeemAllowancesOf(raw, programId);
   if (summary.result === "succeeded") {
+    // No redeem_note for this allowance's account: listed here only as an extra account.
+    if (![...redeems.values()].includes(address)) return base;
     const logs = Array.isArray(metaObj?.logMessages) ? metaObj.logMessages.filter((l): l is string => typeof l === "string") : [];
     const parsed = parseProgramLogs(logs, programId);
     const redeemed = parsed.events.filter((e): e is Extract<VaultEvent, { kind: "NoteRedeemed" }> => e.kind === "NoteRedeemed");
@@ -101,9 +158,11 @@ export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceI
   if (summary.result === "failed") {
     const err = metaObj && "err" in metaObj ? metaObj.err : undefined;
     const own = ownInstructionsOf(raw, programId);
-    // Its own log line, or a failing instruction addressed to it: otherwise loka_vault did not
-    // refuse this transaction (it may never have run), so it is not a refused payment.
-    if (summary.error === null && failureOwner(err, own) !== "ours") return base;
+    // The failing top-level instruction must be a redeem_note for this allowance. Otherwise
+    // loka_vault did not refuse a payment from it: another program failed (loka_vault may never
+    // have run), or a redeem_note for another allowance failed with this one as an extra account.
+    const failing = failingInstruction(err, own);
+    if (failing === null || redeems.get(failing) !== address) return base;
     const error = summary.error ?? programErrorOf(err, own);
     return { ...base, kind: "refused", error, errorWords: error ? null : describeTxError(err, own) };
   }
@@ -163,12 +222,12 @@ export type DetailOutcome =
   | { kind: "unread" }
   | { kind: "unavailable" };
 
-/** One getTransaction answer for a row: as lib/program-feed.ts reads them for /live. */
-export function detailOutcome(outcome: RpcOutcome, programId: string, allowanceId: string): DetailOutcome {
+/** One getTransaction answer for a row on the allowance at `address`: as lib/program-feed.ts reads them for /live. */
+export function detailOutcome(outcome: RpcOutcome, programId: string, allowanceId: string, address: string): DetailOutcome {
   if (!outcome.ok) return outcome.error.code === 429 ? { kind: "retry", rateLimited: true } : { kind: "unread" };
   if (outcome.result === null) return { kind: "retry", rateLimited: false };
   try {
-    const tx = summarizeAllowanceTx(outcome.result, programId, allowanceId);
+    const tx = summarizeAllowanceTx(outcome.result, programId, allowanceId, address);
     return tx ? { kind: "read", tx } : { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };
@@ -357,7 +416,7 @@ export class AllowanceWatch {
     try {
       await this.poll(address);
       // A page hidden during the poll sends nothing more.
-      if (this.running && this.visible) await this.readDetails();
+      if (this.running && this.visible) await this.readDetails(address);
     } finally {
       this.inFlight = false;
     }
@@ -424,7 +483,7 @@ export class AllowanceWatch {
     this.publishEntries({ account, list });
   }
 
-  private async readDetails(): Promise<void> {
+  private async readDetails(address: string): Promise<void> {
     const now = this.deps.clock.now();
     if (now < this.pausedUntilMs) return;
     this.sent = this.sent.filter((t) => now - t < DETAIL_WINDOW_MS);
@@ -436,7 +495,7 @@ export class AllowanceWatch {
     let outcomes: DetailOutcome[];
     try {
       const answers = await this.deps.send(batch.map((e) => ({ method: "getTransaction", params: [e.signature, TX_OPTIONS] })));
-      outcomes = answers.map((a) => detailOutcome(a, this.programId, this.allowanceId));
+      outcomes = answers.map((a) => detailOutcome(a, this.programId, this.allowanceId, address));
     } catch (e) {
       const rateLimited = e instanceof RpcError && e.code === 429;
       outcomes = batch.map((): DetailOutcome => ({ kind: "retry", rateLimited }));

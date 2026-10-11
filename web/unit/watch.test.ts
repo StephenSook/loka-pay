@@ -3,6 +3,8 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { SERIALS_PER_ALLOWANCE, meterOf, readAllowanceAnswer } from "../lib/allowance-read";
 import { DEMO_ALLOWANCE_ID } from "../lib/facts";
+import { parseProgramLogs } from "../lib/logs";
+import { allowanceAddress } from "../lib/pda";
 import { WATCH_DEMO_URL } from "../lib/site";
 import { PINS } from "../lib/pins";
 import { DETAIL_BUDGET, DETAIL_WINDOW_MS, RATE_LIMIT_PAUSE_MS } from "../lib/program-feed";
@@ -13,9 +15,11 @@ import {
   POLL_MS,
   WATCH_SIGNATURES,
   parseSignatureList,
+  redeemAllowancesOf,
   summarizeAllowanceTx,
   type WatchClock,
 } from "../lib/watch";
+import transactions from "./fixtures/devnet-transactions.json";
 import recorded from "./fixtures/devnet-watch.json";
 
 // /watch (PLAN.md 3.85): lib/allowance-read.ts and lib/watch.ts against real devnet answers for
@@ -90,7 +94,7 @@ test.describe("the meter", () => {
 
 test.describe("one transaction on the allowance", () => {
   test("the settled iPhone payment is paid: 0.25 sandbox USDC, serial 0, from its NoteRedeemed event", () => {
-    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, ID)).toEqual({
+    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, ID, ADDRESS)).toEqual({
       kind: "paid",
       result: "succeeded",
       blockTime: 1791663801,
@@ -100,11 +104,11 @@ test.describe("one transaction on the allowance", () => {
       error: null,
       errorWords: null,
     });
-    expect(summarizeAllowanceTx(tx(SETTLED_RUN2), P, ID)).toMatchObject({ kind: "paid", amountUnits: "250000", serial: 1 });
+    expect(summarizeAllowanceTx(tx(SETTLED_RUN2), P, ID, ADDRESS)).toMatchObject({ kind: "paid", amountUnits: "250000", serial: 1 });
   });
 
   test("the iPhone cheat is refused: SerialUsed (6011), named by the program's log line", () => {
-    expect(summarizeAllowanceTx(tx(REFUSED_IPHONE), P, ID)).toEqual({
+    expect(summarizeAllowanceTx(tx(REFUSED_IPHONE), P, ID, ADDRESS)).toEqual({
       kind: "refused",
       result: "failed",
       blockTime: 1791664276,
@@ -114,7 +118,7 @@ test.describe("one transaction on the allowance", () => {
       error: { name: "SerialUsed", number: 6011, message: "This allowance serial was already redeemed" },
       errorWords: null,
     });
-    expect(summarizeAllowanceTx(tx(REFUSED_RUN2), P, ID)).toMatchObject({ kind: "refused", error: { name: "SerialUsed" } });
+    expect(summarizeAllowanceTx(tx(REFUSED_RUN2), P, ID, ADDRESS)).toMatchObject({ kind: "refused", error: { name: "SerialUsed" } });
   });
 
   test("a refusal whose logs lost the error line is named from its error code, at loka_vault's own instruction 1", () => {
@@ -122,7 +126,7 @@ test.describe("one transaction on the allowance", () => {
     // InstructionError [1, Custom 6011], and instruction 1 is addressed to loka_vault.
     const raw = tx(REFUSED_IPHONE) as { meta: { logMessages: string[] } };
     const cut = { ...raw, meta: { ...raw.meta, logMessages: raw.meta.logMessages.filter((l) => !l.includes("AnchorError")) } };
-    expect(summarizeAllowanceTx(cut, P, ID)).toMatchObject({ kind: "refused", error: { name: "SerialUsed", number: 6011 }, errorWords: null });
+    expect(summarizeAllowanceTx(cut, P, ID, ADDRESS)).toMatchObject({ kind: "refused", error: { name: "SerialUsed", number: 6011 }, errorWords: null });
   });
 
   test("a failure at loka_vault's instruction with no program error is refused, said in words", () => {
@@ -131,9 +135,9 @@ test.describe("one transaction on the allowance", () => {
     const raw = tx(REFUSED_IPHONE) as { meta: { logMessages: string[] } };
     const logs = [`Program ${P} invoke [1]`, "Program log: Instruction: RedeemNote"];
     const runtime = { ...raw, meta: { ...raw.meta, err: { InstructionError: [1, "InvalidAccountData"] }, logMessages: logs } };
-    expect(summarizeAllowanceTx(runtime, P, ID)).toMatchObject({ kind: "refused", error: null, errorWords: "InvalidAccountData at instruction 1." });
+    expect(summarizeAllowanceTx(runtime, P, ID, ADDRESS)).toMatchObject({ kind: "refused", error: null, errorWords: "InvalidAccountData at instruction 1." });
     const undefinedCode = { ...raw, meta: { ...raw.meta, err: { InstructionError: [1, { Custom: 3012 }] }, logMessages: logs } };
-    expect(summarizeAllowanceTx(undefinedCode, P, ID)).toMatchObject({
+    expect(summarizeAllowanceTx(undefinedCode, P, ID, ADDRESS)).toMatchObject({
       kind: "refused",
       error: null,
       errorWords: "Error code 3012 at instruction 1, which this program does not define.",
@@ -164,35 +168,98 @@ test.describe("one transaction on the allowance", () => {
     };
     expect(accountKeys[instructions[1].programIdIndex as number]).toBe(P);
     expect(accountKeys).toContain(ADDRESS);
-    const summary = summarizeAllowanceTx(crafted, P, ID);
+    const summary = summarizeAllowanceTx(crafted, P, ID, ADDRESS);
     expect(summary).toMatchObject({ kind: "other", result: "failed", error: null, errorWords: null });
     expect(JSON.stringify(summary)).not.toContain("SerialUsed");
     // The same with no logs at all.
-    expect(summarizeAllowanceTx({ ...crafted, meta: { ...crafted.meta, logMessages: [] } }, P, ID)).toMatchObject({ kind: "other", error: null });
+    expect(summarizeAllowanceTx({ ...crafted, meta: { ...crafted.meta, logMessages: [] } }, P, ID, ADDRESS)).toMatchObject({ kind: "other", error: null });
     // A real redeem_note failing at the precompile (instruction 0): loka_vault never ran either.
     const precompile = { ...raw, meta: { ...raw.meta, err: { InstructionError: [0, { Custom: 2 }] }, logMessages: [] } };
-    expect(summarizeAllowanceTx(precompile, P, ID)).toMatchObject({ kind: "other", error: null });
+    expect(summarizeAllowanceTx(precompile, P, ID, ADDRESS)).toMatchObject({ kind: "other", error: null });
   });
 
   test("the open_allowance is not a payment", () => {
-    expect(summarizeAllowanceTx(tx(OPEN), P, ID)).toMatchObject({ kind: "other", amountUnits: null, error: null });
+    expect(summarizeAllowanceTx(tx(OPEN), P, ID, ADDRESS)).toMatchObject({ kind: "other", amountUnits: null, error: null });
   });
 
-  test("a settled redeem whose complete logs name only another allowance is not a payment from this one", () => {
-    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, "1")).toMatchObject({ kind: "other", amountUnits: null, serial: null });
+  test("a settled redeem for another allowance is not a payment from this one", async () => {
+    // Seen from allowance 1: its redeem_note names this demo allowance's account, not allowance 1's.
+    const one = await allowanceAddress(BigInt(1), P);
+    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, "1", one)).toMatchObject({ kind: "other", amountUnits: null, serial: null });
+    // TEST FIXTURE pairing: a redeem_note naming this account whose complete logs name only another allowance's event.
+    expect(summarizeAllowanceTx(tx(SETTLED_IPHONE), P, "1", ADDRESS)).toMatchObject({ kind: "other", amountUnits: null, serial: null });
   });
 
-  test("a settled redeem with no NoteRedeemed event to read is paid, amount unknown", () => {
-    // TEST FIXTURES: the recorded payment with its event lines removed, then with its logs cut short.
+  test("a settled redeem for this allowance with no NoteRedeemed event to read is paid, amount unknown; one for another allowance is not", async () => {
+    // TEST FIXTURES: the recorded payment with its event lines removed, then also with its logs cut short.
     const raw = tx(SETTLED_IPHONE) as { meta: { logMessages: string[] } };
     const noEvent = { ...raw, meta: { ...raw.meta, logMessages: raw.meta.logMessages.filter((l) => !l.startsWith("Program data: ")) } };
-    expect(summarizeAllowanceTx(noEvent, P, ID)).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
-    const truncated = { ...raw, meta: { ...raw.meta, logMessages: [...raw.meta.logMessages, "Log truncated"] } };
-    expect(summarizeAllowanceTx(truncated, P, "1")).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
+    expect(summarizeAllowanceTx(noEvent, P, ID, ADDRESS)).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
+    const truncated = { ...noEvent, meta: { ...noEvent.meta, logMessages: [...noEvent.meta.logMessages, "Log truncated"] } };
+    expect(summarizeAllowanceTx(truncated, P, ID, ADDRESS)).toMatchObject({ kind: "paid", amountUnits: null, serial: null });
+    // Cut-short logs no longer make another allowance's payment look like this one's.
+    const one = await allowanceAddress(BigInt(1), P);
+    expect(summarizeAllowanceTx(truncated, P, "1", one)).toMatchObject({ kind: "other", amountUnits: null, serial: null });
+  });
+
+  test("a spent note replayed for another allowance, with this allowance's address added as an extra account, is not a payment from it", async () => {
+    // TEST FIXTURES, the attack: main's recorded refusedRedeem and redeem (unit/fixtures/devnet-transactions.json,
+    // real loka_vault transactions for allowance account BcbVk...) with this allowance's address
+    // appended to the account keys and to redeem_note's accounts. redeem_note needs no signer and
+    // Anchor ignores extra accounts, so anyone can send this, and devnet then lists it on this allowance.
+    type Recorded = {
+      meta: Record<string, unknown> & { logMessages: string[] };
+      transaction: { message: { header: Record<string, number>; accountKeys: string[]; instructions: Array<Record<string, unknown> & { accounts: number[] }> } };
+    };
+    const replayOf = (recordedTx: unknown, logMessages?: string[]) => {
+      const t = recordedTx as Recorded;
+      const message = t.transaction.message;
+      const [budget, precompile, redeem] = message.instructions;
+      return {
+        ...t,
+        meta: { ...t.meta, logMessages: logMessages ?? t.meta.logMessages },
+        transaction: {
+          ...t.transaction,
+          message: {
+            ...message,
+            header: { ...message.header, numReadonlyUnsignedAccounts: message.header.numReadonlyUnsignedAccounts + 1 },
+            accountKeys: [...message.accountKeys, ADDRESS],
+            instructions: [budget, precompile, { ...redeem, accounts: [...redeem.accounts, message.accountKeys.length] }],
+          },
+        },
+      };
+    };
+    const refused = transactions.refusedRedeem as unknown as Recorded;
+    const settled = transactions.redeem as unknown as Recorded;
+    // The allowance those recorded redeems are for: its NoteRedeemed event's id, whose address is their accounts[1].
+    const event = parseProgramLogs(settled.meta.logMessages, P).events.find((e) => e.kind === "NoteRedeemed");
+    if (!event || event.kind !== "NoteRedeemed") throw new Error("the recorded redeem logs no NoteRedeemed event");
+    const theirs = await allowanceAddress(event.allowanceId, P);
+    expect(theirs).toBe("BcbVkCbBuSogtrxPoFmVrA8kEejjEgbwu5DMCkA4GXVV");
+    expect(redeemAllowancesOf(refused, P)).toEqual(new Map([[2, theirs]]));
+
+    // The refused replay: loka_vault's real SerialUsed line is in its logs, and it is not this allowance's refusal.
+    const replay = replayOf(refused);
+    expect(replay.transaction.message.accountKeys).toContain(ADDRESS);
+    expect(redeemAllowancesOf(replay, P)).toEqual(new Map([[2, theirs]]));
+    expect(replay.meta.logMessages.some((l) => l.includes("Error Code: SerialUsed"))).toBe(true);
+    const summary = summarizeAllowanceTx(replay, P, ID, ADDRESS);
+    expect(summary).toMatchObject({ kind: "other", result: "failed", error: null, errorWords: null });
+    expect(JSON.stringify(summary)).not.toContain("SerialUsed");
+    // Without the AnchorError line its code is at loka_vault's own instruction 2: still not this allowance's.
+    const noLine = replayOf(refused, refused.meta.logMessages.filter((l) => !l.includes("AnchorError")));
+    expect(summarizeAllowanceTx(noLine, P, ID, ADDRESS)).toMatchObject({ kind: "other", error: null });
+    // The settled redeem replayed with its logs cut short (no event to read): not a payment from this allowance.
+    const cut = replayOf(settled, [...settled.meta.logMessages.filter((l) => !l.startsWith("Program data: ")), "Log truncated"]);
+    expect(summarizeAllowanceTx(cut, P, ID, ADDRESS)).toMatchObject({ kind: "other", amountUnits: null });
+
+    // Controls: for the allowance they name, the same recorded transactions are its refusal and its payment.
+    expect(summarizeAllowanceTx(replay, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "refused", error: { name: "SerialUsed", number: 6011 } });
+    expect(summarizeAllowanceTx(settled, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "paid", amountUnits: event.amount.toString() });
   });
 
   test("an answer of the wrong shape is null", () => {
-    expect(summarizeAllowanceTx({ slot: 1 }, P, ID)).toBeNull();
+    expect(summarizeAllowanceTx({ slot: 1 }, P, ID, ADDRESS)).toBeNull();
   });
 });
 
