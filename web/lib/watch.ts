@@ -119,7 +119,8 @@ function failingInstruction(err: unknown, own: OwnInstructions): number | null {
  * settled one whose complete logs carry NoteRedeemed events, none for this allowance, paid
  * another allowance and is "other"; with no event to read (cut-short logs, or none logged) it is
  * paid, amount unknown. A failed one is "refused" only when its failing top-level instruction is
- * a redeem_note for this allowance.
+ * a redeem_note for this allowance. One whose answer does not say how it ended (null meta, or no
+ * err field) is "unknown" only when a redeem_note in it is for this allowance, as settled ones are.
  */
 export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceId: string, address: string): AllowanceTx | null {
   const summary = summarizeTransaction(raw, programId);
@@ -139,9 +140,9 @@ export function summarizeAllowanceTx(raw: unknown, programId: string, allowanceI
   };
   if (!summary.actions.includes("redeem_note")) return base;
   const redeems = redeemAllowancesOf(raw, programId);
+  // No redeem_note for this allowance's account, however it ended: listed here only as an extra account.
+  if (![...redeems.values()].includes(address)) return base;
   if (summary.result === "succeeded") {
-    // No redeem_note for this allowance's account: listed here only as an extra account.
-    if (![...redeems.values()].includes(address)) return base;
     const logs = Array.isArray(metaObj?.logMessages) ? metaObj.logMessages.filter((l): l is string => typeof l === "string") : [];
     const parsed = parseProgramLogs(logs, programId);
     const redeemed = parsed.events.filter((e): e is Extract<VaultEvent, { kind: "NoteRedeemed" }> => e.kind === "NoteRedeemed");

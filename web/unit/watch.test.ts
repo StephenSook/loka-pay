@@ -252,10 +252,19 @@ test.describe("one transaction on the allowance", () => {
     // The settled redeem replayed with its logs cut short (no event to read): not a payment from this allowance.
     const cut = replayOf(settled, [...settled.meta.logMessages.filter((l) => !l.startsWith("Program data: ")), "Log truncated"]);
     expect(summarizeAllowanceTx(cut, P, ID, ADDRESS)).toMatchObject({ kind: "other", amountUnits: null });
+    // The refused replay in answers that do not say how it ended (null meta, then no err field): not "Result unknown" here either.
+    const noMeta = { ...replay, meta: null };
+    const noErr = { ...replay, meta: Object.fromEntries(Object.entries(replay.meta).filter(([key]) => key !== "err")) };
+    expect(summarizeAllowanceTx(noMeta, P, ID, ADDRESS)).toMatchObject({ kind: "other", result: "unknown" });
+    expect(summarizeAllowanceTx(noErr, P, ID, ADDRESS)).toMatchObject({ kind: "other", result: "unknown" });
 
     // Controls: for the allowance they name, the same recorded transactions are its refusal and its payment.
     expect(summarizeAllowanceTx(replay, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "refused", error: { name: "SerialUsed", number: 6011 } });
     expect(summarizeAllowanceTx(settled, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "paid", amountUnits: event.amount.toString() });
+    // And the replay whose answer does not say how it ended is a "Result unknown" row for that allowance, as is this allowance's own refusal.
+    expect(summarizeAllowanceTx(noMeta, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "unknown", result: "unknown" });
+    expect(summarizeAllowanceTx(noErr, P, event.allowanceId.toString(), theirs)).toMatchObject({ kind: "unknown", result: "unknown" });
+    expect(summarizeAllowanceTx({ ...(tx(REFUSED_IPHONE) as object), meta: null }, P, ID, ADDRESS)).toMatchObject({ kind: "unknown", result: "unknown" });
   });
 
   test("an answer of the wrong shape is null", () => {
