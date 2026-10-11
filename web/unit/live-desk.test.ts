@@ -154,16 +154,17 @@ test.describe("the kiosk's last payment", () => {
     expect(last.row.blockTime).toBe(1791666579);
     expect(failureWords(last.failure)).toBe("SerialUsed (6011): This allowance serial was already redeemed.");
     expect(last.newerReading).toBe(0);
+    expect(last.newerUnread).toBe(0);
   });
 
   test("passes over a failed redeem_note the program did not refuse: another program's 6011 is never Refused", () => {
     // TEST FIXTURE: the crafted transaction (another program's 6011 at instruction 0), newest.
     const { row, answer } = crafted();
     const last = lastPayment([withAnswer(row, answer), ...read()]);
-    expect(last).toMatchObject({ kind: "refused", newerReading: 0 });
+    expect(last).toMatchObject({ kind: "refused", newerReading: 0, newerUnread: 0 });
     expect(last.kind === "refused" && last.row.signature).toBe(REFUSED_RUN2);
     // With only that transaction, there is no payment at all.
-    expect(lastPayment([withAnswer(row, answer)])).toEqual({ kind: "none", reading: 0 });
+    expect(lastPayment([withAnswer(row, answer)])).toEqual({ kind: "none", reading: 0, unread: 0 });
   });
 
   test("a failed redeem_note whose failing instruction is not known yet counts as still being read, not as Refused", () => {
@@ -174,10 +175,10 @@ test.describe("the kiosk's last payment", () => {
     const unread: Row = { ...listedRow, actions: ["redeem_note"], error: null, details: "reading" };
     expect(raw.meta.err).toEqual({ InstructionError: [1, { Custom: 6011 }] });
     const last = lastPayment([unread, ...read().filter((r) => r.signature !== REFUSED_RUN2)]);
-    expect(last).toMatchObject({ kind: "paid", newerReading: 1 });
+    expect(last).toMatchObject({ kind: "paid", newerReading: 1, newerUnread: 0 });
   });
 
-  test("so does one whose details were given up on or unavailable: the older payment is never shown as last without the newer row counted", () => {
+  test("so does one whose details were given up on or unavailable, counted apart as could not be read", () => {
     // TEST FIXTURE: the recorded 5:09 PM cheat as a logs notification without its AnchorError line
     // (actions from its logs, error null, err InstructionError [1, Custom 6011]), then getTransaction
     // given up on ("unread") or answering an unreadable shape ("unavailable").
@@ -187,11 +188,32 @@ test.describe("the kiosk's last payment", () => {
       const row: Row = { ...listedRow, actions: ["redeem_note"], error: null, details };
       expect(failureOf(row), details).toMatchObject({ kind: "words", owner: "unknown" });
       const last = lastPayment([row, ...older]);
-      expect(last, details).toMatchObject({ kind: "paid", newerReading: 1 });
+      expect(last, details).toMatchObject({ kind: "paid", newerReading: 0, newerUnread: 1 });
       expect(last.kind === "paid" && last.row.signature, details).not.toBe(REFUSED_RUN2);
-      // Alone, it is not a payment found, and it is counted as not read.
-      expect(lastPayment([row]), details).toEqual({ kind: "none", reading: 1 });
+      // Alone, it is not a payment found, and it is counted as could not be read.
+      expect(lastPayment([row]), details).toEqual({ kind: "none", reading: 0, unread: 1 });
     }
+  });
+
+  test("a row from the signature list whose details could not be read is counted too: the older payment is never shown alone", () => {
+    // TEST FIXTURE: the recorded 5:09 PM cheat as the signature list gives it (no actions until its
+    // details are read), then getTransaction given up on ("unread") or unreadable ("unavailable").
+    const listedRow = listed().find((r) => r.signature === REFUSED_RUN2)!;
+    expect(listedRow.actions).toEqual([]);
+    const older = read().filter((r) => r.signature !== REFUSED_RUN2);
+    for (const details of ["unread", "unavailable"] as const) {
+      const last = lastPayment([{ ...listedRow, details }, ...older]);
+      expect(last, details).toMatchObject({ kind: "paid", newerReading: 0, newerUnread: 1 });
+      expect(last.kind === "paid" && last.row.signature, details).not.toBe(REFUSED_RUN2);
+      expect(lastPayment([{ ...listedRow, details }]), details).toEqual({ kind: "none", reading: 0, unread: 1 });
+    }
+    // Read, with an error that cannot be read: its failing instruction is not known, so it is counted the same way.
+    const readCheat = read().find((r) => r.signature === REFUSED_RUN2)!;
+    const unreadable: Row = { ...readCheat, error: null, errText: "not json" };
+    expect(failureOf(unreadable)).toMatchObject({ kind: "words", owner: "unknown" });
+    expect(lastPayment([unreadable, ...older])).toMatchObject({ kind: "paid", newerReading: 0, newerUnread: 1 });
+    // Control: once read, the same cheat is the last payment, a refusal, with nothing newer to count.
+    expect(lastPayment([readCheat, ...older])).toMatchObject({ kind: "refused", newerReading: 0, newerUnread: 0 });
   });
 
   test("a settled payment carries its NoteRedeemed amount", () => {
@@ -201,8 +223,8 @@ test.describe("the kiosk's last payment", () => {
   });
 
   test("before details nothing can be told apart: no payment yet, with the rows still being read counted", () => {
-    expect(lastPayment(listed())).toEqual({ kind: "none", reading: 20 });
-    expect(lastPayment([])).toEqual({ kind: "none", reading: 0 });
+    expect(lastPayment(listed())).toEqual({ kind: "none", reading: 20, unread: 0 });
+    expect(lastPayment([])).toEqual({ kind: "none", reading: 0, unread: 0 });
   });
 
   test("rows above the payment that are still being read are counted", () => {
@@ -211,7 +233,7 @@ test.describe("the kiosk's last payment", () => {
     rows[0] = { ...rows[0], actions: [], details: "reading" };
     rows[1] = { ...rows[1], actions: [], details: "reading" };
     const last = lastPayment(rows);
-    expect(last).toMatchObject({ kind: "refused", newerReading: 2 });
+    expect(last).toMatchObject({ kind: "refused", newerReading: 2, newerUnread: 0 });
   });
 
   test("the short signature is its first eight characters", () => {

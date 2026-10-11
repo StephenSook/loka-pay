@@ -194,7 +194,8 @@ function EmptyFeed({ history }: { history: History }) {
 
 /** The kiosk's headline: the newest payment this page has read, in type a judge reads from across a table. */
 function LastPaymentLine({ last, history, labels }: { last: LastPayment; history: History; labels: Record<string, RowLabel> }) {
-  const state = last.kind === "none" ? (history.kind === "loading" || last.reading > 0 ? "waiting" : "none") : last.kind;
+  const state =
+    last.kind === "none" ? (history.kind === "loading" || last.reading > 0 ? "waiting" : last.unread > 0 ? "unread" : "none") : last.kind;
   return (
     <section
       aria-labelledby="last-payment-title"
@@ -213,8 +214,12 @@ function LastPaymentLine({ last, history, labels }: { last: LastPayment; history
             : history.kind === "failed"
               ? "Could not read the latest transactions yet. A new payment still appears here while the connection is live."
               : last.reading > 0
-                ? `Reading ${last.reading} transaction${last.reading === 1 ? "" : "s"} from devnet to find the last payment.`
-                : `No payment among the latest ${HISTORY_LIMIT} transactions. The next one appears here as soon as it lands.`}
+                ? `Reading ${last.reading} transaction${last.reading === 1 ? "" : "s"} from devnet to find the last payment.${
+                    last.unread > 0 ? ` ${last.unread} more could not be read.` : ""
+                  }`
+                : last.unread > 0
+                  ? `No payment found among the transactions read. ${last.unread} transaction${last.unread === 1 ? "" : "s"} could not be read from devnet, and the last payment may be ${last.unread === 1 ? "that one" : "one of them"}.`
+                  : `No payment among the latest ${HISTORY_LIMIT} transactions. The next one appears here as soon as it lands.`}
         </p>
       ) : (
         <LastPaymentBody last={last} label={labels[last.row.signature]} />
@@ -252,6 +257,15 @@ function LastPaymentBody({ last, label }: { last: Exclude<LastPayment, { kind: "
           · tx <span className="font-mono">{shortSignature(row.signature)}</span>
         </span>
       </p>
+      {last.newerUnread > 0 ? (
+        <p className="flex items-start gap-2 text-2xl font-bold" data-testid="last-payment-unread">
+          <AlertIcon className="mt-1 h-6 w-6 shrink-0" />
+          <span>
+            {last.newerUnread} newer transaction{last.newerUnread === 1 ? "" : "s"} could not be read from devnet, so the last payment may
+            be newer than this one.
+          </span>
+        </p>
+      ) : null}
       {last.newerReading > 0 ? (
         <p className="text-base text-muted" data-testid="last-payment-newer">
           {last.newerReading} newer transaction{last.newerReading === 1 ? " is" : "s are"} still being read from devnet.

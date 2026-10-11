@@ -47,12 +47,14 @@ interface Devnet {
   holdDetails: boolean;
   /** While true, getTransaction answers an error other than the rate limit, so the page gives up on a row. */
   failDetails: boolean;
+  /** getTransaction for these signatures always answers that error. */
+  failFor: string[];
   /** Resolves the first getSignaturesForAddress answer; until then it is held. */
   releaseHistory?: () => void;
 }
 
-async function routeDevnet(page: Page, list: SignatureEntry[], options: { holdDetails?: boolean; holdHistory?: boolean } = {}) {
-  const devnet: Devnet = { list, holdDetails: options.holdDetails ?? false, failDetails: false };
+async function routeDevnet(page: Page, list: SignatureEntry[], options: { holdDetails?: boolean; holdHistory?: boolean; failFor?: string[] } = {}) {
+  const devnet: Devnet = { list, holdDetails: options.holdDetails ?? false, failDetails: false, failFor: options.failFor ?? [] };
   const history = options.holdHistory ? new Promise<void>((resolve) => (devnet.releaseHistory = resolve)) : Promise.resolve();
   await page.route(DEVNET, async (route: Route) => {
     const body = route.request().postDataJSON();
@@ -60,7 +62,7 @@ async function routeDevnet(page: Page, list: SignatureEntry[], options: { holdDe
     if (messages.some((m) => m.method === "getSignaturesForAddress")) await history;
     const answer = (msg: { id: number; method: string; params: unknown[] }) => {
       if (msg.method === "getSignaturesForAddress") return { jsonrpc: "2.0", id: msg.id, result: devnet.list };
-      if (msg.method === "getTransaction" && devnet.failDetails) {
+      if (msg.method === "getTransaction" && (devnet.failDetails || devnet.failFor.includes(msg.params[0] as string))) {
         return { jsonrpc: "2.0", id: msg.id, error: { code: -32005, message: "node is behind (test fixture)" } };
       }
       if (msg.method === "getTransaction") {
@@ -255,6 +257,24 @@ test("/live?kiosk=1: no site header, footer or intro; a large Last payment line 
   await expect(last).toHaveAttribute("data-signature", REFUSED_RUN2);
   await expect(last.getByTestId("last-payment-headline")).toHaveText("Refused: SerialUsed (6011)");
   await expect(last.getByTestId("last-payment-label")).toHaveText("iPhone cheat");
+});
+
+test("/live?kiosk=1: when the newest transaction could not be read, the older payment is shown with that said plainly", async ({ page }) => {
+  // TEST FIXTURE: devnet answers every recorded transaction's details except the newest, the 5:09 PM
+  // cheat, whose getTransaction always errors, so the page gives up on it (no actions are known).
+  await routeDevnet(page, LIST, { failFor: [REFUSED_RUN2] });
+  await routeSocket(page);
+  await page.goto("/live?kiosk=1");
+  await expect(row(page, REFUSED_RUN2)).toHaveAttribute("data-details", "unread");
+  const last = page.getByTestId("last-payment");
+  await expect(last).toHaveAttribute("data-signature", SETTLED_RUN2);
+  await expect(last).toHaveAttribute("data-state", "paid");
+  await expect(last.getByTestId("last-payment-unread")).toHaveText(
+    "1 newer transaction could not be read from devnet, so the last payment may be newer than this one.",
+  );
+  // It is not described as still being read: nothing is reading it.
+  await expect(last.getByTestId("last-payment-newer")).toHaveCount(0);
+  await expect(last).not.toContainText("still being read");
 });
 
 test("/live first paint, before devnet answers: the list and the kiosk say what they are waiting for", async ({ page }) => {

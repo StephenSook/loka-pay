@@ -60,42 +60,50 @@ export function failureWords(failure: Failure): string {
 }
 
 export type LastPayment =
-  | { kind: "paid"; row: Row; amountUnits: string | null; newerReading: number }
-  | { kind: "refused"; row: Row; failure: Failure; newerReading: number }
-  | { kind: "unknown"; row: Row; newerReading: number }
-  /** No redeem_note among the rows read so far; `reading` rows may still turn out to be one. */
-  | { kind: "none"; reading: number };
+  | { kind: "paid"; row: Row; amountUnits: string | null; newerReading: number; newerUnread: number }
+  | { kind: "refused"; row: Row; failure: Failure; newerReading: number; newerUnread: number }
+  | { kind: "unknown"; row: Row; newerReading: number; newerUnread: number }
+  /** No redeem_note among the rows read so far; `reading` and `unread` rows may be one. */
+  | { kind: "none"; reading: number; unread: number };
 
 /**
  * The newest payment among the rows (newest first, as the feed keeps them): the first row whose
  * instructions include redeem_note and that settled, that the program refused, or whose result is
  * unknown. A failed one the program did not refuse (another program's instruction failed, or the
- * whole transaction) is not a payment and is passed over. A row whose details are still being
- * read cannot be told apart yet, nor can a failed redeem_note whose failing instruction is not
- * known (its details still being read, given up on or unavailable, or its error unreadable): rows
- * like that above the payment are counted in `newerReading`, and with no payment found, in
- * `reading`, so the kiosk never shows an older payment as the last one without counting them.
+ * whole transaction) is not a payment and is passed over. Some rows above it cannot be told
+ * apart: a row whose details are not read (a row from the signature list has no actions until
+ * they are), and a failed redeem_note whose failing instruction is not known. Each is counted,
+ * above the payment in `newerReading` or `newerUnread` and with no payment found in `reading` or
+ * `unread`: "reading" while its details are still being read, "unread" once they were given up
+ * on, came back unavailable, or were read with an error that cannot be read. So the kiosk never
+ * shows an older payment as the last one without saying how many newer rows it could not place,
+ * and whether it is still reading them.
  */
 export function lastPayment(rows: readonly Row[]): LastPayment {
   let reading = 0;
+  let unread = 0;
+  const count = (row: Row) => {
+    if (row.details === "reading") reading += 1;
+    else unread += 1;
+  };
   for (const row of rows) {
     if (!row.actions.includes("redeem_note")) {
-      if (row.details === "reading") reading += 1;
+      if (row.details !== "read") count(row);
       continue;
     }
     if (row.result === "succeeded") {
       const redeemed = row.amounts.find((a) => a.label === "Note redeemed");
-      return { kind: "paid", row, amountUnits: redeemed ? redeemed.units : null, newerReading: reading };
+      return { kind: "paid", row, amountUnits: redeemed ? redeemed.units : null, newerReading: reading, newerUnread: unread };
     }
     const failure = failureOf(row);
     if (failure) {
-      if (isRefusal(failure)) return { kind: "refused", row, failure, newerReading: reading };
-      if (failure.kind === "words" && failure.owner === "unknown") reading += 1;
+      if (isRefusal(failure)) return { kind: "refused", row, failure, newerReading: reading, newerUnread: unread };
+      if (failure.kind === "words" && failure.owner === "unknown") count(row);
       continue;
     }
-    return { kind: "unknown", row, newerReading: reading };
+    return { kind: "unknown", row, newerReading: reading, newerUnread: unread };
   }
-  return { kind: "none", reading };
+  return { kind: "none", reading, unread };
 }
 
 /** "2SpG1YUR…": the start of a signature, for a line read from across a table. */
