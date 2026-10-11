@@ -1,0 +1,30 @@
+# Judging-day warmer. Runs only when this branch is pushed (main is untouched), sends GET requests
+# to every judge-facing page and read-only API route every 2 minutes, and stops on its own after
+# about 5 hours. It never writes, signs or spends anything.
+name: keepalive
+
+on:
+  push:
+    branches: [keepalive]
+
+permissions: {}
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - name: Warm pages and API (GET only, every 2 minutes)
+        run: |
+          set -u
+          urls="https://zerobars.us/ https://zerobars.us/judge https://zerobars.us/live https://zerobars.us/watch https://zerobars.us/verify https://zerobars.us/proof https://zerobars.us/trust https://zerobars.us/send https://zerobars.us/call https://zerobars.us/privacy https://api.zerobars.us/api/health https://api.zerobars.us/api/stats https://api.zerobars.us/api/wiring https://api.zerobars.us/api/reserves https://api.zerobars.us/trust"
+          for i in $(seq 1 160); do
+            bad=0
+            for u in $urls; do
+              out=$(curl -s -o /dev/null -w '%{http_code} %{time_total}s' --max-time 20 "$u" || echo "000 timeout")
+              case "$out" in 200*) ;; *) bad=$((bad+1)) ;; esac
+              echo "$(date -u +%H:%M:%S) round $i $out $u"
+            done
+            echo "round $i: $bad non-200"
+            sleep 105
+          done
