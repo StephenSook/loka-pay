@@ -95,7 +95,9 @@ test.describe("naming an error code", () => {
     expect(readTxError(err, OURS_AT_2)).toEqual({ kind: "custom", instruction: 0, code: 6011, owner: "other" });
     expect(programErrorOf(err, OURS_AT_2)).toBeNull();
     expect(failureOwner(err, OURS_AT_2)).toBe("other");
-    expect(describeTxError(err, OURS_AT_2)).toBe("Error code 6011 at instruction 0, which another program ran, so it is not this program's error.");
+    // A CPI into the program reports its code at the caller's index, so the words do not say whose it is.
+    expect(describeTxError(err, OURS_AT_2)).toBe("Error code 6011 at instruction 0, run by another program; not named as this program's error.");
+    expect(describeTxError(err, OURS_AT_2)).not.toContain("not this program's error");
     // A transaction with no instruction for the program at all.
     expect(programErrorOf({ InstructionError: [2, { Custom: 6011 }] }, { kind: "read", indexes: [] })).toBeNull();
   });

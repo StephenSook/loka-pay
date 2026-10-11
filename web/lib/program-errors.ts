@@ -11,8 +11,10 @@
 // (preflightProgramError: only redeem_note's codes are ours). A code is therefore named only when
 // the instruction at the failing index is addressed to this program, read from the transaction
 // itself (ownInstructionsOf). Until the transaction is read, the code is said as a number at its
-// instruction and not named. When the program's own log line names the error (lib/logs.ts), that
-// line wins.
+// instruction and not named. A code at another program's instruction is not named, and not said
+// to be that program's either: a CPI into this program reports its code at the calling
+// instruction's index. When the program's own log line names the error (lib/logs.ts), that line
+// wins.
 
 import type { ProgramError } from "./logs";
 
@@ -177,7 +179,9 @@ export function describeTxError(err: unknown, own: OwnInstructions): string {
     case "custom":
       if (reading.owner === "ours") return `Error code ${reading.code} at instruction ${reading.instruction}, which this program does not define.`;
       if (reading.owner === "other") {
-        return `Error code ${reading.code} at instruction ${reading.instruction}, which another program ran, so it is not this program's error.`;
+        // Only the top-level instruction is known: a CPI into this program reports its code at the
+        // caller's index, so the code is not named, and not said to be another program's either.
+        return `Error code ${reading.code} at instruction ${reading.instruction}, run by another program; not named as this program's error.`;
       }
       return own.kind === "reading"
         ? `Failed with error code ${reading.code} at instruction ${reading.instruction} (reading details).`
