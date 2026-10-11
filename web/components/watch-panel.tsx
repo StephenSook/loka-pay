@@ -13,6 +13,7 @@ import {
   AllowanceWatch,
   INITIAL_WATCH_STATE,
   POLL_MS,
+  WATCH_SIGNATURES,
   type AccountState,
   type Entry,
   type ListState,
@@ -199,13 +200,15 @@ function PollingLine({ polling }: { polling: Polling }) {
 
 /**
  * No payment among what this page read. It reads only the newest transactions on the allowance
- * (lib/watch.ts WATCH_SIGNATURES), so it says how many, and when the meter shows serials used,
- * that the allowance's payments lie beyond them.
+ * (lib/watch.ts WATCH_SIGNATURES), so it says how many. Only when the list came back full can
+ * older transactions lie beyond it, so only then, with serials used on the meter, does it say the
+ * allowance's payments are further back. A shorter list is everything devnet has, so a serial on
+ * the meter with no payment listed is not further back (such as a payment the signature index has
+ * not listed yet).
  */
 function EmptyList({ count, account }: { count: number; account: AccountState }) {
   const read = account.kind === "ok" ? account.read : account.kind === "failed" ? (account.previous?.read ?? null) : null;
   const used = read?.kind === "found" ? read.meter.serialsUsed : 0;
-  const what = count === 1 ? "the one transaction" : `the newest ${count} transactions`;
   return (
     <p className="rounded-card border-2 border-dashed border-ink p-5" data-testid="watch-empty">
       {count === 0
@@ -213,8 +216,8 @@ function EmptyList({ count, account }: { count: number; account: AccountState })
         : count === 1
           ? "The one transaction devnet lists on this allowance is not a payment."
           : `None of the newest ${count} transactions on this allowance is a payment.`}
-      {count > 0 && used > 0
-        ? ` The meter shows ${used} serial${used === 1 ? "" : "s"} used, so its earlier payments are beyond ${what} this page reads.`
+      {count === WATCH_SIGNATURES && used > 0
+        ? ` The meter shows ${used} serial${used === 1 ? "" : "s"} used, so its earlier payments are beyond the newest ${count} transactions this page reads.`
         : ""}{" "}
       A new payment shows here within about {POLL_MS / 1000} s of settling on devnet.
     </p>

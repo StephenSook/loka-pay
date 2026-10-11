@@ -12,6 +12,7 @@ import { decodeAllowance, formatUnits } from "../lib/vault";
 // the signatures, the explorer links and the error name are written out here.
 
 const recorded = JSON.parse(readFileSync(path.join(__dirname, "..", "unit", "fixtures", "devnet-watch.json"), "utf8"));
+const mainRecorded = JSON.parse(readFileSync(path.join(__dirname, "..", "unit", "fixtures", "devnet-transactions.json"), "utf8"));
 const ID: string = recorded.allowanceId;
 const ADDRESS: string = recorded.address;
 const DEVNET = /^https:\/\/api\.devnet\.solana\.com\/?$/;
@@ -179,14 +180,59 @@ test("/watch: another program's 6011 at instruction 0 is not shown as a refusal,
   await expect(page.getByTestId("watch-list")).not.toContainText("Refused");
 });
 
-test("/watch: with no payment among the transactions read, it says how many it read, and that the meter's payments are further back", async ({ page }) => {
+test("/watch: with fewer transactions than it asks for and no payment among them, it says so and nothing about payments further back", async ({ page }) => {
   // TEST FIXTURE: devnet lists only the open_allowance, while the recorded meter shows 2 serials used.
+  // A list shorter than the 8 asked for is everything devnet has, so no payment lies beyond it.
   await routeDevnet(page, [OPEN]);
   await page.goto(`/watch?a=${ID}`);
   await expect(page.getByTestId("watch-empty")).toHaveText(
-    "The one transaction devnet lists on this allowance is not a payment. The meter shows 2 serials used, so its earlier payments are beyond the one transaction this page reads. A new payment shows here within about 5 s of settling on devnet.",
+    "The one transaction devnet lists on this allowance is not a payment. A new payment shows here within about 5 s of settling on devnet.",
   );
+  await expect(page.getByTestId("watch-empty")).not.toContainText("beyond");
   await expect(page.getByTestId("watch-empty")).not.toContainText("No payments");
+});
+
+test("/watch: a full list of 8 with no payment says the meter's payments are further back; replays for another allowance are not listed", async ({ page }) => {
+  // TEST FIXTURES: seven replays of main's recorded refusedRedeem (a real SerialUsed refusal for
+  // allowance account BcbVk..., unit/fixtures/devnet-transactions.json) with this allowance's
+  // address appended as an extra account, newer than the open_allowance. redeem_note needs no
+  // signer, so anyone can send these, and devnet lists them on this allowance.
+  const base = mainRecorded.refusedRedeem;
+  const message = base.transaction.message;
+  const [budget, precompile, redeem] = message.instructions;
+  const extra: Record<string, Extra> = {};
+  const list: string[] = [];
+  for (let i = 0; i < 7; i += 1) {
+    const signature = `Repeat${i + 1}${"1".repeat(81)}`;
+    const slot = 509_800_000 - i;
+    extra[signature] = {
+      entry: { signature, slot, err: base.meta.err, blockTime: base.blockTime },
+      tx: {
+        ...base,
+        slot,
+        transaction: {
+          ...base.transaction,
+          signatures: [signature],
+          message: {
+            ...message,
+            header: { ...message.header, numReadonlyUnsignedAccounts: message.header.numReadonlyUnsignedAccounts + 1 },
+            accountKeys: [...message.accountKeys, ADDRESS],
+            instructions: [budget, precompile, { ...redeem, accounts: [...redeem.accounts, message.accountKeys.length] }],
+          },
+        },
+      },
+    };
+    list.push(signature);
+  }
+  await routeDevnet(page, [...list, OPEN], undefined, extra);
+  await page.goto(`/watch?a=${ID}`);
+  await expect(page.getByTestId("watch-empty")).toHaveText(
+    "None of the newest 8 transactions on this allowance is a payment. The meter shows 2 serials used, so its earlier payments are beyond the newest 8 transactions this page reads. A new payment shows here within about 5 s of settling on devnet.",
+  );
+  await expect(page.getByTestId("watch-list-state")).toContainText("Latest 8 transactions on this allowance read at");
+  await expect(page.getByTestId("watch-row")).toHaveCount(0);
+  await expect(page.locator("main")).not.toContainText("SerialUsed");
+  await expect(page.getByTestId("watch-list")).not.toContainText("Refused");
 });
 
 test("/watch: a hidden page stops reading devnet, and reads again when shown", async ({ page }) => {
