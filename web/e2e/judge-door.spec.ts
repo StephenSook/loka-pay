@@ -662,10 +662,12 @@ test("/live: a failed history read is said plainly, never filled in", async ({ p
 test("/live?kiosk=1 uses large type", async ({ page }) => {
   await routeDevnet(page);
   await page.routeWebSocket(DEVNET_WS, () => {});
+  // The kiosk has no visible page title (PLAN.md 3.84, e2e/live-desk.spec.ts), so compare the list heading.
+  const listHeading = () => page.getByRole("heading", { name: "Transactions, newest first" });
   await open(page, "/live");
-  const normal = await page.getByRole("heading", { level: 1 }).evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
+  const normal = await listHeading().evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
   await open(page, "/live?kiosk=1");
-  const kiosk = await page.getByRole("heading", { level: 1 }).evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
+  const kiosk = await listHeading().evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
   expect(kiosk).toBeGreaterThan(normal);
 });
 

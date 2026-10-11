@@ -94,4 +94,11 @@
     outline: 3px solid var(--ink);
     outline-offset: 3px;
   }
+
+  /* The judge desk screen (/live?kiosk=1, PLAN.md 3.84): the page marks its main element, and
+     the layout's site header and footer step aside, so the feed fills the screen. */
+  body:has(> main[data-kiosk]) > header,
+  body:has(> main[data-kiosk]) > footer {
+    display: none;
+  }
 }
