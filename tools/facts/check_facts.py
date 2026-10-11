@@ -122,6 +122,7 @@ WEB_NOT_FACTS = {
     "HACKING_STARTED": "the organizers' start time, as text",
     "KIT_TAG": "a git tag name",
     "MULTISIG_TASK": "a PLAN.md task number",
+    "DEMO_ALLOWANCE_ID": "the demo payer's allowance id, an identifier for /watch to read from devnet; the iPhone proof pair sources name it and web/unit/watch.test.ts checks they still do",
 }
 
 PLACEHOLDER = r"PENDING|pending|TODO(?:\([\d.]+\))?|not measured yet"

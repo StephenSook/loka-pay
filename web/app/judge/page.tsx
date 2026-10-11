@@ -6,11 +6,12 @@ import { CiStatusList } from "@/components/ci-status";
 import { CARD, OutLink, PAGE } from "@/components/judge-ui";
 import { ProgramFactsPanel } from "@/components/program-facts";
 import { ProofPair } from "@/components/proof-pair";
+import { QrCode } from "@/components/qr-code";
 import { readProgramFacts } from "@/lib/chain";
-import { TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
+import { DEMO_ALLOWANCE_ID, TESTFLIGHT_STATUS, TESTFLIGHT_STATUS_AS_OF } from "@/lib/facts";
 import { readMainChecks } from "@/lib/github";
 import { shownTogether } from "@/lib/read-state";
-import { REPO_URL } from "@/lib/site";
+import { REPO_URL, WATCH_DEMO_URL } from "@/lib/site";
 
 // The judge door (PLAN.md 3.2): a numbered three-minute route through everything a judge
 // can check without logging in. Rendered per request (connection()); the devnet reads
@@ -114,6 +115,25 @@ export default async function JudgePage() {
             devnet directly, so the feed keeps working even if our server is down.
           </p>
           <GoLink href="/live">Open /live</GoLink>
+          <div className="flex min-w-0 flex-col gap-4 rounded-card border-2 border-ink p-4 sm:flex-row sm:items-center" data-testid="watch-on-phone">
+            <div className="w-44 shrink-0">
+              <QrCode text={WATCH_DEMO_URL} label="QR code that opens /watch for the demo payer's allowance on your phone" testId="watch-qr" />
+            </div>
+            <div className="flex min-w-0 flex-col gap-2">
+              <h3 className="text-xl">Watch on your phone</h3>
+              <p className="leading-relaxed">
+                Scan this with your phone&apos;s camera. Your phone then reads devnet itself and shows the demo payer&apos;s
+                allowance: what it can still spend, each payment as it settles, and a note spent twice refused.
+              </p>
+              <p className="text-sm">
+                It opens{" "}
+                <Link prefetch={false} href={`/watch?a=${DEMO_ALLOWANCE_ID}`} className="break-all font-bold underline" data-testid="watch-link">
+                  zerobars.us/watch?a={DEMO_ALLOWANCE_ID}
+                </Link>
+                .
+              </p>
+            </div>
+          </div>
           <p className="text-sm">
             Or have your own phone ring when a payment settles:{" "}
             <Link prefetch={false} href="/call" className="font-bold underline">

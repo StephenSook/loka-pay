@@ -56,6 +56,15 @@ export const IPHONE_REFUSED_TX_SIGNATURE =
 export const IPHONE_REFUSED_NOTE_ID = "5ecdc8dc27d8ed9ecaf952efce6f6aedb206fd8c480d3f7b46fcb280d34ac0da";
 
 /**
+ * The demo payer's allowance: the one both iPhone proof pairs spent from. docs/FACTS.json
+ * proof_pair_iphone_settled_tx and proof_pair_iphone_refused_tx name it in their source
+ * ("allowance 10652706154269594633"); unit/watch.test.ts checks that both still do. /judge's
+ * "Watch on your phone" QR opens /watch for it. If the demo payer moves to another allowance
+ * (PLAN.md 3.82), change it here and in those FACTS sources together.
+ */
+export const DEMO_ALLOWANCE_ID = "10652706154269594633";
+
+/**
  * iOS status (PLAN.md 1.11), read from App Store Connect Sat Oct 10 6:15 PM ET: build 1's beta
  * review is WAITING_FOR_REVIEW (submitted 12:05:42 AM ET); build 5 (the scanner fix, uploaded
  * 5:56 PM ET) is processingState VALID and internalBuildState IN_BETA_TESTING.
