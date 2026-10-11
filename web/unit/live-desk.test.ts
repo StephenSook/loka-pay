@@ -115,7 +115,8 @@ test.describe("what a failed row says once its details arrive", () => {
     const { row, answer } = crafted();
     // Before its details: the code and instruction only.
     expect(failureOf(row)).toEqual({ kind: "words", owner: "unknown", words: "Failed with error code 6011 at instruction 0 (reading details)." });
-    // After: instruction 0 is another program's, so the code is not this program's error.
+    // After: instruction 0 is another program's, so the code is not named as this program's error,
+    // and not said to be that program's either (a CPI into loka_vault reports its code at the caller's index).
     const readRow = withAnswer(row, answer);
     expect(readRow.actions).toEqual(["redeem_note"]);
     expect(readRow.ownInstructions).toEqual([1]);
